@@ -12,6 +12,19 @@ Starts one or more OpenCom services for local development.
 USAGE
 }
 
+load_backend_env() {
+  local env_file="$ROOT_DIR/backend/.env"
+  if [[ ! -f "$env_file" ]]; then
+    echo "[warn] backend/.env not found. Run ./scripts/init-env.sh first if services fail due to missing env vars."
+    return
+  fi
+
+  set -a
+  # shellcheck disable=SC1090
+  source "$env_file"
+  set +a
+}
+
 start_core() {
   echo "[start] Core API"
   pushd "$ROOT_DIR/backend" >/dev/null
@@ -29,6 +42,8 @@ start_frontend() {
   pushd "$ROOT_DIR/frontend" >/dev/null
   npm run dev -- --host 0.0.0.0
 }
+
+load_backend_env
 
 case "$TARGET" in
   core)

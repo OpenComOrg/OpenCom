@@ -18,7 +18,7 @@ const app = buildHttp();
 (app as any).pgPresenceUpsert = presenceUpsert;
 
 // Redis (optional but recommended)
-const redis = env.REDIS_URL ? makeRedis(env.REDIS_URL) : null;
+const redis = env.REDIS_URL ? await makeRedis(env.REDIS_URL) : null;
 if (redis) await redis.start();
 
 const gw = attachCoreGateway(app, redis ?? undefined);

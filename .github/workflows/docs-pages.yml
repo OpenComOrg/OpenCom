@@ -4,7 +4,7 @@ on:
   push:
     branches: ["main"]
     paths:
-      - "docs/**"
+      - "docs/site/**"
       - ".github/workflows/docs-pages.yml"
       - "README.md"
   workflow_dispatch:

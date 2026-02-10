@@ -1,18 +1,14 @@
-CREATE TABLE IF NOT EXISTS guild_members (
-  guild_id TEXT NOT NULL REFERENCES guilds(id) ON DELETE CASCADE,
-  user_id TEXT NOT NULL,
-  roles TEXT[] NOT NULL DEFAULT '{}',
-  joined_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  PRIMARY KEY(guild_id, user_id)
-);
+ALTER TABLE guild_members
+  ADD COLUMN IF NOT EXISTS nick VARCHAR(64);
 
--- Simple voice state tracking (not the media plane)
 CREATE TABLE IF NOT EXISTS voice_states (
-  guild_id TEXT NOT NULL REFERENCES guilds(id) ON DELETE CASCADE,
-  channel_id TEXT NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
-  user_id TEXT NOT NULL,
-  muted BOOLEAN NOT NULL DEFAULT false,
-  deafened BOOLEAN NOT NULL DEFAULT false,
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  PRIMARY KEY(guild_id, user_id)
+  guild_id VARCHAR(64) NOT NULL,
+  channel_id VARCHAR(64) NOT NULL,
+  user_id VARCHAR(64) NOT NULL,
+  muted BOOLEAN NOT NULL DEFAULT FALSE,
+  deafened BOOLEAN NOT NULL DEFAULT FALSE,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (guild_id, user_id),
+  CONSTRAINT fk_vs_guild FOREIGN KEY (guild_id) REFERENCES guilds(id) ON DELETE CASCADE,
+  CONSTRAINT fk_vs_channel FOREIGN KEY (channel_id) REFERENCES channels(id) ON DELETE CASCADE
 );

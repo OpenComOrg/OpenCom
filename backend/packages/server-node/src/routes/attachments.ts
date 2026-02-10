@@ -27,7 +27,7 @@ export async function attachmentRoutes(app: FastifyInstance) {
 
     let guildId = "";
     let channelId = "";
-    const uploaderId = req.auth.userId as string;
+    let uploaderId = req.auth.userId as string;
     let messageId: string | null = null;
 
     let filePart: any = null;

@@ -14,12 +14,16 @@ export async function profileRoutes(app: FastifyInstance) {
     const { id } = z.object({ id: z.string().min(3) }).parse(req.params);
 
     const u = await q<any>(
-      `SELECT id, username, display_name, bio, pfp_url, banner_url FROM users WHERE id=$1`,
-      [id]
+      `SELECT id, username, display_name, bio, pfp_url, banner_url FROM users WHERE id=:id`,
+      { id }
     );
     if (!u.length) return rep.code(404).send({ error: "NOT_FOUND" });
 
-    const badges = await q<{ badge: string }>(`SELECT badge FROM user_badges WHERE user_id=$1`, [id]);
+    const badges = await q<{ badge: string }>(`SELECT badge FROM user_badges WHERE user_id=:id`, { id });
+
+    const founder = await q<{ founder_user_id: string | null }>(`SELECT founder_user_id FROM platform_config WHERE id=1`);
+    const isOwner = founder.length && founder[0].founder_user_id === id;
+    const isAdmin = !!(await q<{ user_id: string }>(`SELECT user_id FROM platform_admins WHERE user_id=:id`, { id })).length;
 
     return {
       id: u[0].id,
@@ -28,7 +32,9 @@ export async function profileRoutes(app: FastifyInstance) {
       bio: u[0].bio ?? null,
       pfpUrl: u[0].pfp_url ?? null,
       bannerUrl: u[0].banner_url ?? null,
-      badges: badges.map(b => b.badge)
+      badges: badges.map(b => b.badge),
+      platformRole: isOwner ? "owner" : (isAdmin ? "admin" : "user"),
+      platformTitle: isOwner ? "Platform Owner" : (isAdmin ? "Platform Admin" : null)
     };
   });
 
@@ -38,12 +44,12 @@ export async function profileRoutes(app: FastifyInstance) {
 
     await q(
       `UPDATE users SET
-         display_name = COALESCE($2, display_name),
-         bio = COALESCE($3, bio),
-         pfp_url = COALESCE($4, pfp_url),
-         banner_url = COALESCE($5, banner_url)
-       WHERE id=$1`,
-      [userId, body.displayName ?? null, body.bio ?? null, body.pfpUrl ?? null, body.bannerUrl ?? null]
+         display_name = COALESCE(:displayName, display_name),
+         bio = COALESCE(:bio, bio),
+         pfp_url = COALESCE(:pfpUrl, pfp_url),
+         banner_url = COALESCE(:bannerUrl, banner_url)
+       WHERE id=:userId`,
+      { userId, displayName: body.displayName ?? null, bio: body.bio ?? null, pfpUrl: body.pfpUrl ?? null, bannerUrl: body.bannerUrl ?? null }
     );
 
     return { ok: true };

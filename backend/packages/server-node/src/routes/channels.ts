@@ -15,7 +15,7 @@ export async function channelRoutes(
     const userId = req.auth.userId as string;
 
     try {
-      await requireGuildMember(guildId, userId);
+      await requireGuildMember(guildId, userId, req.auth.roles);
     } catch {
       return rep.code(403).send({ error: "NOT_GUILD_MEMBER" });
     }
@@ -44,7 +44,7 @@ export async function channelRoutes(
     }).parse(req.body);
 
     try {
-      await requireGuildMember(guildId, userId);
+      await requireGuildMember(guildId, userId, req.auth.roles);
     } catch {
       return rep.code(403).send({ error: "NOT_GUILD_MEMBER" });
     }
@@ -57,7 +57,7 @@ export async function channelRoutes(
 
     if (anyChannel.length) {
       try {
-        await requireManageChannels({ guildId, channelIdForPerms: anyChannel[0].id, actorId: userId });
+        await requireManageChannels({ guildId, channelIdForPerms: anyChannel[0].id, actorId: userId, actorRoles: req.auth.roles });
       } catch {
         return rep.code(403).send({ error: "MISSING_PERMS" });
       }
@@ -112,11 +112,11 @@ export async function channelRoutes(
     if (!ch.length) return rep.code(404).send({ error: "CHANNEL_NOT_FOUND" });
     const guildId = ch[0].guild_id;
 
-    try { await requireGuildMember(guildId, userId); }
+    try { await requireGuildMember(guildId, userId, req.auth.roles); }
     catch { return rep.code(403).send({ error: "NOT_GUILD_MEMBER" }); }
 
     try {
-      await requireManageChannels({ guildId, channelIdForPerms: channelId, actorId: userId });
+      await requireManageChannels({ guildId, channelIdForPerms: channelId, actorId: userId, actorRoles: req.auth.roles });
     } catch {
       return rep.code(403).send({ error: "MISSING_PERMS" });
     }
@@ -165,11 +165,11 @@ export async function channelRoutes(
     if (!ch.length) return rep.code(404).send({ error: "CHANNEL_NOT_FOUND" });
     const guildId = ch[0].guild_id;
 
-    try { await requireGuildMember(guildId, userId); }
+    try { await requireGuildMember(guildId, userId, req.auth.roles); }
     catch { return rep.code(403).send({ error: "NOT_GUILD_MEMBER" }); }
 
     try {
-      await requireManageChannels({ guildId, channelIdForPerms: channelId, actorId: userId });
+      await requireManageChannels({ guildId, channelIdForPerms: channelId, actorId: userId, actorRoles: req.auth.roles });
     } catch {
       return rep.code(403).send({ error: "MISSING_PERMS" });
     }

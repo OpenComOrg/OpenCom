@@ -1,0 +1,28 @@
+:root { color-scheme: dark; }
+body {
+  margin: 0;
+  font-family: Inter, system-ui, sans-serif;
+  background: #111418;
+  color: #d7dde7;
+}
+.container {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 32px 16px 64px;
+}
+h1, h2 { color: #f4f7ff; }
+section {
+  background: #1a1f26;
+  border: 1px solid #2c3440;
+  border-radius: 12px;
+  padding: 14px 16px;
+  margin: 16px 0;
+}
+pre {
+  background: #0d1014;
+  border: 1px solid #2a313b;
+  border-radius: 8px;
+  padding: 10px;
+  overflow: auto;
+}
+code { color: #8ab4ff; }

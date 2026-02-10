@@ -49,20 +49,22 @@ export async function guildAdminByAnyChannel(guildId: string, userId: string): P
   return has(perms, Perm.ADMINISTRATOR);
 }
 
-export async function requireManageRoles(opts: { guildId: string; channelIdForPerms: string; actorId: string }) {
+export async function requireManageRoles(opts: { guildId: string; channelIdForPerms: string; actorId: string; actorRoles?: string[] }) {
   const perms = await resolveChannelPermissions({
     guildId: opts.guildId,
     channelId: opts.channelIdForPerms,
-    userId: opts.actorId
+    userId: opts.actorId,
+    roles: opts.actorRoles ?? []
   });
   if (!has(perms, Perm.MANAGE_ROLES) && !has(perms, Perm.ADMINISTRATOR)) throw new Error("MISSING_PERMS");
 }
 
-export async function requireManageChannels(opts: { guildId: string; channelIdForPerms: string; actorId: string }) {
+export async function requireManageChannels(opts: { guildId: string; channelIdForPerms: string; actorId: string; actorRoles?: string[] }) {
   const perms = await resolveChannelPermissions({
     guildId: opts.guildId,
     channelId: opts.channelIdForPerms,
-    userId: opts.actorId
+    userId: opts.actorId,
+    roles: opts.actorRoles ?? []
   });
   if (!has(perms, Perm.MANAGE_CHANNELS) && !has(perms, Perm.ADMINISTRATOR)) throw new Error("MISSING_PERMS");
 }

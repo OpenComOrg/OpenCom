@@ -9,6 +9,7 @@ declare module "fastify" {
       userId: string;
       serverId: string;
       roles: string[];
+      isPlatformStaff: boolean;
       token: string;
     } | null;
   }

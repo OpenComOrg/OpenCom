@@ -10,18 +10,27 @@ const CreateServer = z.object({
   baseUrl: z.string().url()
 });
 
+async function getPlatformRole(userId: string): Promise<"user" | "admin" | "owner"> {
+  const founder = await q<{ founder_user_id: string | null }>(`SELECT founder_user_id FROM platform_config WHERE id=1`);
+  if (founder.length && founder[0].founder_user_id === userId) return "owner";
+
+  const admin = await q<{ user_id: string }>(`SELECT user_id FROM platform_admins WHERE user_id=:userId`, { userId });
+  if (admin.length) return "admin";
+
+  return "user";
+}
+
 export async function serverRoutes(app: FastifyInstance) {
   app.post("/v1/servers", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
     const userId = req.user.sub as string;
     const body = CreateServer.parse(req.body);
 
     const id = ulidLike();
-    await q(`INSERT INTO servers (id,name,base_url,owner_user_id) VALUES ($1,$2,$3,$4)`,
-      [id, body.name, body.baseUrl, userId]
+    await q(`INSERT INTO servers (id,name,base_url,owner_user_id) VALUES (:id,:name,:baseUrl,:userId)`,
+      { id, name: body.name, baseUrl: body.baseUrl, userId }
     );
-    // auto membership
-    await q(`INSERT INTO memberships (server_id,user_id,roles) VALUES ($1,$2,$3)`,
-      [id, userId, ["owner"]]
+    await q(`INSERT INTO memberships (server_id,user_id,roles) VALUES (:id,:userId,:roles)`,
+      { id, userId, roles: JSON.stringify(["owner"]) }
     );
 
     return rep.send({ serverId: id });
@@ -29,26 +38,43 @@ export async function serverRoutes(app: FastifyInstance) {
 
   app.get("/v1/servers", { preHandler: [app.authenticate] } as any, async (req: any) => {
     const userId = req.user.sub as string;
-    const rows = await q<{ id: string; name: string; base_url: string; roles: string[] }>(
-      `SELECT s.id, s.name, s.base_url, m.roles
-       FROM memberships m
-       JOIN servers s ON s.id=m.server_id
-       WHERE m.user_id=$1
-       ORDER BY s.created_at DESC`,
-      [userId]
-    );
+    const platformRole = await getPlatformRole(userId);
 
-    // Issue membership tokens per server (short-lived)
+    const rows = platformRole === "user"
+      ? await q<{ id: string; name: string; base_url: string; roles: string }>(
+        `SELECT s.id, s.name, s.base_url, m.roles
+         FROM memberships m
+         JOIN servers s ON s.id=m.server_id
+         WHERE m.user_id=:userId
+         ORDER BY s.created_at DESC`,
+        { userId }
+      )
+      : await q<{ id: string; name: string; base_url: string; roles: string }>(
+        `SELECT s.id, s.name, s.base_url,
+                COALESCE((SELECT m.roles FROM memberships m WHERE m.server_id=s.id AND m.user_id=:userId LIMIT 1), '[]') AS roles
+         FROM servers s
+         ORDER BY s.created_at DESC`,
+        { userId }
+      );
+
     const priv = await importJWK(JSON.parse(env.CORE_MEMBERSHIP_PRIVATE_JWK), "RS256");
 
     const servers = await Promise.all(rows.map(async (r) => {
+      const membershipRoles = Array.isArray(r.roles) ? r.roles : JSON.parse(r.roles || "[]");
+      if (platformRole === "admin" && !membershipRoles.includes("platform_admin")) membershipRoles.push("platform_admin");
+      if (platformRole === "owner") {
+        if (!membershipRoles.includes("platform_admin")) membershipRoles.push("platform_admin");
+        if (!membershipRoles.includes("platform_owner")) membershipRoles.push("platform_owner");
+      }
+
       const membershipToken = await new SignJWT({
         server_id: r.id,
-        roles: r.roles
+        roles: membershipRoles,
+        platform_role: platformRole
       })
         .setProtectedHeader({ alg: "RS256", kid: JSON.parse(env.CORE_MEMBERSHIP_PRIVATE_JWK).kid })
         .setIssuer(env.CORE_ISSUER)
-        .setAudience(r.id) // aud = server_id for MVP
+        .setAudience(r.id)
         .setSubject(userId)
         .setExpirationTime("10m")
         .sign(priv);
@@ -57,7 +83,7 @@ export async function serverRoutes(app: FastifyInstance) {
         id: r.id,
         name: r.name,
         baseUrl: r.base_url,
-        roles: r.roles,
+        roles: membershipRoles,
         membershipToken
       };
     }));

@@ -21,13 +21,13 @@ export async function attachmentRoutes(app: FastifyInstance) {
   // Upload (multipart/form-data)
   // fields: guildId, channelId, uploaderId, (optional) messageId
   // file field name: "file"
-  app.post("/v1/attachments/upload", async (req, rep) => {
+  app.post("/v1/attachments/upload", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
     
     const parts = req.parts();
 
     let guildId = "";
     let channelId = "";
-    const uploaderId = req.auth.userId as string;
+    let uploaderId = req.auth.userId as string;
     let messageId: string | null = null;
 
     let filePart: any = null;
@@ -64,7 +64,8 @@ export async function attachmentRoutes(app: FastifyInstance) {
     const perms = await resolveChannelPermissions({
       guildId: parsed.guildId,
       channelId: parsed.channelId,
-      userId: parsed.uploaderId
+      userId: parsed.uploaderId,
+      roles: req.auth.roles
     });
 
     if (!has(perms, Perm.VIEW_CHANNEL) || !has(perms, Perm.ATTACH_FILES)) {
@@ -132,10 +133,10 @@ export async function attachmentRoutes(app: FastifyInstance) {
     });
   });
 
-  // Download (streams file). Query must include userId for MVP; later use auth session.
-  app.get("/v1/attachments/:id", async (req, rep) => {
+  // Download (streams file)
+  app.get("/v1/attachments/:id", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
     const { id } = z.object({ id: z.string().min(3) }).parse(req.params);
-    const { userId } = z.object({ userId: z.string().min(3) }).parse(req.query);
+    const userId = req.auth.userId as string;
 
     const rows = await q<any>(
       `SELECT id,guild_id,channel_id,object_key,file_name,content_type,size_bytes,expires_at
@@ -151,7 +152,8 @@ export async function attachmentRoutes(app: FastifyInstance) {
     const perms = await resolveChannelPermissions({
       guildId: a.guild_id,
       channelId: a.channel_id,
-      userId
+      userId,
+      roles: req.auth.roles
     });
     if (!has(perms, Perm.VIEW_CHANNEL)) return rep.code(403).send({ error: "MISSING_PERMS" });
 

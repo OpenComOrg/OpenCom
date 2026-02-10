@@ -28,10 +28,10 @@ export async function messageRoutes(
 
     const guildId = ch[0].guild_id;
 
-    try { await requireGuildMember(guildId, userId); }
+    try { await requireGuildMember(guildId, userId, req.auth.roles); }
     catch { return rep.code(403).send({ error: "NOT_GUILD_MEMBER" }); }
 
-    const perms = await resolveChannelPermissions({ guildId, channelId, userId });
+    const perms = await resolveChannelPermissions({ guildId, channelId, userId, roles: req.auth.roles });
     if (!has(perms, Perm.VIEW_CHANNEL)) return rep.code(403).send({ error: "MISSING_PERMS" });
 
     let rows: any[];
@@ -102,10 +102,10 @@ export async function messageRoutes(
     if (!ch.length) return rep.code(404).send({ error: "CHANNEL_NOT_FOUND" });
     const guildId = ch[0].guild_id;
 
-    try { await requireGuildMember(guildId, authorId); }
+    try { await requireGuildMember(guildId, authorId, req.auth.roles); }
     catch { return rep.code(403).send({ error: "NOT_GUILD_MEMBER" }); }
 
-    const perms = await resolveChannelPermissions({ guildId, channelId, userId: authorId });
+    const perms = await resolveChannelPermissions({ guildId, channelId, userId: authorId, roles: req.auth.roles });
     if (!has(perms, Perm.VIEW_CHANNEL) || !has(perms, Perm.SEND_MESSAGES)) {
       return rep.code(403).send({ error: "MISSING_PERMS" });
     }

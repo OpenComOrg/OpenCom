@@ -18,10 +18,14 @@ export async function registerRestAuth(app: FastifyInstance) {
         return rep.code(401).send({ error: "UNAUTHORIZED" });
       }
 
+      const roles = Array.isArray((claims as any).roles) ? (claims as any).roles : [];
+      const isPlatformStaff = roles.includes("platform_admin") || roles.includes("platform_owner");
+
       req.auth = {
         userId: claims.sub,
         serverId: claims.server_id,
-        roles: Array.isArray((claims as any).roles) ? (claims as any).roles : [],
+        roles,
+        isPlatformStaff,
         token
       };
     } catch {

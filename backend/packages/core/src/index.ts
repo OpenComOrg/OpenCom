@@ -6,6 +6,7 @@ import { serverRoutes } from "./routes/servers.js";
 import { jwksRoutes } from "./routes/jwks.js";
 import { profileRoutes } from "./routes/profile.js";
 import { inviteRoutes } from "./routes/invites.js";
+import { adminRoutes } from "./routes/admin.js";
 import { attachCoreGateway } from "./gateway.js";
 import { env } from "./env.js";
 import { makeRedis } from "./redis.js";
@@ -28,6 +29,7 @@ await serverRoutes(app);
 await jwksRoutes(app);
 await profileRoutes(app);
 await inviteRoutes(app);
+await adminRoutes(app);
 await dmRoutes(app, gw.broadcastDM);
 
 app.listen({ port: env.CORE_PORT, host: "0.0.0.0" });

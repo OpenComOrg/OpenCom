@@ -1,4 +1,4 @@
-import { PresenceUpdate } from "@ods/shared/dist/events.js";
+import { PresenceUpdate } from "@ods/shared/events.js";
 import { q } from "./db.js";
 
 export async function presenceUpsert(userId: string, presence: PresenceUpdate) {

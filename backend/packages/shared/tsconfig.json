@@ -5,7 +5,10 @@
     "declaration": true,
     "outDir": "dist",
     "strict": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "moduleResolution": "Bundler"
   },
-  "include": ["src"]
+  "include": [
+    "src"
+  ]
 }

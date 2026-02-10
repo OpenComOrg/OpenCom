@@ -6,7 +6,20 @@
     "outDir": "dist",
     "strict": true,
     "skipLibCheck": true,
-    "types": ["node"]
+    "types": [
+      "node"
+    ],
+    "baseUrl": ".",
+    "paths": {
+      "@ods/shared": [
+        "../shared/src/index.ts"
+      ],
+      "@ods/shared/*.js": [
+        "../shared/src/*.ts"
+      ]
+    }
   },
-  "include": ["src"]
+  "include": [
+    "src"
+  ]
 }

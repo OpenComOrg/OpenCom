@@ -1,6 +1,6 @@
 import { WebSocketServer } from "ws";
 import type { FastifyInstance } from "fastify";
-import { GatewayEnvelope, NodeIdentify } from "@ods/shared/dist/events.js";
+import { GatewayEnvelope, NodeIdentify } from "@ods/shared/events.js";
 import { verifyMembershipToken } from "./auth/verifyMembership.js";
 import { q } from "./db.js";
 import { env } from "./env.js";

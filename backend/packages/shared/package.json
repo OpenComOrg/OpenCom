@@ -9,5 +9,19 @@
   },
   "devDependencies": {
     "typescript": "^5.5.4"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./events.js": {
+      "types": "./dist/events.d.ts",
+      "default": "./dist/events.js"
+    },
+    "./ids.js": {
+      "types": "./dist/ids.d.ts",
+      "default": "./dist/ids.js"
+    }
   }
 }

@@ -7,7 +7,7 @@ import { jwksRoutes } from "./routes/jwks.js";
 import { profileRoutes } from "./routes/profile.js";
 import { inviteRoutes } from "./routes/invites.js";
 import { adminRoutes } from "./routes/admin.js";
-import { attachCoreGateway } from "./gateway.js";
+import { attachCoreGateway } from "./routes/gateway.js";
 import { env } from "./env.js";
 import { makeRedis } from "./redis.js";
 import { presenceUpsert } from "./presence.js";

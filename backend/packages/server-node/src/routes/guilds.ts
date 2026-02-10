@@ -1,6 +1,6 @@
 import { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { ulidLike } from "@ods/shared/dist/ids.js";
+import { ulidLike } from "@ods/shared/ids.js";
 import { q } from "../db.js";
 import { DEFAULT_EVERYONE_PERMS } from "../permissions/defaults.js";
 

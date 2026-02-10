@@ -3,7 +3,7 @@ import multipart from "@fastify/multipart";
 import { z } from "zod";
 import path from "node:path";
 import fs from "node:fs";
-import { ulidLike } from "@ods/shared/dist/ids.js";
+import { ulidLike } from "@ods/shared/ids.js";
 import { q } from "../db.js";
 import { resolveChannelPermissions } from "../permissions/resolve.js";
 import { Perm, has } from "../permissions/bits.js";

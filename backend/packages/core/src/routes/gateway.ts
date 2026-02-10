@@ -1,6 +1,6 @@
 import { WebSocketServer } from "ws";
 import type { FastifyInstance } from "fastify";
-import { GatewayEnvelope, CoreIdentify, PresenceUpdate } from "@ods/shared/dist/events.js";
+import { GatewayEnvelope, CoreIdentify, PresenceUpdate } from "@ods/shared/events.js";
 
 type Conn = {
   ws: any;

@@ -38,21 +38,6 @@ npm run build
 npm run preview
 ```
 
-## Monorepo helper scripts
-From the repository root, you can also use:
-
-```bash
-./scripts/setup.sh frontend
-./scripts/start.sh frontend
-```
-
-Windows:
-
-```bat
-scripts\setup.bat frontend
-scripts\start.bat frontend
-```
-
 ## How custom themes work
 1. In the **Custom CSS Theme** card, upload a `.css` file, or paste CSS in the textarea.
 2. The CSS is inserted into a `<style id="opencom-theme-style">` tag in `document.head`.

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 const CORE_API = import.meta.env.VITE_CORE_API_URL || "https://openapi.donskyblock.xyz";
 const FRONTEND_URL = import.meta.env.VITE_FRONTEND_URL || "https://opencom.donskyblock.xyz";
@@ -76,8 +76,15 @@ export function App() {
   const [invitePreview, setInvitePreview] = useState(null);
   const [newChannelName, setNewChannelName] = useState("");
   const [newChannelType, setNewChannelType] = useState("text");
+  const [newChannelParentId, setNewChannelParentId] = useState("");
+  const [collapsedCategories, setCollapsedCategories] = useState({});
+  const [voiceConnectedChannelId, setVoiceConnectedChannelId] = useState("");
+  const [isScreenSharing, setIsScreenSharing] = useState(false);
+  const [isMuted, setIsMuted] = useState(false);
+  const [isDeafened, setIsDeafened] = useState(false);
   const [status, setStatus] = useState("");
   const [themeCss, setThemeCss] = useThemeCss();
+  const messagesRef = useRef(null);
 
   useEffect(() => {
     if (accessToken) localStorage.setItem("opencom_access_token", accessToken);
@@ -94,15 +101,44 @@ export function App() {
     [guilds, activeGuildId]
   );
 
+  const channels = guildState?.channels || [];
+
   const activeChannel = useMemo(
-    () => (guildState?.channels || []).find((channel) => channel.id === activeChannelId) || null,
-    [guildState, activeChannelId]
+    () => channels.find((channel) => channel.id === activeChannelId) || null,
+    [channels, activeChannelId]
   );
 
   const canManageServer = useMemo(() => {
     if (!activeServer) return false;
     return (activeServer.roles || []).includes("owner") || (activeServer.roles || []).includes("platform_admin");
   }, [activeServer]);
+
+  const sortedChannels = useMemo(
+    () => [...channels].sort((a, b) => (a.position ?? 0) - (b.position ?? 0)),
+    [channels]
+  );
+
+  const categoryChannels = useMemo(
+    () => sortedChannels.filter((channel) => channel.type === "category"),
+    [sortedChannels]
+  );
+
+  const groupedChannelSections = useMemo(() => {
+    const categories = categoryChannels.map((category) => ({
+      type: "category",
+      category,
+      channels: sortedChannels.filter((channel) => channel.parent_id === category.id && channel.type !== "category")
+    }));
+
+    const uncategorized = sortedChannels.filter((channel) => !channel.parent_id && channel.type !== "category");
+
+    return [
+      ...categories,
+      ...(uncategorized.length
+        ? [{ type: "category", category: { id: "uncategorized", name: "Text & Voice Channels" }, channels: uncategorized }]
+        : [])
+    ];
+  }, [categoryChannels, sortedChannels]);
 
   async function loadSession() {
     if (!accessToken) return;
@@ -283,6 +319,11 @@ export function App() {
     loadMessages(activeServer, activeChannelId);
   }, [activeChannelId, activeServerId]);
 
+  useEffect(() => {
+    if (!messagesRef.current) return;
+    messagesRef.current.scrollTo({ top: messagesRef.current.scrollHeight, behavior: "smooth" });
+  }, [messages, activeChannelId]);
+
   async function sendMessage() {
     if (!activeServer || !activeChannelId || !messageText.trim()) return;
     try {
@@ -301,11 +342,15 @@ export function App() {
     if (!activeServer || !activeGuildId || !newChannelName.trim()) return;
     setStatus("Creating channel...");
     try {
+      const payload = { name: newChannelName.trim(), type: newChannelType };
+      if (newChannelType !== "category" && newChannelParentId) payload.parentId = newChannelParentId;
+
       await nodeApi(activeServer.baseUrl, `/v1/guilds/${activeGuildId}/channels`, activeServer.membershipToken, {
         method: "POST",
-        body: JSON.stringify({ name: newChannelName.trim(), type: newChannelType })
+        body: JSON.stringify(payload)
       });
       setNewChannelName("");
+      setNewChannelParentId("");
       await loadGuildState(activeServer, activeGuildId);
       setStatus("Channel created.");
     } catch (error) {
@@ -326,20 +371,35 @@ export function App() {
     setStatus("Theme reset to default.");
   }
 
+  function toggleCategory(categoryId) {
+    setCollapsedCategories((current) => ({ ...current, [categoryId]: !current[categoryId] }));
+  }
+
+  function handleVoiceJoin(channelId) {
+    setVoiceConnectedChannelId(channelId);
+    setStatus("Voice channel connected.");
+  }
+
+  function handleDisconnectVoice() {
+    setVoiceConnectedChannelId("");
+    setIsScreenSharing(false);
+    setStatus("Disconnected from voice.");
+  }
+
   if (!accessToken) {
     return (
       <div className="auth-shell">
         <div className="auth-card">
-          <h1>OpenCom</h1>
+          <h1>Welcome back</h1>
           <p className="sub">Discord-style private communities, on your own infrastructure.</p>
           <p>Frontend URL: <code>{FRONTEND_URL}</code></p>
           <p>API URL: <code>{CORE_API}</code></p>
           <form onSubmit={handleAuthSubmit}>
-            <label>Email<input value={email} onChange={(e) => setEmail(e.target.value)} type="email" required /></label>
+            <label>Email<input value={email} onChange={(e) => setEmail(e.target.value)} type="email" placeholder="you@example.com" required /></label>
             {authMode === "register" && (
-              <label>Username<input value={username} onChange={(e) => setUsername(e.target.value)} required /></label>
+              <label>Username<input value={username} onChange={(e) => setUsername(e.target.value)} placeholder="choose a handle" required /></label>
             )}
-            <label>Password<input value={password} onChange={(e) => setPassword(e.target.value)} type="password" required /></label>
+            <label>Password<input value={password} onChange={(e) => setPassword(e.target.value)} type="password" placeholder="••••••••" required /></label>
             <button type="submit">{authMode === "login" ? "Login" : "Register + Login"}</button>
           </form>
           <button className="link-btn" onClick={() => setAuthMode(authMode === "login" ? "register" : "login")}>
@@ -350,10 +410,6 @@ export function App() {
       </div>
     );
   }
-
-  const channels = guildState?.channels || [];
-  const textChannels = channels.filter((channel) => channel.type === "text");
-  const voiceChannels = channels.filter((channel) => channel.type === "voice");
 
   return (
     <div className="discord-shell">
@@ -394,24 +450,34 @@ export function App() {
           </select>
         </section>
 
-        <section className="sidebar-block">
-          <h3>Text Channels</h3>
-          {textChannels.map((channel) => (
-            <button
-              key={channel.id}
-              className={`channel-row ${channel.id === activeChannelId ? "active" : ""}`}
-              onClick={() => setActiveChannelId(channel.id)}
-            >
-              # {channel.name}
-            </button>
-          ))}
-        </section>
-
-        <section className="sidebar-block">
-          <h3>Voice Channels</h3>
-          {voiceChannels.map((channel) => (
-            <div key={channel.id} className="channel-row voice">🔊 {channel.name}</div>
-          ))}
+        <section className="sidebar-block channels-container">
+          {groupedChannelSections.map(({ category, channels: items }) => {
+            const isCollapsed = collapsedCategories[category.id];
+            return (
+              <div className="category-block" key={category.id}>
+                <button type="button" className="category-header" onClick={() => toggleCategory(category.id)}>
+                  <span className="chevron">{isCollapsed ? "▸" : "▾"}</span>
+                  {category.name}
+                </button>
+                {!isCollapsed && (
+                  <div className="category-items">
+                    {items.map((channel) => (
+                      <button
+                        key={channel.id}
+                        className={`channel-row ${channel.id === activeChannelId ? "active" : ""}`}
+                        onClick={() => {
+                          if (channel.type === "text") setActiveChannelId(channel.id);
+                          if (channel.type === "voice") handleVoiceJoin(channel.id);
+                        }}
+                      >
+                        <span className="channel-hash">{channel.type === "voice" ? "🔊" : "#"}</span> {channel.name}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </section>
 
         <footer className="self-card">
@@ -435,14 +501,14 @@ export function App() {
 
       <main className="chat-pane">
         <header className="chat-header">
-          <h3># {activeChannel?.name || "general"}</h3>
+          <h3><span className="channel-hash">#</span> {activeChannel?.name || "general"}</h3>
           <span>{activeGuild?.name || "No guild selected"}</span>
         </header>
 
-        <div className="messages">
+        <div className="messages" ref={messagesRef}>
           {messages.map((message) => (
             <article key={message.id} className="msg">
-              <strong>{message.author_id || message.authorId}</strong>
+              <strong>{message.author_id || message.authorId} <span className="msg-time">just now</span></strong>
               <p>{message.content}</p>
             </article>
           ))}
@@ -463,6 +529,22 @@ export function App() {
       </main>
 
       <aside className="control-pane">
+        <section className="card voice-card">
+          <h4>Voice & Screen Share</h4>
+          <p className="hint">{voiceConnectedChannelId ? `Connected to ${voiceConnectedChannelId}` : "Join any voice channel to start."}</p>
+          <div className="row-actions">
+            <button className={isMuted ? "danger" : "ghost"} onClick={() => setIsMuted((v) => !v)}>{isMuted ? "Unmute" : "Mute"}</button>
+            <button className={isDeafened ? "danger" : "ghost"} onClick={() => setIsDeafened((v) => !v)}>{isDeafened ? "Undeafen" : "Deafen"}</button>
+          </div>
+          <button
+            onClick={() => setIsScreenSharing((v) => !v)}
+            disabled={!voiceConnectedChannelId}
+          >
+            {isScreenSharing ? "Stop Screen Share" : "Start Screen Share"}
+          </button>
+          <button className="danger" onClick={handleDisconnectVoice} disabled={!voiceConnectedChannelId}>Disconnect Voice</button>
+        </section>
+
         <section className="card">
           <h4>Join Server (Metadata Flow)</h4>
           <input
@@ -507,16 +589,25 @@ export function App() {
         {canManageServer && (
           <section className="card">
             <h4>Owner Actions</h4>
-            <p className="hint">Create channels and manage structure directly from your server role.</p>
+            <p className="hint">Create categories, text channels, and voice channels.</p>
             <input
-              placeholder="New channel name"
+              placeholder="New channel/category name"
               value={newChannelName}
               onChange={(e) => setNewChannelName(e.target.value)}
             />
             <select value={newChannelType} onChange={(e) => setNewChannelType(e.target.value)}>
               <option value="text">Text Channel</option>
               <option value="voice">Voice Channel</option>
+              <option value="category">Category</option>
             </select>
+            {newChannelType !== "category" && (
+              <select value={newChannelParentId} onChange={(e) => setNewChannelParentId(e.target.value)}>
+                <option value="">No category</option>
+                {categoryChannels.map((category) => (
+                  <option key={category.id} value={category.id}>{category.name}</option>
+                ))}
+              </select>
+            )}
             <button onClick={createChannel}>Create Channel</button>
           </section>
         )}

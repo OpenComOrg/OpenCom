@@ -3,18 +3,19 @@ import type { FastifyInstance } from "fastify";
 import { GatewayEnvelope, NodeIdentify } from "@ods/shared/dist/events.js";
 import { verifyMembershipToken } from "./auth/verifyMembership.js";
 import { q } from "./db.js";
-
-// Optional voice imports (only if you have the mediasoup module).
-// If you don't, comment these out and the VOICE_* events will just return VOICE_DISABLED.
-// import {
-//   getRouterRtpCapabilities,
-//   ensurePeer,
-//   createWebRtcTransport,
-//   connectTransport,
-//   produce,
-//   consume,
-//   listProducers
-// } from "./voice/mediasoup.js";
+import { env } from "./env.js";
+import { requireGuildMember } from "./auth/requireGuildMember.js";
+import { resolveChannelPermissions } from "./permissions/resolve.js";
+import { Perm, has } from "./permissions/bits.js";
+import {
+  getRouterRtpCapabilities,
+  ensurePeer,
+  createWebRtcTransport,
+  connectTransport,
+  produce,
+  consume,
+  listProducers
+} from "./voice/mediasoup.js";
 
 type Conn = {
   ws: any;
@@ -34,6 +35,55 @@ export function attachNodeGateway(app: FastifyInstance) {
     ws.send(JSON.stringify(msg));
   }
 
+  function sendDispatch(conn: Conn, t: string, d: any) {
+    conn.seq += 1;
+    send(conn.ws, { op: "DISPATCH", t, s: conn.seq, d });
+  }
+
+  function broadcastGuild(guildId: string, t: string, d: any) {
+    for (const c of conns) {
+      if (!c.guilds.has(guildId)) continue;
+      sendDispatch(c, t, d);
+    }
+  }
+
+  async function emitVoiceState(guildId: string, userId: string) {
+    const rows = await q<any>(
+      `SELECT guild_id, channel_id, user_id, muted, deafened, updated_at
+       FROM voice_states
+       WHERE guild_id=:guildId AND user_id=:userId`,
+      { guildId, userId }
+    );
+
+    if (!rows.length) {
+      broadcastGuild(guildId, "VOICE_STATE_UPDATE", { guildId, userId, channelId: null, muted: false, deafened: false });
+      return;
+    }
+
+    const r = rows[0];
+    broadcastGuild(guildId, "VOICE_STATE_UPDATE", {
+      guildId: r.guild_id,
+      channelId: r.channel_id,
+      userId: r.user_id,
+      muted: !!r.muted,
+      deafened: !!r.deafened,
+      updatedAt: new Date(r.updated_at).toISOString()
+    });
+  }
+
+  async function leaveVoice(conn: Conn) {
+    if (!conn.voice) return;
+    const { guildId } = conn.voice;
+
+    await q(`DELETE FROM voice_states WHERE guild_id=:guildId AND user_id=:userId`, {
+      guildId,
+      userId: conn.userId
+    });
+
+    conn.voice = undefined;
+    await emitVoiceState(guildId, conn.userId);
+  }
+
   app.server.on("upgrade", (req, socket, head) => {
     if (req.url?.startsWith("/gateway")) {
       wss.handleUpgrade(req, socket, head, (ws) => wss.emit("connection", ws, req));
@@ -49,17 +99,15 @@ export function attachNodeGateway(app: FastifyInstance) {
       let msg: GatewayEnvelope;
       try { msg = JSON.parse(raw.toString("utf8")); } catch { return; }
 
-      // IDENTIFY
       if (msg.op === "IDENTIFY") {
         const d = msg.d as NodeIdentify;
         try {
           const claims = await verifyMembershipToken(d.membershipToken);
-          if (claims.server_id !== (await import("./env.js")).env.NODE_SERVER_ID) {
+          if (claims.server_id !== env.NODE_SERVER_ID) {
             send(ws, { op: "ERROR", d: { error: "INVALID_MEMBERSHIP" } });
             ws.close();
             return;
-           }
-
+          }
 
           conn = {
             ws,
@@ -71,7 +119,6 @@ export function attachNodeGateway(app: FastifyInstance) {
           };
           conns.add(conn);
 
-          // READY includes guildIds user has joined on this node
           const guildRows = await q<{ guild_id: string }>(
             `SELECT guild_id FROM guild_members WHERE user_id=:userId`,
             { userId: conn.userId }
@@ -98,47 +145,208 @@ export function attachNodeGateway(app: FastifyInstance) {
         return;
       }
 
-      // Subscribe to a guild (to receive ROLE_*/CHANNEL_*/OVERWRITE_* etc)
       if (msg.op === "DISPATCH" && msg.t === "SUBSCRIBE_GUILD") {
         const guildId = (msg.d as any)?.guildId;
         if (typeof guildId === "string") conn.guilds.add(guildId);
         return;
       }
 
-      // Subscribe to a channel (to receive MESSAGE_CREATE)
       if (msg.op === "DISPATCH" && msg.t === "SUBSCRIBE_CHANNEL") {
         const channelId = (msg.d as any)?.channelId;
         if (typeof channelId === "string") conn.channels.add(channelId);
         return;
       }
 
-      // -------- Voice signaling (optional) ----------
-      // If you haven't added mediasoup, we return VOICE_DISABLED.
-      if (msg.op === "DISPATCH" && msg.t?.startsWith("VOICE_")) {
-        conn.seq += 1;
-        send(ws, { op: "DISPATCH", t: "VOICE_DISABLED", s: conn.seq, d: { error: "VOICE_NOT_CONFIGURED" } });
+      if (msg.op === "DISPATCH" && msg.t === "VOICE_JOIN") {
+        const guildId = (msg.d as any)?.guildId;
+        const channelId = (msg.d as any)?.channelId;
+        if (typeof guildId !== "string" || typeof channelId !== "string") {
+          sendDispatch(conn, "VOICE_ERROR", { error: "BAD_VOICE_JOIN" });
+          return;
+        }
+
+        try {
+          await requireGuildMember(guildId, conn.userId);
+
+          const ch = await q<{ id: string; type: string }>(
+            `SELECT id,type FROM channels WHERE id=:channelId AND guild_id=:guildId`,
+            { channelId, guildId }
+          );
+          if (!ch.length || ch[0].type !== "voice") {
+            sendDispatch(conn, "VOICE_ERROR", { error: "VOICE_CHANNEL_NOT_FOUND" });
+            return;
+          }
+
+          const perms = await resolveChannelPermissions({ guildId, channelId, userId: conn.userId });
+          if (!has(perms, Perm.VIEW_CHANNEL) || !has(perms, Perm.CONNECT)) {
+            sendDispatch(conn, "VOICE_ERROR", { error: "MISSING_CONNECT_PERMS" });
+            return;
+          }
+
+          if (conn.voice && (conn.voice.guildId !== guildId || conn.voice.channelId !== channelId)) {
+            await leaveVoice(conn);
+          }
+
+          await ensurePeer(guildId, channelId, conn.userId);
+
+          await q(
+            `INSERT INTO voice_states (guild_id,channel_id,user_id,muted,deafened,updated_at)
+             VALUES (:guildId,:channelId,:userId,0,0,NOW())
+             ON DUPLICATE KEY UPDATE channel_id=VALUES(channel_id),updated_at=NOW()`,
+            { guildId, channelId, userId: conn.userId }
+          );
+
+          conn.voice = { guildId, channelId };
+
+          const rtpCapabilities = await getRouterRtpCapabilities(guildId, channelId);
+          const producers = listProducers(guildId, channelId).filter((p) => p.userId !== conn.userId);
+
+          sendDispatch(conn, "VOICE_JOINED", { guildId, channelId, rtpCapabilities, producers });
+          await emitVoiceState(guildId, conn.userId);
+        } catch {
+          sendDispatch(conn, "VOICE_ERROR", { error: "VOICE_JOIN_FAILED" });
+        }
+        return;
+      }
+
+      if (msg.op === "DISPATCH" && msg.t === "VOICE_LEAVE") {
+        try {
+          await leaveVoice(conn);
+          sendDispatch(conn, "VOICE_LEFT", { ok: true });
+        } catch {
+          sendDispatch(conn, "VOICE_ERROR", { error: "VOICE_LEAVE_FAILED" });
+        }
+        return;
+      }
+
+      if (msg.op === "DISPATCH" && msg.t === "VOICE_CREATE_TRANSPORT") {
+        try {
+          const guildId = (msg.d as any)?.guildId ?? conn.voice?.guildId;
+          const channelId = (msg.d as any)?.channelId ?? conn.voice?.channelId;
+          if (typeof guildId !== "string" || typeof channelId !== "string") {
+            sendDispatch(conn, "VOICE_ERROR", { error: "BAD_VOICE_CONTEXT" });
+            return;
+          }
+
+          if (!conn.voice || conn.voice.guildId !== guildId || conn.voice.channelId !== channelId) {
+            sendDispatch(conn, "VOICE_ERROR", { error: "NOT_IN_VOICE_CHANNEL" });
+            return;
+          }
+
+          const transport = await createWebRtcTransport(guildId, channelId, conn.userId);
+          sendDispatch(conn, "VOICE_TRANSPORT_CREATED", { guildId, channelId, transport });
+        } catch {
+          sendDispatch(conn, "VOICE_ERROR", { error: "VOICE_TRANSPORT_CREATE_FAILED" });
+        }
+        return;
+      }
+
+      if (msg.op === "DISPATCH" && msg.t === "VOICE_CONNECT_TRANSPORT") {
+        try {
+          if (!conn.voice) {
+            sendDispatch(conn, "VOICE_ERROR", { error: "NOT_IN_VOICE_CHANNEL" });
+            return;
+          }
+
+          const transportId = (msg.d as any)?.transportId;
+          const dtlsParameters = (msg.d as any)?.dtlsParameters;
+          if (typeof transportId !== "string" || !dtlsParameters) {
+            sendDispatch(conn, "VOICE_ERROR", { error: "BAD_TRANSPORT_CONNECT" });
+            return;
+          }
+
+          await connectTransport(conn.voice.guildId, conn.voice.channelId, conn.userId, transportId, dtlsParameters);
+          sendDispatch(conn, "VOICE_TRANSPORT_CONNECTED", { transportId });
+        } catch {
+          sendDispatch(conn, "VOICE_ERROR", { error: "VOICE_TRANSPORT_CONNECT_FAILED" });
+        }
+        return;
+      }
+
+      if (msg.op === "DISPATCH" && msg.t === "VOICE_PRODUCE") {
+        try {
+          if (!conn.voice) {
+            sendDispatch(conn, "VOICE_ERROR", { error: "NOT_IN_VOICE_CHANNEL" });
+            return;
+          }
+
+          const guildId = conn.voice.guildId;
+          const channelId = conn.voice.channelId;
+
+          const perms = await resolveChannelPermissions({ guildId, channelId, userId: conn.userId });
+          if (!has(perms, Perm.SPEAK)) {
+            sendDispatch(conn, "VOICE_ERROR", { error: "MISSING_SPEAK_PERMS" });
+            return;
+          }
+
+          const transportId = (msg.d as any)?.transportId;
+          const kind = (msg.d as any)?.kind;
+          const rtpParameters = (msg.d as any)?.rtpParameters;
+
+          if (typeof transportId !== "string" || (kind !== "audio" && kind !== "video") || !rtpParameters) {
+            sendDispatch(conn, "VOICE_ERROR", { error: "BAD_VOICE_PRODUCE" });
+            return;
+          }
+
+          const result = await produce(guildId, channelId, conn.userId, transportId, kind, rtpParameters);
+          sendDispatch(conn, "VOICE_PRODUCED", { ...result, userId: conn.userId, guildId, channelId });
+          broadcastGuild(guildId, "VOICE_NEW_PRODUCER", {
+            guildId,
+            channelId,
+            userId: conn.userId,
+            producerId: result.producerId
+          });
+        } catch {
+          sendDispatch(conn, "VOICE_ERROR", { error: "VOICE_PRODUCE_FAILED" });
+        }
+        return;
+      }
+
+      if (msg.op === "DISPATCH" && msg.t === "VOICE_CONSUME") {
+        try {
+          if (!conn.voice) {
+            sendDispatch(conn, "VOICE_ERROR", { error: "NOT_IN_VOICE_CHANNEL" });
+            return;
+          }
+
+          const transportId = (msg.d as any)?.transportId;
+          const producerId = (msg.d as any)?.producerId;
+          const rtpCapabilities = (msg.d as any)?.rtpCapabilities;
+
+          if (typeof transportId !== "string" || typeof producerId !== "string" || !rtpCapabilities) {
+            sendDispatch(conn, "VOICE_ERROR", { error: "BAD_VOICE_CONSUME" });
+            return;
+          }
+
+          const data = await consume(
+            conn.voice.guildId,
+            conn.voice.channelId,
+            conn.userId,
+            transportId,
+            producerId,
+            rtpCapabilities
+          );
+
+          sendDispatch(conn, "VOICE_CONSUMED", data);
+        } catch {
+          sendDispatch(conn, "VOICE_ERROR", { error: "VOICE_CONSUME_FAILED" });
+        }
         return;
       }
     });
 
-    ws.on("close", () => {
-      if (conn) conns.delete(conn);
+    ws.on("close", async () => {
+      if (conn) {
+        await leaveVoice(conn);
+        conns.delete(conn);
+      }
     });
   });
 
   function broadcastToChannel(channelId: string, payload: any) {
     for (const c of conns) {
       if (!c.channels.has(channelId)) continue;
-      c.seq += 1;
-      send(c.ws, { op: "DISPATCH", t: "MESSAGE_CREATE", s: c.seq, d: payload });
-    }
-  }
-
-  function broadcastGuild(guildId: string, t: string, d: any) {
-    for (const c of conns) {
-      if (!c.guilds.has(guildId)) continue;
-      c.seq += 1;
-      send(c.ws, { op: "DISPATCH", t, s: c.seq, d });
+      sendDispatch(c, "MESSAGE_CREATE", payload);
     }
   }
 

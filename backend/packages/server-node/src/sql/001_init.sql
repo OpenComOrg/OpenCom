@@ -74,7 +74,7 @@ CREATE TABLE IF NOT EXISTS messages (
   CONSTRAINT fk_msg_channel FOREIGN KEY (channel_id) REFERENCES channels(id) ON DELETE CASCADE
 );
 
--- Attachments metadata (file lives in S3/MinIO)
+-- Attachments metadata (file lives on provider-hosted node storage)
 CREATE TABLE IF NOT EXISTS attachments (
   id VARCHAR(64) PRIMARY KEY,
   guild_id VARCHAR(64) NOT NULL,

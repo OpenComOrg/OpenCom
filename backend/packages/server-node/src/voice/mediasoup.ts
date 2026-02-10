@@ -1,4 +1,5 @@
 import mediasoup from "mediasoup";
+import { env } from "../env.js";
 
 type RoomKey = string; // `${guildId}:${channelId}`
 
@@ -20,8 +21,8 @@ let worker: mediasoup.types.Worker | null = null;
 
 export async function initMediasoup() {
   worker = await mediasoup.createWorker({
-    rtcMinPort: 40000,
-    rtcMaxPort: 40100
+    rtcMinPort: env.MEDIASOUP_RTC_MIN_PORT,
+    rtcMaxPort: env.MEDIASOUP_RTC_MAX_PORT
   });
 
   worker.on("died", () => {
@@ -78,7 +79,7 @@ export async function createWebRtcTransport(guildId: string, channelId: string, 
   const peer = await ensurePeer(guildId, channelId, userId);
 
   const transport = await room.router.createWebRtcTransport({
-    listenIps: [{ ip: "0.0.0.0", announcedIp: undefined }], // set announcedIp in production
+    listenIps: [{ ip: env.MEDIASOUP_LISTEN_IP, announcedIp: env.MEDIASOUP_ANNOUNCED_IP }],
     enableUdp: true,
     enableTcp: true,
     preferUdp: true

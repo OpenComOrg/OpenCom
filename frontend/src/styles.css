@@ -1,0 +1,91 @@
+:root {
+  --bg: #1e1f22;
+  --panel: #2b2d31;
+  --panel-2: #313338;
+  --text: #dbdee1;
+  --muted: #9ca3af;
+  --brand: #5865f2;
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: Inter, system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+button, input, select, textarea {
+  font: inherit;
+  border: 1px solid #3f4147;
+  background: #1f2023;
+  color: var(--text);
+  border-radius: 8px;
+  padding: 8px;
+}
+button { cursor: pointer; background: var(--brand); border: none; }
+button:hover { filter: brightness(1.07); }
+
+.auth-shell {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+}
+.auth-card {
+  width: min(460px, 90vw);
+  background: var(--panel);
+  padding: 24px;
+  border-radius: 16px;
+  display: grid;
+  gap: 12px;
+}
+.auth-card form { display: grid; gap: 10px; }
+.auth-card label { display: grid; gap: 6px; font-size: 14px; }
+.link-btn { background: transparent; border: 1px solid #4a4d55; }
+
+.layout {
+  height: 100vh;
+  display: grid;
+  grid-template-columns: 72px 260px 1fr 340px;
+}
+.servers-col { background: #111214; padding: 12px 8px; display: flex; flex-direction: column; gap: 10px; align-items: center; }
+.server-pill {
+  width: 52px;
+  height: 52px;
+  border-radius: 18px;
+  background: #313338;
+}
+.server-pill.active { border-radius: 14px; background: var(--brand); }
+
+.channel-col { background: var(--panel); padding: 14px; overflow: auto; }
+.channel-btn, .voice-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  margin-bottom: 8px;
+  background: var(--panel-2);
+}
+.voice-item { border: 1px solid #444; border-radius: 8px; padding: 8px; }
+
+.chat-col { display: grid; grid-template-rows: auto 1fr auto; background: #313338; }
+.chat-col header { padding: 14px 16px; border-bottom: 1px solid #3a3d42; }
+.messages { overflow: auto; padding: 16px; display: grid; gap: 10px; }
+.msg { background: rgba(0,0,0,.18); border-radius: 10px; padding: 10px; }
+.msg p { margin: 6px 0 0; }
+.composer { display: grid; grid-template-columns: 1fr auto; gap: 8px; padding: 16px; }
+
+.settings-col { background: var(--panel); padding: 14px; overflow: auto; }
+.card {
+  background: var(--panel-2);
+  border-radius: 12px;
+  padding: 12px;
+  display: grid;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.logout { width: 100%; }
+.status { color: var(--muted); font-size: 13px; }
+
+@media (max-width: 1200px) {
+  .layout { grid-template-columns: 64px 220px 1fr; }
+  .settings-col { display: none; }
+}

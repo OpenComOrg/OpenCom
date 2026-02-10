@@ -41,6 +41,17 @@ What this does:
 - installs frontend npm dependencies
 - starts backend infra via `docker compose up -d` if docker is installed
 
+### Fully inclusive backend DB setup (env + database + tables)
+For local MariaDB installed on the host (uses `sudo mysql` for provisioning):
+```bash
+./scripts/setup-database.sh --init-env --provision-local-db
+```
+
+For dockerized MariaDB from `backend/docker-compose.yml`:
+```bash
+./scripts/setup-database.sh --init-env --with-docker
+```
+
 ## 3) Run services
 ### Linux/macOS
 ```bash
@@ -59,18 +70,24 @@ You can also run targets individually:
 - `backend` (core + node)
 
 ## 4) Migration commands
-Run in another terminal if needed:
+Run migrations only (expects backend/.env and DB access already set up):
 ```bash
 ./scripts/setup-database.sh
 ```
 
-You can optionally start dockerized backend infrastructure first:
+Run full env + DB provisioning + migrations (host MariaDB + sudo):
 ```bash
-./scripts/setup-database.sh --with-docker
+./scripts/setup-database.sh --init-env --provision-local-db
+```
+
+Run full env + docker infra + migrations:
+```bash
+./scripts/setup-database.sh --init-env --with-docker
 ```
 
 Equivalent manual commands:
 ```bash
+./scripts/init-env.sh
 cd backend
 npm run migrate:core
 npm run migrate:node

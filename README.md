@@ -11,14 +11,19 @@ Open-source Discord-like platform.
 - API/Core: `https://openapi.donskyblock.xyz`
 
 ## Backend database setup
-From the repository root, run:
+Fastest fully-inclusive setup (env + local MariaDB provisioning via sudo + migrations):
 ```bash
-./scripts/setup-database.sh
+./scripts/setup-database.sh --init-env --provision-local-db
 ```
 
-To also boot backend docker services before running migrations:
+Docker-based setup (env + docker infra + migrations):
 ```bash
-./scripts/setup-database.sh --with-docker
+./scripts/setup-database.sh --init-env --with-docker
+```
+
+If env already exists and DB is ready:
+```bash
+./scripts/setup-database.sh
 ```
 
 ## Frontend quickstart

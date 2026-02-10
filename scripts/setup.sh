@@ -19,6 +19,24 @@ require_cmd() {
   fi
 }
 
+# Picks the right compose command:
+# - docker compose (Compose v2 plugin)
+# - docker-compose (Compose v1 binary)
+# Returns 0 if found, 1 otherwise.
+pick_compose() {
+  if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+    echo "docker compose"
+    return 0
+  fi
+
+  if command -v docker-compose >/dev/null 2>&1; then
+    echo "docker-compose"
+    return 0
+  fi
+
+  return 1
+}
+
 setup_backend() {
   echo "[setup] Backend dependencies"
   require_cmd npm
@@ -26,13 +44,14 @@ setup_backend() {
   npm install
   popd >/dev/null
 
-  if command -v docker >/dev/null 2>&1 && command -v docker compose >/dev/null 2>&1; then
-    echo "[setup] Starting backend infrastructure with docker compose"
+  if COMPOSE_CMD="$(pick_compose)"; then
+    echo "[setup] Starting backend infrastructure with ${COMPOSE_CMD}"
     pushd "$ROOT_DIR/backend" >/dev/null
-    docker compose up -d
+    # shellcheck disable=SC2086
+    ${COMPOSE_CMD} up -d
     popd >/dev/null
   else
-    echo "[warn] Docker compose not found, skipping infrastructure startup"
+    echo "[warn] Docker Compose not found (neither 'docker compose' nor 'docker-compose'), skipping infrastructure startup"
   fi
 }
 
@@ -45,20 +64,10 @@ setup_frontend() {
 }
 
 case "$MODE" in
-  backend)
-    setup_backend
-    ;;
-  frontend)
-    setup_frontend
-    ;;
-  all)
-    setup_backend
-    setup_frontend
-    ;;
-  -h|--help|help)
-    print_usage
-    exit 0
-    ;;
+  backend)  setup_backend ;;
+  frontend) setup_frontend ;;
+  all)      setup_backend; setup_frontend ;;
+  -h|--help|help) print_usage; exit 0 ;;
   *)
     echo "Unknown mode: $MODE"
     print_usage

@@ -61,6 +61,16 @@ You can also run targets individually:
 ## 4) Migration commands
 Run in another terminal if needed:
 ```bash
+./scripts/setup-database.sh
+```
+
+You can optionally start dockerized backend infrastructure first:
+```bash
+./scripts/setup-database.sh --with-docker
+```
+
+Equivalent manual commands:
+```bash
 cd backend
 npm run migrate:core
 npm run migrate:node

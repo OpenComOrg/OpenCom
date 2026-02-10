@@ -21,6 +21,15 @@ function randomToken(): string {
 }
 
 export async function authRoutes(app: FastifyInstance) {
+
+  app.decorate("authenticate", async function (request: any, reply: any) {
+    try {
+      await request.jwtVerify();
+    } catch {
+      reply.code(401).send({ error: "UNAUTHORIZED" });
+    }
+  });
+
   app.post("/v1/auth/register", async (req, rep) => {
     const body = Register.parse(req.body);
 
@@ -106,11 +115,4 @@ export async function authRoutes(app: FastifyInstance) {
     return rows[0] ?? null;
   });
 
-  app.decorate("authenticate", async function (request: any, reply: any) {
-    try {
-      await request.jwtVerify();
-    } catch {
-      reply.code(401).send({ error: "UNAUTHORIZED" });
-    }
-  });
 }

@@ -10,6 +10,17 @@ Open-source Discord-like platform.
 - Frontend app: `https://opencom.donskyblock.xyz`
 - API/Core: `https://openapi.donskyblock.xyz`
 
+## Backend database setup
+From the repository root, run:
+```bash
+./scripts/setup-database.sh
+```
+
+To also boot backend docker services before running migrations:
+```bash
+./scripts/setup-database.sh --with-docker
+```
+
 ## Frontend quickstart
 ```bash
 cd frontend

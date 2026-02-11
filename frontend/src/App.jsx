@@ -103,6 +103,7 @@ export function App() {
   const [isMuted, setIsMuted] = useState(false);
   const [isDeafened, setIsDeafened] = useState(false);
   const [toolsOpen, setToolsOpen] = useState(false);
+  const [serverContextMenu, setServerContextMenu] = useState(null);
   const [status, setStatus] = useState("");
   const [themeCss, setThemeCss] = useThemeCss();
   const messagesRef = useRef(null);
@@ -128,6 +129,20 @@ export function App() {
   useEffect(() => {
     localStorage.setItem(`opencom_dms_${storageScope}`, JSON.stringify(dms));
   }, [dms, storageScope]);
+
+  useEffect(() => {
+    const onGlobalClick = () => setServerContextMenu(null);
+    const onEscape = (event) => {
+      if (event.key === "Escape") setServerContextMenu(null);
+    };
+
+    window.addEventListener("click", onGlobalClick);
+    window.addEventListener("keydown", onEscape);
+    return () => {
+      window.removeEventListener("click", onGlobalClick);
+      window.removeEventListener("keydown", onEscape);
+    };
+  }, []);
 
   const activeServer = useMemo(() => servers.find((server) => server.id === activeServerId) || null, [servers, activeServerId]);
   const activeGuild = useMemo(() => guilds.find((guild) => guild.id === activeGuildId) || null, [guilds, activeGuildId]);
@@ -420,6 +435,32 @@ export function App() {
     setCollapsedCategories((current) => ({ ...current, [categoryId]: !current[categoryId] }));
   }
 
+  function openServerContextMenu(event, server) {
+    event.preventDefault();
+    setServerContextMenu({
+      server,
+      x: event.clientX,
+      y: event.clientY
+    });
+  }
+
+  async function copyServerId(serverId) {
+    try {
+      await navigator.clipboard.writeText(serverId);
+      setStatus("Server ID copied.");
+    } catch {
+      setStatus("Could not copy server ID.");
+    }
+    setServerContextMenu(null);
+  }
+
+  function openServerFromContext(serverId) {
+    setNavMode("servers");
+    setActiveServerId(serverId);
+    setToolsOpen(false);
+    setServerContextMenu(null);
+  }
+
   async function onUploadTheme(event) {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -466,6 +507,7 @@ export function App() {
                 setGuildState(null);
                 setMessages([]);
               }}
+              onContextMenu={(event) => openServerContextMenu(event, server)}
             >
               {server.name.slice(0, 2).toUpperCase()}
             </button>
@@ -656,6 +698,20 @@ export function App() {
           </div>
         )}
       </main>
+
+
+      {serverContextMenu && (
+        <div
+          className="server-context-menu"
+          style={{ top: serverContextMenu.y, left: serverContextMenu.x }}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <button onClick={() => openServerFromContext(serverContextMenu.server.id)}>Open Server</button>
+          <button onClick={() => { setInviteServerId(serverContextMenu.server.id); setToolsOpen(true); setServerContextMenu(null); }}>Create Invite</button>
+          <button onClick={() => copyServerId(serverContextMenu.server.id)}>Copy Server ID</button>
+          <button className="danger" onClick={() => { setStatus("Server settings coming next."); setServerContextMenu(null); }}>Server Settings</button>
+        </div>
+      )}
 
       {toolsOpen && (
         <div className="tools-drawer">

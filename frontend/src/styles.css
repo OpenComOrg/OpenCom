@@ -125,6 +125,7 @@ button.danger { background: linear-gradient(135deg, #eb5d73, #c84159); }
   display: grid;
   grid-template-rows: auto 1fr auto;
   min-height: 0;
+  border-right: 1px solid var(--border-subtle);
 }
 
 .sidebar-header { padding: 16px; border-bottom: 1px solid var(--border-subtle); }
@@ -230,6 +231,8 @@ button.danger { background: linear-gradient(135deg, #eb5d73, #c84159); }
   justify-content: space-between;
   align-items: center;
   gap: 8px;
+  background: rgba(18, 26, 44, 0.88);
+  backdrop-filter: blur(8px);
 }
 .chat-header h3 { margin: 0; font-size: 28px; }
 .chat-actions { display: flex; align-items: center; gap: 8px; }

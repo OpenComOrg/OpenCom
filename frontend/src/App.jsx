@@ -521,7 +521,7 @@ export function App() {
   return (
     <div className="discord-shell">
       <aside className="server-rail">
-        <div className="rail-header">OC</div>
+        <div className="rail-header" title="OpenCom">◎</div>
         <button className={`server-pill nav-pill ${navMode === "friends" ? "active" : ""}`} onClick={() => setNavMode("friends")}>👥</button>
         <button className={`server-pill nav-pill ${navMode === "dms" ? "active" : ""}`} onClick={() => setNavMode("dms")}>💬</button>
         <button className={`server-pill nav-pill ${navMode === "profile" ? "active" : ""}`} onClick={() => setNavMode("profile")}>🪪</button>
@@ -660,7 +660,7 @@ export function App() {
                   <button className="icon-btn ghost" title="Pinned">📌</button>
                   <button className="icon-btn ghost" title="Members">👥</button>
                   <input className="search-input" placeholder={`Search ${activeServer?.name || "server"}`} />
-                  <button className="ghost" onClick={() => setToolsOpen((v) => !v)}>Server Tools</button>
+                  <button className="ghost" onClick={() => setToolsOpen((v) => !v)}>OpenCom Tools</button>
                 </div>
               </header>
               <div className="messages" ref={messagesRef}>

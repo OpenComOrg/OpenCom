@@ -14,6 +14,7 @@ import { registerRestAuth } from "./auth/restAuth.js";
 import { guildJoinRoutes } from "./routes/guildJoin.js";
 import { guildStateRoutes } from "./routes/guildState.js";
 import { meRoutes } from "./routes/me.js";
+import { discordCompatRoutes } from "./routes/discordCompat.js";
 
 
 await initMediasoup();
@@ -35,6 +36,7 @@ await roleRoutes(app, gw.broadcastGuild);
 await overwriteRoutes(app, gw.broadcastGuild);
 await memberRoutes(app, gw.broadcastGuild);
 await meRoutes(app)
+await discordCompatRoutes(app);
 
 await attachmentRoutes(app);
 startAttachmentCleanupLoop();

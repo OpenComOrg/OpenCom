@@ -47,6 +47,8 @@ From repository root:
 ./start.sh
 ```
 
+This also serves the admin dashboard at `http://localhost:5173/admin.html` when frontend is running.
+
 Or explicitly:
 ```bash
 ./scripts/start.sh all

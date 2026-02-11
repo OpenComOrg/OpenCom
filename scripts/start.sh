@@ -6,7 +6,7 @@ TARGET="${1:-all}"
 
 print_usage() {
   cat <<USAGE
-Usage: ./scripts/start.sh [core|node|frontend|backend|all]
+Usage: ./scripts/start.sh [core|node|frontend|admin|backend|all]
 
 Starts one or more OpenCom services for local development.
 USAGE
@@ -39,6 +39,8 @@ start_node() {
 
 start_frontend() {
   echo "[start] Frontend"
+  echo "[info] App: http://localhost:5173"
+  echo "[info] Admin dashboard: http://localhost:5173/admin.html"
   pushd "$ROOT_DIR/frontend" >/dev/null
   npm run dev -- --host 0.0.0.0
 }
@@ -52,7 +54,7 @@ case "$TARGET" in
   node)
     start_node
     ;;
-  frontend)
+  frontend|admin)
     start_frontend
     ;;
   backend)
@@ -67,6 +69,8 @@ case "$TARGET" in
     ;;
   all)
     echo "[start] Launching core + node + frontend in parallel"
+    echo "[info] App: http://localhost:5173"
+    echo "[info] Admin dashboard: http://localhost:5173/admin.html"
     pushd "$ROOT_DIR/backend" >/dev/null
     npm run dev:core &
     CORE_PID=$!

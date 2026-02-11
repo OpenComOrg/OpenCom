@@ -32,6 +32,29 @@ Use the helper script when you want to assign ownership to a specific existing u
 ./scripts/create-server.sh --name "My Server" --base-url "https://node.provider.tld" --owner-username "alice"
 ```
 
+
+## Update + backup/restore scripts
+Run a full update flow (deps + migrations + builds):
+```bash
+./scripts/update-opencom.sh
+```
+
+Useful options:
+```bash
+./scripts/update-opencom.sh --pull --backup
+./scripts/update-opencom.sh --skip-build
+```
+
+Create a portable backup bundle (DB + env config snapshots):
+```bash
+./scripts/migrate-portability.sh export backups/opencom-backup.tar.gz
+```
+
+Restore from a portable backup bundle:
+```bash
+./scripts/migrate-portability.sh import backups/opencom-backup.tar.gz
+```
+
 ## Frontend quickstart
 ```bash
 cd frontend

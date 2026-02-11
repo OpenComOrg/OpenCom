@@ -76,9 +76,6 @@ function formatMessageTime(value) {
   return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 }
 
-function makeId(value) {
-  return value.trim().toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-_]/g, "");
-}
 
 export function App() {
   const [accessToken, setAccessToken] = useState(localStorage.getItem("opencom_access_token") || "");
@@ -192,12 +189,13 @@ export function App() {
   }, [accessToken]);
 
   useEffect(() => {
+    if (accessToken) return;
     const storedFriends = getStoredJson(`opencom_friends_${storageScope}`, []);
     const storedDms = getStoredJson(`opencom_dms_${storageScope}`, []);
     setFriends(storedFriends);
     setDms(storedDms);
     if (!storedDms.some((item) => item.id === activeDmId)) setActiveDmId(storedDms[0]?.id || "");
-  }, [storageScope]);
+  }, [storageScope, accessToken]);
 
   useEffect(() => {
     localStorage.setItem(`opencom_friends_${storageScope}`, JSON.stringify(friends));
@@ -262,6 +260,17 @@ export function App() {
         });
 
         setServers(nextServers);
+        try {
+          const [friendsData, dmsData] = await Promise.all([
+            api("/v1/social/friends", { headers: { Authorization: `Bearer ${accessToken}` } }),
+            api("/v1/social/dms", { headers: { Authorization: `Bearer ${accessToken}` } })
+          ]);
+          setFriends(friendsData.friends || []);
+          setDms((dmsData.dms || []).map((item) => ({ ...item, messages: [] })));
+        } catch {
+          // fallback to local-only social data if backend social routes are unavailable
+        }
+
         if (!nextServers.length) {
           setActiveServerId("");
           setActiveGuildId("");
@@ -336,6 +345,19 @@ export function App() {
   }, [activeServer, activeGuildId, navMode]);
 
   useEffect(() => {
+    if (navMode !== "dms" || !activeDmId || !accessToken) return;
+
+    api(`/v1/social/dms/${activeDmId}/messages`, { headers: { Authorization: `Bearer ${accessToken}` } })
+      .then((data) => {
+        const nextMessages = data.messages || [];
+        setDms((current) => current.map((item) => item.id === activeDmId ? { ...item, messages: nextMessages } : item));
+      })
+      .catch(() => {
+        // keep existing local messages as fallback
+      });
+  }, [activeDmId, navMode, accessToken]);
+
+  useEffect(() => {
     if (navMode !== "servers" || !activeServer || !activeChannelId) {
       if (navMode !== "servers") setMessages([]);
       return;
@@ -383,88 +405,72 @@ export function App() {
     }
   }
 
-  function ensureDmForFriend(friend) {
-    const existing = dms.find((item) => item.participantId === friend.id || item.id === friend.id);
-    if (existing) {
-      setActiveDmId(existing.id);
-      return existing.id;
-    }
-
-    const newDm = {
-      id: `dm-${friend.id}`,
-      participantId: friend.id,
-      name: friend.username,
-      messages: []
-    };
-    setDms((current) => [newDm, ...current]);
-    setActiveDmId(newDm.id);
-    return newDm.id;
-  }
-
-  function sendDm() {
+  async function sendDm() {
     if (!activeDm || !dmText.trim()) return;
 
     const content = dmText.trim();
-    const outbound = {
-      id: crypto.randomUUID(),
-      author: me?.username || "you",
-      content,
-      createdAt: new Date().toISOString(),
-      mine: true
-    };
-
-    setDms((current) => current.map((item) => {
-      if (item.id !== activeDm.id) return item;
-      return { ...item, messages: [...(item.messages || []), outbound] };
-    }));
-
     setDmText("");
 
-    window.setTimeout(() => {
-      const autoReply = {
-        id: crypto.randomUUID(),
-        author: activeDm.name,
-        content: `Got it — “${content.slice(0, 60)}${content.length > 60 ? "…" : ""}"`,
-        createdAt: new Date().toISOString(),
-        mine: false
-      };
+    try {
+      await api(`/v1/social/dms/${activeDm.id}/messages`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${accessToken}` },
+        body: JSON.stringify({ content })
+      });
 
-      setDms((current) => current.map((item) => {
-        if (item.id !== activeDm.id) return item;
-        return { ...item, messages: [...(item.messages || []), autoReply] };
-      }));
-    }, 700);
+      const data = await api(`/v1/social/dms/${activeDm.id}/messages`, {
+        headers: { Authorization: `Bearer ${accessToken}` }
+      });
+
+      setDms((current) => current.map((item) => item.id === activeDm.id ? { ...item, messages: data.messages || [] } : item));
+    } catch (error) {
+      setDmText(content);
+      setStatus(`DM send failed: ${error.message}`);
+    }
   }
 
-  function addFriend() {
+  async function addFriend() {
     const cleaned = friendAddInput.trim();
     if (!cleaned) return;
 
-    const normalized = makeId(cleaned);
-    const exists = friends.some((friend) => friend.id === normalized || friend.username.toLowerCase() === cleaned.toLowerCase());
-    if (exists) {
-      setStatus("That friend is already in your list.");
-      return;
+    try {
+      const data = await api("/v1/social/friends", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${accessToken}` },
+        body: JSON.stringify({ username: cleaned })
+      });
+
+      setFriends((current) => [data.friend, ...current.filter((item) => item.id !== data.friend.id)]);
+      const nextDm = { id: data.threadId, participantId: data.friend.id, name: data.friend.username, messages: [] };
+      setDms((current) => [nextDm, ...current.filter((item) => item.id !== nextDm.id)]);
+      setActiveDmId(nextDm.id);
+      setFriendAddInput("");
+      setFriendView("all");
+      setStatus(`Added ${data.friend.username} to your network.`);
+    } catch (error) {
+      setStatus(`Add friend failed: ${error.message}`);
     }
-
-    const friend = {
-      id: normalized || crypto.randomUUID(),
-      username: cleaned,
-      status: "online",
-      addedAt: new Date().toISOString()
-    };
-
-    setFriends((current) => [friend, ...current]);
-    ensureDmForFriend(friend);
-    setFriendAddInput("");
-    setNavMode("friends");
-    setFriendView("all");
-    setStatus(`Added ${friend.username} to your network.`);
   }
 
-  function openDmFromFriend(friend) {
-    ensureDmForFriend(friend);
-    setNavMode("dms");
+  async function openDmFromFriend(friend) {
+    try {
+      const data = await api("/v1/social/dms/open", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${accessToken}` },
+        body: JSON.stringify({ friendId: friend.id })
+      });
+
+      const threadId = data.threadId;
+      setDms((current) => {
+        const existing = current.find((item) => item.id === threadId);
+        if (existing) return current;
+        return [{ id: threadId, participantId: friend.id, name: friend.username, messages: [] }, ...current];
+      });
+      setActiveDmId(threadId);
+      setNavMode("dms");
+    } catch (error) {
+      setStatus(`Open DM failed: ${error.message}`);
+    }
   }
 
   async function saveProfile() {
@@ -740,14 +746,13 @@ export function App() {
 
         {navMode === "friends" && (
           <section className="sidebar-block channels-container">
-            <input placeholder="Friend username" value={friendAddInput} onChange={(event) => setFriendAddInput(event.target.value)} />
-            <button onClick={addFriend}>Add Friend</button>
             {friends.map((friend) => (
               <button className="friend-row" key={friend.id} onClick={() => openDmFromFriend(friend)}>
                 <strong>{friend.username}</strong>
                 <span>{friend.status}</span>
               </button>
             ))}
+            {!friends.length && <p className="hint">No friends yet. Use the Add Friend tab in the main panel.</p>}
           </section>
         )}
 

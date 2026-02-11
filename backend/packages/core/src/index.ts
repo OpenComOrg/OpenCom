@@ -2,6 +2,7 @@ import { buildHttp } from "./http.js";
 import { authRoutes } from "./routes/auth.js";
 import { deviceRoutes } from "./routes/devices.js";
 import { dmRoutes } from "./routes/dms.js";
+import { socialRoutes } from "./routes/social.js";
 import { serverRoutes } from "./routes/servers.js";
 import { jwksRoutes } from "./routes/jwks.js";
 import { profileRoutes } from "./routes/profile.js";
@@ -31,5 +32,6 @@ await profileRoutes(app);
 await inviteRoutes(app);
 await adminRoutes(app);
 await dmRoutes(app, gw.broadcastDM);
+await socialRoutes(app);
 
 app.listen({ port: env.CORE_PORT, host: "0.0.0.0" });

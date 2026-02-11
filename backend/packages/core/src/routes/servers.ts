@@ -65,6 +65,16 @@ export async function serverRoutes(app: FastifyInstance) {
     const userId = req.user.sub as string;
     const body = CreateServer.parse(req.body);
 
+    const platformRole = await getPlatformRole(userId);
+    if (platformRole === "user") {
+      const ownedServers = await q<{ count: number }>(
+        `SELECT COUNT(*) as count FROM servers WHERE owner_user_id=:userId`,
+        { userId }
+      );
+      const totalOwned = Number(ownedServers[0]?.count || 0);
+      if (totalOwned >= 1) return rep.code(403).send({ error: "SERVER_LIMIT_REACHED" });
+    }
+
     const id = ulidLike();
     await q(`INSERT INTO servers (id,name,base_url,owner_user_id) VALUES (:id,:name,:baseUrl,:userId)`,
       { id, name: body.name, baseUrl: body.baseUrl, userId }

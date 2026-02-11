@@ -104,6 +104,8 @@ export function App() {
   const [isDeafened, setIsDeafened] = useState(false);
   const [toolsOpen, setToolsOpen] = useState(false);
   const [serverContextMenu, setServerContextMenu] = useState(null);
+  const [memberProfileCard, setMemberProfileCard] = useState(null);
+  const [friendView, setFriendView] = useState("online");
   const [status, setStatus] = useState("");
   const [themeCss, setThemeCss] = useThemeCss();
   const messagesRef = useRef(null);
@@ -131,9 +133,15 @@ export function App() {
   }, [dms, storageScope]);
 
   useEffect(() => {
-    const onGlobalClick = () => setServerContextMenu(null);
+    const onGlobalClick = () => {
+      setServerContextMenu(null);
+      setMemberProfileCard(null);
+    };
     const onEscape = (event) => {
-      if (event.key === "Escape") setServerContextMenu(null);
+      if (event.key === "Escape") {
+        setServerContextMenu(null);
+        setMemberProfileCard(null);
+      }
     };
 
     window.addEventListener("click", onGlobalClick);
@@ -461,6 +469,29 @@ export function App() {
     setServerContextMenu(null);
   }
 
+  async function openMemberProfile(member) {
+    try {
+      const profileData = await api(`/v1/users/${member.id}/profile`, {
+        headers: { Authorization: `Bearer ${accessToken}` }
+      });
+      setMemberProfileCard({
+        ...profileData,
+        username: profileData.username || member.username,
+        status: member.status || "online"
+      });
+    } catch {
+      setMemberProfileCard({
+        id: member.id,
+        username: member.username || member.id,
+        displayName: member.username || member.id,
+        bio: "Profile details are private or unavailable.",
+        badges: [],
+        status: member.status || "online",
+        platformTitle: null
+      });
+    }
+  }
+
   async function onUploadTheme(event) {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -655,13 +686,13 @@ export function App() {
             <aside className="members-pane">
               <h4>Online — {memberList.length}</h4>
               {memberList.map((member) => (
-                <div className="member-row" key={member.id}>
+                <button className="member-row" key={member.id} onClick={(event) => { event.stopPropagation(); openMemberProfile(member); }}>
                   <div className="avatar member-avatar">{member.username.slice(0, 1).toUpperCase()}</div>
                   <div>
                     <strong>{member.username}</strong>
                     <span>{member.status}</span>
                   </div>
-                </div>
+                </button>
               ))}
               {!memberList.length && <p className="hint">No visible members yet.</p>}
             </aside>
@@ -680,10 +711,51 @@ export function App() {
         )}
 
         {navMode === "friends" && (
-          <div className="social-panel">
-            <h3>Friends</h3>
-            <p className="hint">Discord-style friend management now lives directly in-app.</p>
-            {filteredFriends.map((friend) => <div key={friend.id} className="friend-row"><strong>{friend.username}</strong><span>{friend.status}</span></div>)}
+          <div className="friends-surface">
+            <section className="friends-main">
+              <header className="friends-header">
+                <h3>Friends</h3>
+                <div className="friends-tabs">
+                  <button className={friendView === "online" ? "active" : "ghost"} onClick={() => setFriendView("online")}>Online</button>
+                  <button className={friendView === "all" ? "active" : "ghost"} onClick={() => setFriendView("all")}>All</button>
+                  <button className={friendView === "add" ? "active" : "ghost"} onClick={() => setFriendView("add")}>Add Friend</button>
+                </div>
+              </header>
+
+              <input placeholder="Search friends" value={friendSearch} onChange={(e) => setFriendSearch(e.target.value)} />
+
+              {friendView === "add" && (
+                <div className="friend-add-card">
+                  <h4>Add Friend</h4>
+                  <p className="hint">Use their OpenCom username to add them directly.</p>
+                  <div className="friend-add-row">
+                    <input placeholder="Username" value={friendSearch} onChange={(e) => setFriendSearch(e.target.value)} />
+                    <button onClick={addFriend}>Send Request</button>
+                  </div>
+                </div>
+              )}
+
+              {(friendView === "online" ? filteredFriends.filter((f) => f.status !== "offline") : filteredFriends).map((friend) => (
+                <button key={friend.id} className="friend-row" onClick={(event) => { event.stopPropagation(); openMemberProfile(friend); }}>
+                  <div className="friend-meta">
+                    <strong>{friend.username}</strong>
+                    <span>{friend.status}</span>
+                  </div>
+                  <div className="friend-actions">💬</div>
+                </button>
+              ))}
+            </section>
+
+            <aside className="active-now">
+              <h4>Active Now</h4>
+              {(filteredFriends.slice(0, 4)).map((friend) => (
+                <button key={`active-${friend.id}`} className="active-card" onClick={(event) => { event.stopPropagation(); openMemberProfile(friend); }}>
+                  <strong>{friend.username}</strong>
+                  <span>{friend.status === "online" ? "Playing OpenCom" : "Recently active"}</span>
+                </button>
+              ))}
+              {!filteredFriends.length && <p className="hint">When friends are active, they'll appear here.</p>}
+            </aside>
           </div>
         )}
 
@@ -712,6 +784,24 @@ export function App() {
           <button className="danger" onClick={() => { setStatus("Server settings coming next."); setServerContextMenu(null); }}>Server Settings</button>
         </div>
       )}
+
+      {memberProfileCard && (
+        <div className="member-profile-popout" onClick={(event) => event.stopPropagation()}>
+          <div className="popout-banner" style={{ backgroundImage: memberProfileCard.bannerUrl ? `url(${memberProfileCard.bannerUrl})` : undefined }} />
+          <div className="popout-content">
+            <div className="avatar popout-avatar">{(memberProfileCard.displayName || memberProfileCard.username || "U").slice(0, 1).toUpperCase()}</div>
+            <h4>{memberProfileCard.displayName || memberProfileCard.username}</h4>
+            <p className="hint">@{memberProfileCard.username} · {memberProfileCard.status || "online"}</p>
+            {memberProfileCard.platformTitle && <p className="hint">{memberProfileCard.platformTitle}</p>}
+            <p>{memberProfileCard.bio || "No bio set."}</p>
+            <div className="popout-actions">
+              <button className="ghost">Message</button>
+              <button onClick={() => setMemberProfileCard(null)}>Close</button>
+            </div>
+          </div>
+        </div>
+      )}
+
 
       {toolsOpen && (
         <div className="tools-drawer">

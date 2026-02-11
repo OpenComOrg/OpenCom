@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 const CORE_API = import.meta.env.VITE_CORE_API_URL || "https://openapi.donskyblock.xyz";
-const FRONTEND_URL = import.meta.env.VITE_FRONTEND_URL || "https://opencom.donskyblock.xyz";
 const THEME_STORAGE_KEY = "opencom_custom_theme_css";
 
 function useThemeCss() {
@@ -148,6 +147,19 @@ export function App() {
     if (!query) return friends;
     return friends.filter((friend) => friend.username.toLowerCase().includes(query) || friend.id.toLowerCase().includes(query));
   }, [friends, friendSearch]);
+
+  const memberList = useMemo(() => {
+    const members = new Map();
+    for (const message of messages) {
+      const id = message.author_id || message.authorId;
+      if (!id || members.has(id)) continue;
+      members.set(id, { id, username: id, status: "online" });
+    }
+    if (me?.id && !members.has(me.id)) {
+      members.set(me.id, { id: me.id, username: me.username || me.id, status: "online" });
+    }
+    return Array.from(members.values());
+  }, [messages, me]);
 
   const groupedChannelSections = useMemo(() => {
     const categories = categoryChannels.map((category) => ({
@@ -420,9 +432,7 @@ export function App() {
       <div className="auth-shell">
         <div className="auth-card">
           <h1>Welcome back</h1>
-          <p className="sub">Discord-style private communities, on your own infrastructure.</p>
-          <p>Frontend URL: <code>{FRONTEND_URL}</code></p>
-          <p>API URL: <code>{CORE_API}</code></p>
+          <p className="sub">Jump back into your communities.</p>
           <form onSubmit={handleAuthSubmit}>
             <label>Email<input value={email} onChange={(e) => setEmail(e.target.value)} type="email" required /></label>
             {authMode === "register" && <label>Username<input value={username} onChange={(e) => setUsername(e.target.value)} required /></label>}
@@ -567,14 +577,53 @@ export function App() {
 
       <main className="chat-pane">
         {navMode === "servers" && (
-          <>
-            <header className="chat-header"><h3><span className="channel-hash">#</span> {activeChannel?.name || "general"}</h3><button className="ghost" onClick={() => setToolsOpen((v) => !v)}>Server Tools</button></header>
-            <div className="messages" ref={messagesRef}>
-              {messages.map((message) => <article key={message.id} className="msg"><strong>{message.author_id || message.authorId} <span className="msg-time">just now</span></strong><p>{message.content}</p></article>)}
-              {!messages.length && <p className="empty">No messages yet. Start the conversation.</p>}
-            </div>
-            <footer className="composer"><input value={messageText} onChange={(e) => setMessageText(e.target.value)} placeholder={`Message #${activeChannel?.name || "channel"}`} onKeyDown={(e) => e.key === "Enter" && sendMessage()} /><button onClick={sendMessage}>Send</button></footer>
-          </>
+          <div className="chat-layout">
+            <section className="chat-main">
+              <header className="chat-header">
+                <h3><span className="channel-hash">#</span> {activeChannel?.name || "general"}</h3>
+                <div className="chat-actions">
+                  <button className="icon-btn ghost" title="Threads">🧵</button>
+                  <button className="icon-btn ghost" title="Notifications">🔔</button>
+                  <button className="icon-btn ghost" title="Pinned">📌</button>
+                  <button className="icon-btn ghost" title="Members">👥</button>
+                  <input className="search-input" placeholder={`Search ${activeServer?.name || "server"}`} />
+                  <button className="ghost" onClick={() => setToolsOpen((v) => !v)}>Server Tools</button>
+                </div>
+              </header>
+              <div className="messages" ref={messagesRef}>
+                {messages.map((message) => (
+                  <article key={message.id} className="msg">
+                    <div className="msg-avatar">{(message.author_id || message.authorId || "U").slice(0, 1).toUpperCase()}</div>
+                    <div className="msg-body">
+                      <strong>{message.author_id || message.authorId} <span className="msg-time">just now</span></strong>
+                      <p>{message.content}</p>
+                    </div>
+                  </article>
+                ))}
+                {!messages.length && <p className="empty">No messages yet. Start the conversation.</p>}
+              </div>
+              <footer className="composer">
+                <button className="ghost composer-icon">＋</button>
+                <input value={messageText} onChange={(e) => setMessageText(e.target.value)} placeholder={`Message #${activeChannel?.name || "channel"}`} onKeyDown={(e) => e.key === "Enter" && sendMessage()} />
+                <button className="ghost composer-icon">🎁</button>
+                <button onClick={sendMessage}>Send</button>
+              </footer>
+            </section>
+
+            <aside className="members-pane">
+              <h4>Online — {memberList.length}</h4>
+              {memberList.map((member) => (
+                <div className="member-row" key={member.id}>
+                  <div className="avatar member-avatar">{member.username.slice(0, 1).toUpperCase()}</div>
+                  <div>
+                    <strong>{member.username}</strong>
+                    <span>{member.status}</span>
+                  </div>
+                </div>
+              ))}
+              {!memberList.length && <p className="hint">No visible members yet.</p>}
+            </aside>
+          </div>
         )}
 
         {navMode === "dms" && (

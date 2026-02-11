@@ -2,6 +2,7 @@
   --bg-rail: #1e1f22;
   --bg-sidebar: #2b2d31;
   --bg-chat: #313338;
+  --bg-chat-alt: #2f3136;
   --bg-elev: #232428;
   --bg-input: #383a40;
   --bg-hover: #3f4248;
@@ -45,16 +46,19 @@ button.danger { background: var(--danger); }
   min-height: 100vh;
   display: grid;
   place-items: center;
-  background: linear-gradient(130deg, #1f2149 0%, #18191c 52%, #101113 100%);
+  background:
+    radial-gradient(circle at top, rgba(88, 101, 242, 0.35) 0%, rgba(88, 101, 242, 0) 45%),
+    linear-gradient(140deg, #11131a 0%, #1a1d28 45%, #11131a 100%);
 }
 .auth-card {
   width: min(480px, 92vw);
-  background: #2b2d31;
-  border: 1px solid #1d1e21;
-  border-radius: 8px;
-  padding: 28px;
+  background: rgba(37, 40, 45, 0.96);
+  border: 1px solid #1b1d22;
+  border-radius: 14px;
+  padding: 32px;
   display: grid;
-  gap: 12px;
+  gap: 14px;
+  box-shadow: 0 22px 60px rgba(0, 0, 0, 0.45);
 }
 .auth-card h1 { margin: 0; font-size: 24px; text-align: center; }
 .auth-card .sub, .auth-card p { margin: 0; color: var(--text-soft); text-align: center; }
@@ -62,16 +66,16 @@ button.danger { background: var(--danger); }
 .auth-card label { display: grid; gap: 5px; font-size: 12px; color: var(--text-soft); }
 .link-btn { background: transparent; color: #00a8fc; padding: 0; }
 
-.discord-shell { height: 100vh; display: grid; grid-template-columns: 72px 260px 1fr; }
+.discord-shell { height: 100vh; display: grid; grid-template-columns: 72px 260px 1fr; background: #1f2125; }
 .server-rail {
-  background: var(--bg-rail);
+  background: #1b1d21;
   border-right: 1px solid #1a1b1e;
   padding: 12px;
   display: flex;
   flex-direction: column;
   gap: 8px;
 }
-.rail-header, .server-pill { width: 48px; height: 48px; border-radius: 50%; display: grid; place-items: center; }
+.rail-header, .server-pill { width: 48px; height: 48px; border-radius: 50%; display: grid; place-items: center; transition: border-radius 0.2s ease, background 0.2s ease; }
 .rail-header { background: var(--brand); font-weight: 800; }
 .server-list { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; overflow: auto; }
 .server-pill { background: #313338; }
@@ -80,13 +84,13 @@ button.danger { background: var(--danger); }
 .nav-pill { font-size: 16px; }
 
 .channel-sidebar {
-  background: var(--bg-sidebar);
+  background: #2b2d31;
   border-right: 1px solid #232428;
   display: grid;
   grid-template-rows: auto 1fr auto;
   min-height: 0;
 }
-.sidebar-header { padding: 14px 16px; border-bottom: 1px solid #1f2024; }
+.sidebar-header { padding: 14px 16px; border-bottom: 1px solid #24262c; box-shadow: 0 1px 0 rgba(0, 0, 0, 0.2); }
 .sidebar-header h2 { margin: 0; font-size: 15px; }
 .sidebar-header small { color: var(--text-dim); }
 .sidebar-block { padding: 10px 8px; display: grid; gap: 8px; }
@@ -108,6 +112,7 @@ button.danger { background: var(--danger); }
   color: var(--text-soft);
   text-align: left;
   padding: 7px 8px;
+  border-radius: 6px;
 }
 .channel-row:hover, .channel-row.active { background: var(--bg-hover); color: var(--text-main); }
 .channel-hash { color: var(--text-dim); margin-right: 3px; }
@@ -141,23 +146,106 @@ button.danger { background: var(--danger); }
 .user-controls { display: flex; gap: 4px; }
 .icon-btn { min-width: 28px; height: 28px; padding: 0; border-radius: 4px; }
 
-.chat-pane { min-width: 0; display: grid; grid-template-rows: auto 1fr auto; background: var(--bg-chat); }
+.chat-pane { min-width: 0; display: grid; grid-template-rows: 1fr; background: var(--bg-chat); }
+
+.chat-layout {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 240px;
+  height: 100%;
+}
+
+.chat-main {
+  min-width: 0;
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+}
+
 .chat-header {
   padding: 12px 16px;
-  border-bottom: 1px solid #242529;
+  border-bottom: 1px solid #26282e;
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 8px;
 }
 .chat-header h3 { margin: 0; font-size: 16px; }
+.chat-actions { display: flex; align-items: center; gap: 8px; }
+.search-input {
+  width: 220px;
+  background: #1f2125;
+  border: 1px solid #262930;
+  font-size: 13px;
+}
 .messages { overflow: auto; padding: 18px 0; }
-.msg { padding: 2px 16px 10px; }
+.msg { padding: 2px 16px 14px; display: grid; grid-template-columns: auto 1fr; gap: 12px; }
 .msg:hover { background: rgba(4, 4, 5, 0.07); }
+.msg-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: #5865f2;
+  display: grid;
+  place-items: center;
+  font-weight: 700;
+}
+.msg-body { min-width: 0; }
 .msg-time { color: var(--text-dim); font-size: 12px; margin-left: 8px; }
 .msg p { margin: 4px 0 0; }
 .empty { color: var(--text-dim); text-align: center; margin-top: 24px; }
-.composer { margin: 0 16px 20px; display: grid; grid-template-columns: 1fr auto; gap: 10px; }
+.composer {
+  margin: 0 16px 20px;
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  gap: 10px;
+  align-items: center;
+  background: var(--bg-chat-alt);
+  border: 1px solid #23252b;
+  border-radius: 8px;
+  padding: 8px;
+}
 .composer input { border: none; border-radius: 8px; }
+.composer-icon { padding: 8px; min-width: 34px; }
+
+.members-pane {
+  border-left: 1px solid #26282e;
+  background: #2b2d31;
+  padding: 18px 12px;
+  overflow: auto;
+}
+
+.members-pane h4 {
+  margin: 0 0 10px;
+  color: var(--text-dim);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.member-row {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px;
+  align-items: center;
+  padding: 6px;
+  border-radius: 6px;
+}
+
+.member-row:hover {
+  background: #35383e;
+}
+
+.member-row span {
+  display: block;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.member-avatar {
+  width: 30px;
+  height: 30px;
+  font-size: 12px;
+}
 .social-panel { padding: 20px; display: grid; gap: 10px; align-content: start; }
 .social-panel label { display: grid; gap: 6px; color: var(--text-soft); font-size: 13px; }
 
@@ -189,4 +277,7 @@ textarea { resize: vertical; min-height: 120px; }
 @media (max-width: 920px) {
   .discord-shell { grid-template-columns: 64px 1fr; }
   .channel-sidebar { display: none; }
+  .chat-layout { grid-template-columns: 1fr; }
+  .members-pane { display: none; }
+  .search-input { display: none; }
 }

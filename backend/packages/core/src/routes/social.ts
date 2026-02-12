@@ -123,6 +123,13 @@ export async function socialRoutes(app: FastifyInstance) {
        LIMIT 1`,
       { userId, friendId }
     );
+    if (outgoingRequest.length) return { ok: true, requestId: outgoingRequest[0].id, requestStatus: "pending" };
+
+    const newRequestId = ulidLike();
+    await q(
+      `INSERT INTO friend_requests (id,sender_user_id,recipient_user_id,status) VALUES (:id,:userId,:friendId,'pending')`,
+      { id: newRequestId, userId, friendId }
+    );
 
     if (incomingRequest.length) {
       await createFriendshipPair(userId, friendId);

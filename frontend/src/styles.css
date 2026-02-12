@@ -134,6 +134,11 @@ button.danger { background: linear-gradient(135deg, #eb5d73, #c84159); }
 .sidebar-header h2 { margin: 0; font-size: 23px; letter-spacing: 0.02em; }
 .sidebar-header small { color: var(--text-dim); }
 .sidebar-block { padding: 10px; display: grid; gap: 8px; }
+.sidebar-footer {
+  padding: 12px;
+  border-top: 1px solid var(--border-subtle);
+  background: rgba(10, 16, 30, 0.5);
+}
 .channels-container { overflow: auto; min-height: 0; }
 
 .category-header {
@@ -145,9 +150,42 @@ button.danger { background: linear-gradient(135deg, #eb5d73, #c84159); }
   letter-spacing: 0.08em;
   font-size: 11px;
   padding: 5px 8px;
+  border: none;
+  cursor: pointer;
+  font-weight: 600;
+  transition: color 0.2s ease;
 }
+.category-header:hover { color: var(--text-soft); }
 
-.channel-row {
+.channel-btn {
+  width: 100%;
+  text-align: left;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-soft);
+  padding: 8px;
+  margin-bottom: 3px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+.channel-btn:hover { 
+  background: var(--bg-hover);
+  color: var(--text-main);
+}
+.channel-btn.active {
+  background: var(--bg-active);
+  color: var(--text-main);
+  font-weight: 500;
+}
+.channel-btn span {
+  display: inline-block;
+  min-width: 16px;
+  text-align: center;
+}
   width: 100%;
   text-align: left;
   border-radius: 8px;

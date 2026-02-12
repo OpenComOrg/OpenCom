@@ -17,4 +17,31 @@ export async function meRoutes(app: FastifyInstance) {
 
     return { guilds: rows };
   });
+
+  // Get current user's voice state across all guilds
+  app.get("/v1/me/voice-state", { preHandler: [app.authenticate] } as any, async (req: any) => {
+    const userId = req.auth.userId as string;
+
+    const voiceStates = await q<any>(
+      `SELECT guild_id, channel_id, muted, deafened, updated_at
+       FROM voice_states
+       WHERE user_id = :userId`,
+      { userId }
+    );
+
+    return { voiceStates };
+  });
+
+  // Leave all voice channels
+  app.post("/v1/me/voice-disconnect", { preHandler: [app.authenticate] } as any, async (req: any) => {
+    const userId = req.auth.userId as string;
+
+    await q(
+      `DELETE FROM voice_states WHERE user_id = :userId`,
+      { userId }
+    );
+
+    return { ok: true };
+  });
 }
+

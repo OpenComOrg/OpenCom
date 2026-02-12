@@ -178,4 +178,90 @@ export async function channelRoutes(
     broadcastGuild(guildId, "CHANNEL_DELETE", { channelId });
     return rep.send({ ok: true });
   });
+
+  // Join voice channel
+  app.post("/v1/channels/:channelId/voice/join", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
+    const { channelId } = z.object({ channelId: z.string().min(3) }).parse(req.params);
+    const userId = req.auth.userId as string;
+
+    const ch = await q<{ guild_id: string; type: string }>(
+      `SELECT guild_id, type FROM channels WHERE id=:channelId`,
+      { channelId }
+    );
+    if (!ch.length) return rep.code(404).send({ error: "CHANNEL_NOT_FOUND" });
+    if (ch[0].type !== "voice") return rep.code(400).send({ error: "NOT_VOICE_CHANNEL" });
+
+    const guildId = ch[0].guild_id;
+
+    // Leave any other voice channels in this guild first
+    await q(
+      `DELETE FROM voice_states WHERE user_id=:userId AND guild_id=:guildId`,
+      { userId, guildId }
+    );
+
+    // Join this one
+    await q(
+      `INSERT INTO voice_states (guild_id, channel_id, user_id) VALUES (:guildId,:channelId,:userId)
+       ON DUPLICATE KEY UPDATE channel_id=:channelId, updated_at=NOW()`,
+      { guildId, channelId, userId }
+    );
+
+    broadcastGuild(guildId, "VOICE_STATE_UPDATE", { userId, channelId, muted: false, deafened: false });
+    return rep.send({ ok: true });
+  });
+
+  // Leave voice channel
+  app.post("/v1/channels/:channelId/voice/leave", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
+    const { channelId } = z.object({ channelId: z.string().min(3) }).parse(req.params);
+    const userId = req.auth.userId as string;
+
+    const ch = await q<{ guild_id: string }>(
+      `SELECT guild_id FROM channels WHERE id=:channelId`,
+      { channelId }
+    );
+    if (!ch.length) return rep.code(404).send({ error: "CHANNEL_NOT_FOUND" });
+    const guildId = ch[0].guild_id;
+
+    await q(
+      `DELETE FROM voice_states WHERE user_id=:userId AND channel_id=:channelId`,
+      { userId, channelId }
+    );
+
+    broadcastGuild(guildId, "VOICE_STATE_REMOVE", { userId, channelId });
+    return rep.send({ ok: true });
+  });
+
+  // Toggle mute/deafen
+  app.patch("/v1/channels/:channelId/voice/state", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
+    const { channelId } = z.object({ channelId: z.string().min(3) }).parse(req.params);
+    const userId = req.auth.userId as string;
+    const body = z.object({
+      muted: z.boolean().optional(),
+      deafened: z.boolean().optional()
+    }).parse(req.body);
+
+    const vs = await q<{ guild_id: string }>(
+      `SELECT guild_id FROM voice_states WHERE user_id=:userId AND channel_id=:channelId`,
+      { userId, channelId }
+    );
+    if (!vs.length) return rep.code(404).send({ error: "NOT_IN_VOICE" });
+    const guildId = vs[0].guild_id;
+
+    await q(
+      `UPDATE voice_states SET
+        muted = COALESCE(:muted, muted),
+        deafened = COALESCE(:deafened, deafened),
+        updated_at = NOW()
+       WHERE user_id=:userId AND channel_id=:channelId`,
+      { userId, channelId, muted: body.muted, deafened: body.deafened }
+    );
+
+    const updated = (await q<any>(
+      `SELECT muted, deafened FROM voice_states WHERE user_id=:userId AND channel_id=:channelId`,
+      { userId, channelId }
+    ))[0];
+
+    broadcastGuild(guildId, "VOICE_STATE_UPDATE", { userId, channelId, ...updated });
+    return rep.send({ ok: true });
+  });
 }

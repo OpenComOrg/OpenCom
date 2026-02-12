@@ -114,86 +114,12 @@ export async function socialRoutes(app: FastifyInstance) {
       };
     }
 
-    const isAllowed = target[0].allow_friend_requests === null || target[0].allow_friend_requests === 1;
-    if (!isAllowed) return rep.code(403).send({ error: "FRIEND_REQUESTS_DISABLED" });
+    const areFriendRequestsAllowed = target[0].allow_friend_requests === null || target[0].allow_friend_requests === 1;
+    if (!areFriendRequestsAllowed) return rep.code(403).send({ error: "FRIEND_REQUESTS_DISABLED" });
 
-    const incoming = await q<{ id: string }>(
+    const incomingRequest = await q<{ id: string }>(
       `SELECT id FROM friend_requests
        WHERE sender_user_id=:friendId AND recipient_user_id=:userId AND status='pending'
-       LIMIT 1`,
-      { userId, friendId }
-    );
-    if (existing.length) {
-      const threadId = await ensureThread(userId, friendId);
-      return {
-        ok: true,
-        alreadyFriends: true,
-        friend: {
-          id: friendId,
-          username: target[0].display_name || target[0].username,
-          status: "online"
-        },
-        threadId
-      };
-    }
-
-    const isAllowed = target[0].allow_friend_requests === null || target[0].allow_friend_requests === 1;
-    if (!isAllowed) return rep.code(403).send({ error: "FRIEND_REQUESTS_DISABLED" });
-
-    const incoming = await q<{ id: string }>(
-      `SELECT id FROM friend_requests
-       WHERE sender_user_id=:friendId AND recipient_user_id=:userId AND status='pending'
-       LIMIT 1`,
-      { userId, friendId }
-    );
-
-    if (incoming.length) {
-      await createFriendshipPair(userId, friendId);
-      const threadId = await ensureThread(userId, friendId);
-      return {
-        ok: true,
-        acceptedExistingRequest: true,
-        friend: {
-          id: friendId,
-          username: target[0].display_name || target[0].username,
-          status: "online"
-        },
-        threadId
-      };
-    }
-
-    const outgoing = await q<{ id: string }>(
-      `SELECT id FROM friend_requests
-       WHERE sender_user_id=:userId AND recipient_user_id=:friendId AND status='pending'
-       LIMIT 1`,
-      { userId, friendId }
-    );
-    if (outgoing.length) return { ok: true, requestId: outgoing[0].id, requestStatus: "pending" };
-
-    const requestId = ulidLike();
-    await q(
-      `INSERT INTO friend_requests (id,sender_user_id,recipient_user_id,status) VALUES (:id,:userId,:friendId,'pending')`,
-      { id: requestId, userId, friendId }
-    );
-
-    if (incoming.length) {
-      await createFriendshipPair(userId, friendId);
-      const threadId = await ensureThread(userId, friendId);
-      return {
-        ok: true,
-        acceptedExistingRequest: true,
-        friend: {
-          id: friendId,
-          username: target[0].display_name || target[0].username,
-          status: "online"
-        },
-        threadId
-      };
-    }
-
-    const outgoing = await q<{ id: string }>(
-      `SELECT id FROM friend_requests
-       WHERE sender_user_id=:userId AND recipient_user_id=:friendId AND status='pending'
        LIMIT 1`,
       { userId, friendId }
     );
@@ -206,6 +132,50 @@ export async function socialRoutes(app: FastifyInstance) {
     );
 
     return { ok: true, requestId, requestStatus: "pending" };
+  });
+
+  app.get("/v1/social/requests", { preHandler: [app.authenticate] } as any, async (req: any) => {
+    const userId = req.user.sub as string;
+
+    const incoming = await q<{ id: string; sender_user_id: string; username: string; display_name: string | null; created_at: string }>(
+      `SELECT fr.id, fr.sender_user_id, u.username, u.display_name, fr.created_at
+       FROM friend_requests fr
+       JOIN users u ON u.id=fr.sender_user_id
+       WHERE fr.recipient_user_id=:userId AND fr.status='pending'
+       ORDER BY fr.created_at DESC`,
+      { userId }
+    );
+
+    if (incomingRequest.length) {
+      await createFriendshipPair(userId, friendId);
+      const threadId = await ensureThread(userId, friendId);
+      return {
+        ok: true,
+        acceptedExistingRequest: true,
+        friend: {
+          id: friendId,
+          username: target[0].display_name || target[0].username,
+          status: "online"
+        },
+        threadId
+      };
+    }
+
+    const outgoingRequest = await q<{ id: string }>(
+      `SELECT id FROM friend_requests
+       WHERE sender_user_id=:userId AND recipient_user_id=:friendId AND status='pending'
+       LIMIT 1`,
+      { userId, friendId }
+    );
+    if (outgoingRequest.length) return { ok: true, requestId: outgoingRequest[0].id, requestStatus: "pending" };
+
+    const newRequestId = ulidLike();
+    await q(
+      `INSERT INTO friend_requests (id,sender_user_id,recipient_user_id,status) VALUES (:id,:userId,:friendId,'pending')`,
+      { id: newRequestId, userId, friendId }
+    );
+
+    return { ok: true, requestId: newRequestId, requestStatus: "pending" };
   });
 
   app.get("/v1/social/requests", { preHandler: [app.authenticate] } as any, async (req: any) => {

@@ -169,6 +169,8 @@ export function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState("profile");
   const [serverContextMenu, setServerContextMenu] = useState(null);
+  const [messageContextMenu, setMessageContextMenu] = useState(null);
+  const [replyTarget, setReplyTarget] = useState(null);
   const [memberProfileCard, setMemberProfileCard] = useState(null);
   const [themeCss, setThemeCss, themeEnabled, setThemeEnabled] = useThemeCss();
 
@@ -196,6 +198,9 @@ export function App() {
   }, [friendQuery, friends]);
 
   const memberList = useMemo(() => {
+    const listed = guildState?.members || [];
+    if (listed.length) return listed;
+
     const members = new Map();
     for (const message of messages) {
       const id = message.author_id || message.authorId;
@@ -208,7 +213,7 @@ export function App() {
     }
 
     return Array.from(members.values());
-  }, [messages, me]);
+  }, [guildState, messages, me]);
 
   const groupedChannelSections = useMemo(() => {
     const categories = categoryChannels.map((category) => ({
@@ -267,6 +272,7 @@ export function App() {
   useEffect(() => {
     const onGlobalClick = () => {
       setServerContextMenu(null);
+      setMessageContextMenu(null);
       if (!settingsOpen) setMemberProfileCard(null);
     };
     const onEscape = (event) => {
@@ -445,7 +451,7 @@ export function App() {
 
   async function sendMessage() {
     if (!activeServer || !activeChannelId || !messageText.trim()) return;
-    const content = messageText.trim();
+    const content = `${replyTarget ? `> replying to ${replyTarget.author}: ${replyTarget.content}\n` : ""}${messageText.trim()}`;
 
     try {
       setMessageText("");
@@ -456,6 +462,7 @@ export function App() {
 
       const data = await nodeApi(activeServer.baseUrl, `/v1/channels/${activeChannelId}/messages`, activeServer.membershipToken);
       setMessages((data.messages || []).slice().reverse());
+      setReplyTarget(null);
     } catch (error) {
       setMessageText(content);
       setStatus(`Send failed: ${error.message}`);
@@ -677,16 +684,38 @@ export function App() {
 
   async function createWorkspace() {
     if (!activeServer || !newWorkspaceName.trim()) return;
-    try {
-      await nodeApi(activeServer.baseUrl, "/v1/guilds", activeServer.membershipToken, {
+    const name = newWorkspaceName.trim();
+
+    async function createWith(server) {
+      await nodeApi(server.baseUrl, "/v1/guilds", server.membershipToken, {
         method: "POST",
-        body: JSON.stringify({ name: newWorkspaceName.trim() })
+        body: JSON.stringify({ name })
       });
-      setNewWorkspaceName("");
-      const updated = await nodeApi(activeServer.baseUrl, "/v1/guilds", activeServer.membershipToken);
+      const updated = await nodeApi(server.baseUrl, "/v1/guilds", server.membershipToken);
       setGuilds(updated || []);
+    }
+
+    try {
+      await createWith(activeServer);
+      setNewWorkspaceName("");
       setStatus("Workspace created.");
     } catch (error) {
+      if (String(error.message).includes("401")) {
+        try {
+          const refreshed = await api("/v1/servers", { headers: { Authorization: `Bearer ${accessToken}` } });
+          const nextServers = refreshed.servers || [];
+          setServers(nextServers);
+          const activeRefreshed = nextServers.find((server) => server.id === activeServer.id);
+          if (activeRefreshed) {
+            await createWith(activeRefreshed);
+            setNewWorkspaceName("");
+            setStatus("Workspace created.");
+            return;
+          }
+        } catch {
+          // continue to error message below
+        }
+      }
       setStatus(`Create workspace failed: ${error.message}`);
     }
   }
@@ -714,6 +743,46 @@ export function App() {
     setNavMode("servers");
     setActiveServerId(serverId);
     setServerContextMenu(null);
+  }
+
+  async function deleteServerMessage(messageId) {
+    if (!activeServer || !activeChannelId || !messageId) return;
+    try {
+      await nodeApi(activeServer.baseUrl, `/v1/channels/${activeChannelId}/messages/${messageId}`, activeServer.membershipToken, { method: "DELETE" });
+      setMessages((current) => current.filter((message) => message.id !== messageId));
+      setStatus("Message deleted.");
+    } catch (error) {
+      setStatus(`Delete failed: ${error.message}`);
+    }
+    setMessageContextMenu(null);
+  }
+
+  function openMessageContextMenu(event, message) {
+    event.preventDefault();
+    setMessageContextMenu({ x: event.clientX, y: event.clientY, message });
+  }
+
+  async function readImageFile(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ""));
+      reader.onerror = () => reject(new Error("FILE_READ_FAILED"));
+      reader.readAsDataURL(file);
+    });
+  }
+
+  async function onAvatarUpload(event) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    const dataUrl = await readImageFile(file);
+    setProfileForm((current) => ({ ...current, pfpUrl: dataUrl }));
+  }
+
+  async function onBannerUpload(event) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    const dataUrl = await readImageFile(file);
+    setProfileForm((current) => ({ ...current, bannerUrl: dataUrl }));
   }
 
   async function openMemberProfile(member) {
@@ -792,6 +861,9 @@ export function App() {
               {getInitials(server.name)}
             </button>
           ))}
+          <button className="server-pill" title="Create or join a server" onClick={() => { setSettingsOpen(true); setSettingsTab("workspace"); }}>
+            ＋
+          </button>
         </div>
       </aside>
 
@@ -925,25 +997,36 @@ export function App() {
                     <div className="msg-avatar">{getInitials(group.author || "User")}</div>
                     <div className="msg-body">
                       <strong className="msg-author">{group.author} <span className="msg-time">{formatMessageTime(group.firstMessageTime)}</span></strong>
-                      {group.messages.map((message) => <p key={message.id}>{message.content}</p>)}
+                      {group.messages.map((message) => (
+                        <p key={message.id} onContextMenu={(event) => openMessageContextMenu(event, { id: message.id, author: group.author, content: message.content, mine: (message.author_id || message.authorId) === me?.id })}>
+                          {message.content}
+                        </p>
+                      ))}
                     </div>
                   </article>
                 ))}
                 {!messages.length && <p className="empty">No messages yet. Start the conversation.</p>}
               </div>
 
-              <footer className="composer">
+              {replyTarget && (
+                <div className="reply-banner">
+                  <span>Replying to {replyTarget.author}</span>
+                  <button className="ghost" onClick={() => setReplyTarget(null)}>Cancel</button>
+                </div>
+              )}
+
+              <footer className="composer server-composer">
                 <button className="ghost composer-icon">＋</button>
                 <input value={messageText} onChange={(event) => setMessageText(event.target.value)} placeholder={`Message #${activeChannel?.name || "channel"}`} onKeyDown={(event) => event.key === "Enter" && sendMessage()} />
                 <button className="ghost composer-icon">🎁</button>
-                <button onClick={sendMessage} disabled={!activeChannelId || !messageText.trim()}>Send</button>
+                <button className="send-btn" onClick={sendMessage} disabled={!activeChannelId || !messageText.trim()}>Send</button>
               </footer>
             </section>
 
             <aside className="members-pane">
               <h4>Online — {memberList.length}</h4>
               {memberList.map((member) => (
-                <button className="member-row" key={member.id} onClick={(event) => { event.stopPropagation(); openMemberProfile(member); }}>
+                <button className="member-row" key={member.id} title={`View ${member.username}`} onClick={(event) => { event.stopPropagation(); openMemberProfile(member); }}>
                   <div className="avatar member-avatar">{getInitials(member.username)}</div>
                   <div>
                     <strong>{member.username}</strong>
@@ -971,9 +1054,9 @@ export function App() {
               ))}
               {!activeDm && <p className="empty">Select a DM on the left.</p>}
             </div>
-            <footer className="composer">
+            <footer className="composer dm-composer">
               <input value={dmText} onChange={(event) => setDmText(event.target.value)} placeholder={`Message ${activeDm?.name || "friend"}`} onKeyDown={(event) => event.key === "Enter" && sendDm()} />
-              <button onClick={sendDm} disabled={!activeDm || !dmText.trim()}>Send</button>
+              <button className="send-btn" onClick={sendDm} disabled={!activeDm || !dmText.trim()}>Send</button>
             </footer>
           </>
         )}
@@ -1058,6 +1141,13 @@ export function App() {
         )}
       </main>
 
+      {messageContextMenu && (
+        <div className="server-context-menu" style={{ top: messageContextMenu.y, left: messageContextMenu.x }} onClick={(event) => event.stopPropagation()}>
+          <button onClick={() => { setReplyTarget({ author: messageContextMenu.message.author, content: messageContextMenu.message.content }); setMessageContextMenu(null); }}>Reply</button>
+          {messageContextMenu.message.mine && <button className="danger" onClick={() => deleteServerMessage(messageContextMenu.message.id)}>Delete</button>}
+        </div>
+      )}
+
       {serverContextMenu && (
         <div className="server-context-menu" style={{ top: serverContextMenu.y, left: serverContextMenu.x }} onClick={(event) => event.stopPropagation()}>
           <button onClick={() => openServerFromContext(serverContextMenu.server.id)}>Open Server</button>
@@ -1103,7 +1193,9 @@ export function App() {
                   <label>Display Name<input value={profileForm.displayName} onChange={(event) => setProfileForm((current) => ({ ...current, displayName: event.target.value }))} /></label>
                   <label>Bio<textarea rows={4} value={profileForm.bio} onChange={(event) => setProfileForm((current) => ({ ...current, bio: event.target.value }))} /></label>
                   <label>Avatar URL<input value={profileForm.pfpUrl} onChange={(event) => setProfileForm((current) => ({ ...current, pfpUrl: event.target.value }))} /></label>
+                  <label>Upload Avatar<input type="file" accept="image/*" onChange={onAvatarUpload} /></label>
                   <label>Banner URL<input value={profileForm.bannerUrl} onChange={(event) => setProfileForm((current) => ({ ...current, bannerUrl: event.target.value }))} /></label>
+                  <label>Upload Banner<input type="file" accept="image/*" onChange={onBannerUpload} /></label>
                   <button onClick={saveProfile}>Save Profile</button>
                 </div>
               )}

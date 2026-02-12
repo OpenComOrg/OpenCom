@@ -148,7 +148,7 @@ button.danger { background: linear-gradient(135deg, #eb5d73, #c84159); }
 .channel-row {
   width: 100%;
   text-align: left;
-  border-radius: 10px;
+  border-radius: 8px;
   background: transparent;
   color: var(--text-soft);
   padding: 8px;
@@ -172,7 +172,7 @@ button.danger { background: linear-gradient(135deg, #eb5d73, #c84159); }
 }
 
 .profile-preview {
-  min-height: 150px;
+  min-height: 110px;
   border-radius: 14px;
   border: 1px solid var(--border-subtle);
   background: #14213d;
@@ -271,6 +271,19 @@ button.danger { background: linear-gradient(135deg, #eb5d73, #c84159); }
 
 .composer input { border: none; background: transparent; }
 .composer-icon { min-width: 34px; }
+.server-composer { grid-template-columns: auto 1fr auto auto; }
+.dm-composer { grid-template-columns: 1fr auto; position: sticky; bottom: 10px; }
+.send-btn { padding: 7px 12px; min-width: 82px; }
+.reply-banner {
+  margin: 0 16px 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  background: rgba(22, 36, 62, 0.92);
+  padding: 6px 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
 
 .members-pane {
   border-left: 1px solid var(--border-subtle);
@@ -299,9 +312,9 @@ button.danger { background: linear-gradient(135deg, #eb5d73, #c84159); }
   margin-bottom: 8px;
   text-align: left;
   border: 1px solid var(--border-subtle);
-  border-radius: 10px;
+  border-radius: 8px;
   background: rgba(147, 167, 216, 0.1);
-  padding: 10px;
+  padding: 8px;
   display: grid;
   gap: 3px;
 }

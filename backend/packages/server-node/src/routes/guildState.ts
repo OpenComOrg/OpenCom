@@ -43,11 +43,24 @@ export async function guildStateRoutes(app: FastifyInstance) {
       { guildId, userId }
     );
 
+    const members = await q<{ user_id: string; nick: string | null }>(
+      `SELECT user_id, nick
+       FROM guild_members
+       WHERE guild_id=:guildId
+       ORDER BY joined_at ASC`,
+      { guildId }
+    );
+
     return rep.send({
       guild,
       channels,
       roles,
       overwrites,
+      members: members.map((member) => ({
+        id: member.user_id,
+        username: member.nick || member.user_id,
+        status: "online"
+      })),
       me: { userId, roleIds: myRoleIds.map(r => r.role_id) }
     });
   });

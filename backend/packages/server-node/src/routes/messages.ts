@@ -165,4 +165,27 @@ export async function messageRoutes(
     broadcastToChannel(channelId, payload);
     return rep.send({ messageId: id, createdAt });
   });
+  app.delete("/v1/channels/:channelId/messages/:messageId", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
+    const { channelId, messageId } = z.object({ channelId: z.string().min(3), messageId: z.string().min(3) }).parse(req.params);
+    const userId = req.auth.userId as string;
+
+    const ch = await q<{ guild_id: string }>(`SELECT guild_id FROM channels WHERE id=:channelId`, { channelId });
+    if (!ch.length) return rep.code(404).send({ error: "CHANNEL_NOT_FOUND" });
+    const guildId = ch[0].guild_id;
+
+    try { await requireGuildMember(guildId, userId, req.auth.roles); }
+    catch { return rep.code(403).send({ error: "NOT_GUILD_MEMBER" }); }
+
+    const rows = await q<{ id: string; author_id: string }>(
+      `SELECT id,author_id FROM messages WHERE id=:messageId AND channel_id=:channelId LIMIT 1`,
+      { messageId, channelId }
+    );
+    if (!rows.length) return rep.code(404).send({ error: "MESSAGE_NOT_FOUND" });
+    if (rows[0].author_id !== userId) return rep.code(403).send({ error: "MISSING_PERMS" });
+
+    await q(`DELETE FROM messages WHERE id=:messageId`, { messageId });
+    broadcastToChannel(channelId, { channelId, messageDelete: { id: messageId } });
+    return rep.send({ ok: true });
+  });
+
 }

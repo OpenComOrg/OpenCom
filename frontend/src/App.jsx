@@ -1621,6 +1621,14 @@ export function App() {
 
                   {canManageServer && (
                     <section className="card">
+                      <h4>Create Workspace</h4>
+                      <input placeholder="Workspace name" value={newWorkspaceName} onChange={(event) => setNewWorkspaceName(event.target.value)} />
+                      <button onClick={createWorkspace}>Create Workspace</button>
+                    </section>
+                  )}
+
+                  {canManageServer && (
+                    <section className="card">
                       <h4>Create Channel</h4>
                       <input placeholder="New channel/category" value={newChannelName} onChange={(event) => setNewChannelName(event.target.value)} />
                       <select value={newChannelType} onChange={(event) => setNewChannelType(event.target.value)}>

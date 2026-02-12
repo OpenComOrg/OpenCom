@@ -3,11 +3,17 @@ import { z } from "zod";
 import { q } from "../db.js";
 import { parseBody } from "../validation.js";
 
+const imageValue = z.string().max(2_000_000).refine((value) => {
+  if (/^https?:\/\//i.test(value)) return true;
+  if (/^data:image\/[a-zA-Z0-9.+-]+;base64,/i.test(value)) return true;
+  return false;
+}, "Invalid image format");
+
 const UpdateProfile = z.object({
   displayName: z.string().min(1).max(64).nullable().optional(),
   bio: z.string().max(400).nullable().optional(),
-  pfpUrl: z.string().url().nullable().optional(),
-  bannerUrl: z.string().url().nullable().optional()
+  pfpUrl: imageValue.nullable().optional(),
+  bannerUrl: imageValue.nullable().optional()
 });
 
 export async function profileRoutes(app: FastifyInstance) {

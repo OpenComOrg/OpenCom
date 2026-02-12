@@ -70,7 +70,7 @@ export async function authRoutes(app: FastifyInstance) {
     const ok = await verifyPassword(u.password_hash, body.password);
     if (!ok) return rep.code(401).send({ error: "INVALID_CREDENTIALS" });
 
-    const accessToken = app.jwt.sign({ sub: u.id, typ: "access" }, { expiresIn: "15m" });
+    const accessToken = app.jwt.sign({ sub: u.id, typ: "access" }, { expiresIn: "12h" });
 
     const refresh = randomToken();
     const refreshId = ulidLike();
@@ -103,7 +103,7 @@ export async function authRoutes(app: FastifyInstance) {
     if (rt.revoked_at) return rep.code(401).send({ error: "REFRESH_REVOKED" });
     if (new Date(rt.expires_at).getTime() < Date.now()) return rep.code(401).send({ error: "REFRESH_EXPIRED" });
 
-    const accessToken = app.jwt.sign({ sub: rt.user_id, typ: "access" }, { expiresIn: "15m" });
+    const accessToken = app.jwt.sign({ sub: rt.user_id, typ: "access" }, { expiresIn: "12h" });
     return rep.send({ accessToken });
   });
 

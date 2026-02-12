@@ -39,10 +39,10 @@ start_node() {
 
 start_frontend() {
   echo "[start] Frontend"
-  echo "[info] App: http://localhost:5173"
-  echo "[info] Admin dashboard: http://localhost:5173/admin.html"
+  echo "[info] App: http://localhost:5173 (via reverse proxy)"
+  echo "[info] Admin dashboard: http://localhost:5173/admin.html (via reverse proxy)"
   pushd "$ROOT_DIR/frontend" >/dev/null
-  npm run dev -- --host 0.0.0.0
+  npm run dev -- --host 127.0.0.1
 }
 
 load_backend_env
@@ -69,8 +69,8 @@ case "$TARGET" in
     ;;
   all)
     echo "[start] Launching core + node + frontend in parallel"
-    echo "[info] App: http://localhost:5173"
-    echo "[info] Admin dashboard: http://localhost:5173/admin.html"
+    echo "[info] App: http://localhost:5173 (via reverse proxy)"
+    echo "[info] Admin dashboard: http://localhost:5173/admin.html (via reverse proxy)"
     pushd "$ROOT_DIR/backend" >/dev/null
     npm run dev:core &
     CORE_PID=$!
@@ -79,7 +79,7 @@ case "$TARGET" in
     popd >/dev/null
 
     pushd "$ROOT_DIR/frontend" >/dev/null
-    npm run dev -- --host 0.0.0.0 &
+    npm run dev -- --host 127.0.0.1 &
     FE_PID=$!
     popd >/dev/null
 

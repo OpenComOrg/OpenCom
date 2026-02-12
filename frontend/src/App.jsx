@@ -3,6 +3,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 const CORE_API = import.meta.env.VITE_CORE_API_URL || "https://openapi.donskyblock.xyz";
 const THEME_STORAGE_KEY = "opencom_custom_theme_css";
 const THEME_ENABLED_STORAGE_KEY = "opencom_custom_theme_enabled";
+const SELF_STATUS_KEY = "opencom_self_status";
+const PINNED_SERVER_KEY = "opencom_pinned_server_messages";
+const PINNED_DM_KEY = "opencom_pinned_dm_messages";
 
 function useThemeCss() {
   const [css, setCss] = useState(localStorage.getItem(THEME_STORAGE_KEY) || "");
@@ -114,6 +117,24 @@ function formatMessageTime(value) {
   return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 }
 
+function playNotificationBeep() {
+  try {
+    const audioCtx = new window.AudioContext();
+    const oscillator = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    oscillator.type = "sine";
+    oscillator.frequency.value = 880;
+    gain.gain.value = 0.05;
+    oscillator.connect(gain);
+    gain.connect(audioCtx.destination);
+    oscillator.start();
+    oscillator.stop(audioCtx.currentTime + 0.12);
+    oscillator.onended = () => audioCtx.close();
+  } catch {
+    // ignore audio limitations
+  }
+}
+
 
 export function App() {
   const [accessToken, setAccessToken] = useState(localStorage.getItem("opencom_access_token") || "");
@@ -165,6 +186,12 @@ export function App() {
   const [isScreenSharing, setIsScreenSharing] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
   const [isDeafened, setIsDeafened] = useState(false);
+  const [selfStatus, setSelfStatus] = useState(localStorage.getItem(SELF_STATUS_KEY) || "online");
+  const [dmCallActive, setDmCallActive] = useState(false);
+  const [dmCallMuted, setDmCallMuted] = useState(false);
+  const [showPinned, setShowPinned] = useState(false);
+  const [pinnedServerMessages, setPinnedServerMessages] = useState(getStoredJson(PINNED_SERVER_KEY, {}));
+  const [pinnedDmMessages, setPinnedDmMessages] = useState(getStoredJson(PINNED_DM_KEY, {}));
 
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState("profile");
@@ -175,6 +202,10 @@ export function App() {
   const [themeCss, setThemeCss, themeEnabled, setThemeEnabled] = useThemeCss();
 
   const messagesRef = useRef(null);
+  const composerInputRef = useRef(null);
+  const dmComposerInputRef = useRef(null);
+  const dmCallStreamRef = useRef(null);
+  const lastDmMessageIdRef = useRef("");
   const storageScope = me?.id || "anonymous";
 
   const activeServer = useMemo(() => servers.find((server) => server.id === activeServerId) || null, [servers, activeServerId]);
@@ -241,6 +272,9 @@ export function App() {
     (message) => message.createdAt
   ), [activeDm]);
 
+  const activePinnedServerMessages = useMemo(() => pinnedServerMessages[activeChannelId] || [], [pinnedServerMessages, activeChannelId]);
+  const activePinnedDmMessages = useMemo(() => pinnedDmMessages[activeDmId] || [], [pinnedDmMessages, activeDmId]);
+
   async function refreshSocialData(token = accessToken) {
     if (!token) return;
     const [friendsData, dmsData, requestData, socialSettingsData] = await Promise.all([
@@ -289,6 +323,22 @@ export function App() {
     const timer = window.setTimeout(() => setStatus(""), 4500);
     return () => window.clearTimeout(timer);
   }, [status]);
+
+  useEffect(() => {
+    localStorage.setItem(SELF_STATUS_KEY, selfStatus);
+  }, [selfStatus]);
+
+  useEffect(() => {
+    localStorage.setItem(PINNED_SERVER_KEY, JSON.stringify(pinnedServerMessages));
+  }, [pinnedServerMessages]);
+
+  useEffect(() => {
+    localStorage.setItem(PINNED_DM_KEY, JSON.stringify(pinnedDmMessages));
+  }, [pinnedDmMessages]);
+
+  useEffect(() => () => {
+    dmCallStreamRef.current?.getTracks().forEach((track) => track.stop());
+  }, []);
 
   useEffect(() => {
     const onGlobalClick = () => {
@@ -461,6 +511,13 @@ export function App() {
 
         if (activeDmId) {
           const messagesData = await api(`/v1/social/dms/${activeDmId}/messages`, { headers: { Authorization: `Bearer ${accessToken}` } });
+          const newestId = messagesData.messages?.[messagesData.messages.length - 1]?.id || "";
+          const isNewMessage = newestId && lastDmMessageIdRef.current && newestId !== lastDmMessageIdRef.current;
+          if (isNewMessage) {
+            const newest = messagesData.messages?.[messagesData.messages.length - 1];
+            if (newest?.authorId !== me?.id) playNotificationBeep();
+          }
+          if (newestId) lastDmMessageIdRef.current = newestId;
           setDms((current) => current.map((item) => item.id === activeDmId ? { ...item, messages: messagesData.messages || [] } : item));
         }
       } catch {
@@ -844,11 +901,77 @@ export function App() {
     setMessageContextMenu(null);
   }
 
+  function togglePinMessage(message) {
+    if (!message?.id) return;
+
+    if (message.kind === "server") {
+      if (!activeChannelId) return;
+      setPinnedServerMessages((current) => {
+        const existing = current[activeChannelId] || [];
+        const isPinned = existing.some((item) => item.id === message.id);
+        const next = isPinned
+          ? existing.filter((item) => item.id !== message.id)
+          : [{ id: message.id, author: message.author, content: message.content }, ...existing].slice(0, 50);
+        return { ...current, [activeChannelId]: next };
+      });
+      setStatus("Updated pinned messages.");
+      return;
+    }
+
+    if (message.kind === "dm") {
+      if (!activeDmId) return;
+      setPinnedDmMessages((current) => {
+        const existing = current[activeDmId] || [];
+        const isPinned = existing.some((item) => item.id === message.id);
+        const next = isPinned
+          ? existing.filter((item) => item.id !== message.id)
+          : [{ id: message.id, author: message.author, content: message.content }, ...existing].slice(0, 50);
+        return { ...current, [activeDmId]: next };
+      });
+      setStatus("Updated pinned messages.");
+    }
+  }
+
+  function isMessagePinned(message) {
+    if (!message?.id) return false;
+    if (message.kind === "server") return activePinnedServerMessages.some((item) => item.id === message.id);
+    if (message.kind === "dm") return activePinnedDmMessages.some((item) => item.id === message.id);
+    return false;
+  }
+
+  async function startDmCall() {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      dmCallStreamRef.current = stream;
+      setDmCallActive(true);
+      setStatus(`Voice call started with ${activeDm?.name || "friend"}.`);
+    } catch {
+      setStatus("Could not start DM voice call. Microphone permission may be blocked.");
+    }
+  }
+
+  function endDmCall() {
+    dmCallStreamRef.current?.getTracks().forEach((track) => track.stop());
+    dmCallStreamRef.current = null;
+    setDmCallActive(false);
+    setDmCallMuted(false);
+  }
+
+  function toggleDmCallMute() {
+    const stream = dmCallStreamRef.current;
+    if (!stream) return;
+    const nextMuted = !dmCallMuted;
+    stream.getAudioTracks().forEach((track) => {
+      track.enabled = !nextMuted;
+    });
+    setDmCallMuted(nextMuted);
+  }
+
   function openMessageContextMenu(event, message) {
     event.preventDefault();
     const x = Math.min(event.clientX, window.innerWidth - 240);
     const y = Math.min(event.clientY, window.innerHeight - 180);
-    setMessageContextMenu({ x, y, message });
+    setMessageContextMenu({ x, y, message: { ...message, pinned: isMessagePinned(message) } });
   }
 
   async function readImageFile(file) {
@@ -1054,6 +1177,12 @@ export function App() {
           <div className="user-row">
             <div className="avatar">{getInitials(me?.username || "OpenCom User")}</div>
             <div className="user-meta"><strong>{me?.username}</strong><span>{canManageServer ? "Owner" : "Member"}</span></div>
+            <select className="status-select" value={selfStatus} onChange={(event) => setSelfStatus(event.target.value)} title="Your status">
+              <option value="online">Online</option>
+              <option value="idle">Idle</option>
+              <option value="dnd">Do Not Disturb</option>
+              <option value="invisible">Invisible</option>
+            </select>
             <div className="user-controls">
               <button className={`icon-btn ${isMuted ? "danger" : "ghost"}`} onClick={() => setIsMuted((value) => !value)}>{isMuted ? "🎙️" : "🎤"}</button>
               <button className={`icon-btn ${isDeafened ? "danger" : "ghost"}`} onClick={() => setIsDeafened((value) => !value)}>{isDeafened ? "🔇" : "🎧"}</button>
@@ -1071,14 +1200,22 @@ export function App() {
               <header className="chat-header">
                 <h3><span className="channel-hash">#</span> {activeChannel?.name || "updates"}</h3>
                 <div className="chat-actions">
+                  <button className="icon-btn ghost" title="Pinned messages" onClick={() => setShowPinned((value) => !value)}>📌</button>
                   <button className="icon-btn ghost" title="Threads">🧵</button>
                   <button className="icon-btn ghost" title="Notifications">🔔</button>
-                  <button className="icon-btn ghost" title="Pinned">📌</button>
                   <button className="icon-btn ghost" title="Members">👥</button>
                   <input className="search-input" placeholder={`Search ${activeServer?.name || "workspace"}`} />
                   <button className="ghost" onClick={() => { setSettingsOpen(true); setSettingsTab("workspace"); }}>Open settings</button>
                 </div>
               </header>
+
+              {showPinned && activePinnedServerMessages.length > 0 && (
+                <div className="pinned-strip">
+                  {activePinnedServerMessages.slice(0, 3).map((item) => (
+                    <div key={item.id} className="pinned-item"><strong>{item.author}</strong><span>{item.content}</span></div>
+                  ))}
+                </div>
+              )}
 
               <div className="messages" ref={messagesRef}>
                 {groupedServerMessages.map((group) => (
@@ -1094,7 +1231,7 @@ export function App() {
                           content: message.content,
                           mine: (message.author_id || message.authorId) === me?.id
                         })}>
-                          {message.content}
+                          {activePinnedServerMessages.some((item) => item.id === message.id) ? "📌 " : ""}{message.content}
                         </p>
                       ))}
                     </div>
@@ -1110,9 +1247,9 @@ export function App() {
                 </div>
               )}
 
-              <footer className="composer server-composer">
+              <footer className="composer server-composer" onClick={() => composerInputRef.current?.focus()}>
                 <button className="ghost composer-icon">＋</button>
-                <input value={messageText} onChange={(event) => setMessageText(event.target.value)} placeholder={`Message #${activeChannel?.name || "channel"}`} onKeyDown={(event) => event.key === "Enter" && sendMessage()} />
+                <input ref={composerInputRef} value={messageText} onChange={(event) => setMessageText(event.target.value)} placeholder={`Message #${activeChannel?.name || "channel"}`} onKeyDown={(event) => event.key === "Enter" && sendMessage()} />
                 <button className="ghost composer-icon">🎁</button>
                 <button className="send-btn" onClick={sendMessage} disabled={!activeChannelId || !messageText.trim()}>Send</button>
               </footer>
@@ -1125,7 +1262,7 @@ export function App() {
                   <div className="avatar member-avatar">{getInitials(member.username)}</div>
                   <div>
                     <strong>{member.username}</strong>
-                    <span>{member.status}</span>
+                    <span>{member.id === me?.id ? selfStatus : member.status}</span>
                   </div>
                 </button>
               ))}
@@ -1136,7 +1273,23 @@ export function App() {
 
         {navMode === "dms" && (
           <>
-            <header className="chat-header"><h3>{activeDm ? `@ ${activeDm.name}` : "Direct Messages"}</h3></header>
+            <header className="chat-header dm-header-actions">
+              <h3>{activeDm ? `@ ${activeDm.name}` : "Direct Messages"}</h3>
+              <div className="chat-actions">
+                <button className="icon-btn ghost" onClick={() => setShowPinned((value) => !value)} title="Pinned DMs">📌</button>
+                {!dmCallActive && <button className="ghost" onClick={startDmCall} disabled={!activeDm}>Start Voice</button>}
+                {dmCallActive && <button className="ghost" onClick={toggleDmCallMute}>{dmCallMuted ? "Unmute" : "Mute"}</button>}
+                {dmCallActive && <button className="danger" onClick={endDmCall}>End Call</button>}
+              </div>
+            </header>
+            {dmCallActive && <div className="call-banner">In voice call with {activeDm?.name || "friend"}</div>}
+            {showPinned && activePinnedDmMessages.length > 0 && (
+              <div className="pinned-strip">
+                {activePinnedDmMessages.slice(0, 3).map((item) => (
+                  <div key={item.id} className="pinned-item"><strong>{item.author}</strong><span>{item.content}</span></div>
+                ))}
+              </div>
+            )}
             <div className="messages" ref={messagesRef}>
               {groupedDmMessages.map((group) => (
                 <article key={group.id} className="msg dm-msg grouped-msg">
@@ -1151,7 +1304,7 @@ export function App() {
                         content: message.content,
                         mine: message.authorId === me?.id
                       })}>
-                        {message.content}
+                        {activePinnedDmMessages.some((item) => item.id === message.id) ? "📌 " : ""}{message.content}
                       </p>
                     ))}
                   </div>
@@ -1159,8 +1312,8 @@ export function App() {
               ))}
               {!activeDm && <p className="empty">Select a DM on the left.</p>}
             </div>
-            <footer className="composer dm-composer">
-              <input value={dmText} onChange={(event) => setDmText(event.target.value)} placeholder={`Message ${activeDm?.name || "friend"}`} onKeyDown={(event) => event.key === "Enter" && sendDm()} />
+            <footer className="composer dm-composer" onClick={() => dmComposerInputRef.current?.focus()}>
+              <input ref={dmComposerInputRef} value={dmText} onChange={(event) => setDmText(event.target.value)} placeholder={`Message ${activeDm?.name || "friend"}`} onKeyDown={(event) => event.key === "Enter" && sendDm()} />
               <button className="send-btn" onClick={sendDm} disabled={!activeDm || !dmText.trim()}>Send</button>
             </footer>
           </>
@@ -1251,6 +1404,9 @@ export function App() {
           {messageContextMenu.message.kind === "server" && (
             <button onClick={() => { setReplyTarget({ author: messageContextMenu.message.author, content: messageContextMenu.message.content }); setMessageContextMenu(null); }}>Reply</button>
           )}
+          <button onClick={() => { togglePinMessage(messageContextMenu.message); setMessageContextMenu(null); }}>
+            {messageContextMenu.message.pinned ? "Unpin" : "Pin"}
+          </button>
           {messageContextMenu.message.kind === "dm" && (
             <button onClick={async () => {
               try {

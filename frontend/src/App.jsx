@@ -2,9 +2,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 const CORE_API = import.meta.env.VITE_CORE_API_URL || "https://openapi.donskyblock.xyz";
 const THEME_STORAGE_KEY = "opencom_custom_theme_css";
+const THEME_ENABLED_STORAGE_KEY = "opencom_custom_theme_enabled";
 
 function useThemeCss() {
   const [css, setCss] = useState(localStorage.getItem(THEME_STORAGE_KEY) || "");
+  const [enabled, setEnabled] = useState(localStorage.getItem(THEME_ENABLED_STORAGE_KEY) !== "0");
 
   useEffect(() => {
     let tag = document.getElementById("opencom-theme-style");
@@ -13,11 +15,47 @@ function useThemeCss() {
       tag.id = "opencom-theme-style";
       document.head.appendChild(tag);
     }
-    tag.textContent = css;
-    localStorage.setItem(THEME_STORAGE_KEY, css);
-  }, [css]);
 
-  return [css, setCss];
+    tag.textContent = enabled ? css : "";
+    localStorage.setItem(THEME_STORAGE_KEY, css);
+    localStorage.setItem(THEME_ENABLED_STORAGE_KEY, enabled ? "1" : "0");
+  }, [css, enabled]);
+
+  return [css, setCss, enabled, setEnabled];
+}
+
+function groupMessages(messages = [], getAuthor, getTimestamp) {
+  const groups = [];
+
+  for (const message of messages) {
+    const author = getAuthor(message);
+    const createdRaw = getTimestamp(message);
+    const createdAt = createdRaw ? new Date(createdRaw) : null;
+    const createdMs = createdAt && !Number.isNaN(createdAt.getTime()) ? createdAt.getTime() : null;
+
+    const previousGroup = groups[groups.length - 1];
+    const canGroup = previousGroup
+      && previousGroup.author === author
+      && createdMs !== null
+      && previousGroup.lastMessageMs !== null
+      && (createdMs - previousGroup.lastMessageMs) <= 120000;
+
+    if (canGroup) {
+      previousGroup.messages.push(message);
+      previousGroup.lastMessageMs = createdMs;
+      continue;
+    }
+
+    groups.push({
+      id: message.id,
+      author,
+      firstMessageTime: createdRaw,
+      lastMessageMs: createdMs,
+      messages: [message]
+    });
+  }
+
+  return groups;
 }
 
 async function api(path, options = {}) {
@@ -118,6 +156,9 @@ export function App() {
   const [newChannelName, setNewChannelName] = useState("");
   const [newChannelType, setNewChannelType] = useState("text");
   const [newChannelParentId, setNewChannelParentId] = useState("");
+  const [newWorkspaceName, setNewWorkspaceName] = useState("");
+  const [friendRequests, setFriendRequests] = useState({ incoming: [], outgoing: [] });
+  const [allowFriendRequests, setAllowFriendRequests] = useState(true);
 
   const [collapsedCategories, setCollapsedCategories] = useState({});
   const [voiceConnectedChannelId, setVoiceConnectedChannelId] = useState("");
@@ -128,8 +169,10 @@ export function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState("profile");
   const [serverContextMenu, setServerContextMenu] = useState(null);
+  const [messageContextMenu, setMessageContextMenu] = useState(null);
+  const [replyTarget, setReplyTarget] = useState(null);
   const [memberProfileCard, setMemberProfileCard] = useState(null);
-  const [themeCss, setThemeCss] = useThemeCss();
+  const [themeCss, setThemeCss, themeEnabled, setThemeEnabled] = useThemeCss();
 
   const messagesRef = useRef(null);
   const storageScope = me?.id || "anonymous";
@@ -155,6 +198,9 @@ export function App() {
   }, [friendQuery, friends]);
 
   const memberList = useMemo(() => {
+    const listed = guildState?.members || [];
+    if (listed.length) return listed;
+
     const members = new Map();
     for (const message of messages) {
       const id = message.author_id || message.authorId;
@@ -167,7 +213,7 @@ export function App() {
     }
 
     return Array.from(members.values());
-  }, [messages, me]);
+  }, [guildState, messages, me]);
 
   const groupedChannelSections = useMemo(() => {
     const categories = categoryChannels.map((category) => ({
@@ -182,6 +228,18 @@ export function App() {
       ...(uncategorized.length ? [{ category: { id: "uncategorized", name: "Channels" }, channels: uncategorized }] : [])
     ];
   }, [categoryChannels, sortedChannels]);
+
+  const groupedServerMessages = useMemo(() => groupMessages(
+    messages,
+    (message) => message.author_id || message.authorId || "Unknown",
+    (message) => message.created_at || message.createdAt
+  ), [messages]);
+
+  const groupedDmMessages = useMemo(() => groupMessages(
+    activeDm?.messages || [],
+    (message) => message.author || "Unknown",
+    (message) => message.createdAt
+  ), [activeDm]);
 
   useEffect(() => {
     if (accessToken) localStorage.setItem("opencom_access_token", accessToken);
@@ -214,6 +272,7 @@ export function App() {
   useEffect(() => {
     const onGlobalClick = () => {
       setServerContextMenu(null);
+      setMessageContextMenu(null);
       if (!settingsOpen) setMemberProfileCard(null);
     };
     const onEscape = (event) => {
@@ -261,12 +320,16 @@ export function App() {
 
         setServers(nextServers);
         try {
-          const [friendsData, dmsData] = await Promise.all([
+          const [friendsData, dmsData, requestData, socialSettingsData] = await Promise.all([
             api("/v1/social/friends", { headers: { Authorization: `Bearer ${accessToken}` } }),
-            api("/v1/social/dms", { headers: { Authorization: `Bearer ${accessToken}` } })
+            api("/v1/social/dms", { headers: { Authorization: `Bearer ${accessToken}` } }),
+            api("/v1/social/requests", { headers: { Authorization: `Bearer ${accessToken}` } }),
+            api("/v1/social/settings", { headers: { Authorization: `Bearer ${accessToken}` } })
           ]);
           setFriends(friendsData.friends || []);
           setDms((dmsData.dms || []).map((item) => ({ ...item, messages: [] })));
+          setFriendRequests({ incoming: requestData.incoming || [], outgoing: requestData.outgoing || [] });
+          setAllowFriendRequests(socialSettingsData.allowFriendRequests !== false);
         } catch {
           // fallback to local-only social data if backend social routes are unavailable
         }
@@ -388,7 +451,7 @@ export function App() {
 
   async function sendMessage() {
     if (!activeServer || !activeChannelId || !messageText.trim()) return;
-    const content = messageText.trim();
+    const content = `${replyTarget ? `> replying to ${replyTarget.author}: ${replyTarget.content}\n` : ""}${messageText.trim()}`;
 
     try {
       setMessageText("");
@@ -399,6 +462,7 @@ export function App() {
 
       const data = await nodeApi(activeServer.baseUrl, `/v1/channels/${activeChannelId}/messages`, activeServer.membershipToken);
       setMessages((data.messages || []).slice().reverse());
+      setReplyTarget(null);
     } catch (error) {
       setMessageText(content);
       setStatus(`Send failed: ${error.message}`);
@@ -440,15 +504,54 @@ export function App() {
         body: JSON.stringify({ username: cleaned })
       });
 
-      setFriends((current) => [data.friend, ...current.filter((item) => item.id !== data.friend.id)]);
-      const nextDm = { id: data.threadId, participantId: data.friend.id, name: data.friend.username, messages: [] };
-      setDms((current) => [nextDm, ...current.filter((item) => item.id !== nextDm.id)]);
-      setActiveDmId(nextDm.id);
+      if (data.friend && data.threadId) {
+        setFriends((current) => [data.friend, ...current.filter((item) => item.id !== data.friend.id)]);
+        const nextDm = { id: data.threadId, participantId: data.friend.id, name: data.friend.username, messages: [] };
+        setDms((current) => [nextDm, ...current.filter((item) => item.id !== nextDm.id)]);
+        setActiveDmId(nextDm.id);
+        setStatus(`You're now connected with ${data.friend.username}.`);
+      } else {
+        setStatus("Friend request sent.");
+      }
+
+      const requests = await api("/v1/social/requests", { headers: { Authorization: `Bearer ${accessToken}` } });
+      setFriendRequests({ incoming: requests.incoming || [], outgoing: requests.outgoing || [] });
       setFriendAddInput("");
-      setFriendView("all");
-      setStatus(`Added ${data.friend.username} to your network.`);
+      setFriendView("requests");
     } catch (error) {
       setStatus(`Add friend failed: ${error.message}`);
+    }
+  }
+
+  async function respondToFriendRequest(requestId, action) {
+    try {
+      await api(`/v1/social/requests/${requestId}/${action}`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${accessToken}` }
+      });
+
+      const [requests, friendsData] = await Promise.all([
+        api("/v1/social/requests", { headers: { Authorization: `Bearer ${accessToken}` } }),
+        api("/v1/social/friends", { headers: { Authorization: `Bearer ${accessToken}` } })
+      ]);
+      setFriendRequests({ incoming: requests.incoming || [], outgoing: requests.outgoing || [] });
+      setFriends(friendsData.friends || []);
+      setStatus(action === "accept" ? "Friend request accepted." : "Friend request declined.");
+    } catch (error) {
+      setStatus(`Request update failed: ${error.message}`);
+    }
+  }
+
+  async function saveSocialSettings() {
+    try {
+      await api("/v1/social/settings", {
+        method: "PATCH",
+        headers: { Authorization: `Bearer ${accessToken}` },
+        body: JSON.stringify({ allowFriendRequests })
+      });
+      setStatus("Privacy settings saved.");
+    } catch (error) {
+      setStatus(`Could not save privacy settings: ${error.message}`);
     }
   }
 
@@ -579,6 +682,44 @@ export function App() {
     }
   }
 
+  async function createWorkspace() {
+    if (!activeServer || !newWorkspaceName.trim()) return;
+    const name = newWorkspaceName.trim();
+
+    async function createWith(server) {
+      await nodeApi(server.baseUrl, "/v1/guilds", server.membershipToken, {
+        method: "POST",
+        body: JSON.stringify({ name })
+      });
+      const updated = await nodeApi(server.baseUrl, "/v1/guilds", server.membershipToken);
+      setGuilds(updated || []);
+    }
+
+    try {
+      await createWith(activeServer);
+      setNewWorkspaceName("");
+      setStatus("Workspace created.");
+    } catch (error) {
+      if (String(error.message).includes("401")) {
+        try {
+          const refreshed = await api("/v1/servers", { headers: { Authorization: `Bearer ${accessToken}` } });
+          const nextServers = refreshed.servers || [];
+          setServers(nextServers);
+          const activeRefreshed = nextServers.find((server) => server.id === activeServer.id);
+          if (activeRefreshed) {
+            await createWith(activeRefreshed);
+            setNewWorkspaceName("");
+            setStatus("Workspace created.");
+            return;
+          }
+        } catch {
+          // continue to error message below
+        }
+      }
+      setStatus(`Create workspace failed: ${error.message}`);
+    }
+  }
+
   function toggleCategory(categoryId) {
     setCollapsedCategories((current) => ({ ...current, [categoryId]: !current[categoryId] }));
   }
@@ -602,6 +743,46 @@ export function App() {
     setNavMode("servers");
     setActiveServerId(serverId);
     setServerContextMenu(null);
+  }
+
+  async function deleteServerMessage(messageId) {
+    if (!activeServer || !activeChannelId || !messageId) return;
+    try {
+      await nodeApi(activeServer.baseUrl, `/v1/channels/${activeChannelId}/messages/${messageId}`, activeServer.membershipToken, { method: "DELETE" });
+      setMessages((current) => current.filter((message) => message.id !== messageId));
+      setStatus("Message deleted.");
+    } catch (error) {
+      setStatus(`Delete failed: ${error.message}`);
+    }
+    setMessageContextMenu(null);
+  }
+
+  function openMessageContextMenu(event, message) {
+    event.preventDefault();
+    setMessageContextMenu({ x: event.clientX, y: event.clientY, message });
+  }
+
+  async function readImageFile(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ""));
+      reader.onerror = () => reject(new Error("FILE_READ_FAILED"));
+      reader.readAsDataURL(file);
+    });
+  }
+
+  async function onAvatarUpload(event) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    const dataUrl = await readImageFile(file);
+    setProfileForm((current) => ({ ...current, pfpUrl: dataUrl }));
+  }
+
+  async function onBannerUpload(event) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    const dataUrl = await readImageFile(file);
+    setProfileForm((current) => ({ ...current, bannerUrl: dataUrl }));
   }
 
   async function openMemberProfile(member) {
@@ -680,6 +861,9 @@ export function App() {
               {getInitials(server.name)}
             </button>
           ))}
+          <button className="server-pill" title="Create or join a server" onClick={() => { setSettingsOpen(true); setSettingsTab("workspace"); }}>
+            ＋
+          </button>
         </div>
       </aside>
 
@@ -808,30 +992,41 @@ export function App() {
               </header>
 
               <div className="messages" ref={messagesRef}>
-                {messages.map((message) => (
-                  <article key={message.id} className="msg">
-                    <div className="msg-avatar">{getInitials(message.author_id || message.authorId || "User")}</div>
+                {groupedServerMessages.map((group) => (
+                  <article key={group.id} className="msg grouped-msg">
+                    <div className="msg-avatar">{getInitials(group.author || "User")}</div>
                     <div className="msg-body">
-                      <strong>{message.author_id || message.authorId} <span className="msg-time">{formatMessageTime(message.created_at || message.createdAt)}</span></strong>
-                      <p>{message.content}</p>
+                      <strong className="msg-author">{group.author} <span className="msg-time">{formatMessageTime(group.firstMessageTime)}</span></strong>
+                      {group.messages.map((message) => (
+                        <p key={message.id} onContextMenu={(event) => openMessageContextMenu(event, { id: message.id, author: group.author, content: message.content, mine: (message.author_id || message.authorId) === me?.id })}>
+                          {message.content}
+                        </p>
+                      ))}
                     </div>
                   </article>
                 ))}
                 {!messages.length && <p className="empty">No messages yet. Start the conversation.</p>}
               </div>
 
-              <footer className="composer">
+              {replyTarget && (
+                <div className="reply-banner">
+                  <span>Replying to {replyTarget.author}</span>
+                  <button className="ghost" onClick={() => setReplyTarget(null)}>Cancel</button>
+                </div>
+              )}
+
+              <footer className="composer server-composer">
                 <button className="ghost composer-icon">＋</button>
                 <input value={messageText} onChange={(event) => setMessageText(event.target.value)} placeholder={`Message #${activeChannel?.name || "channel"}`} onKeyDown={(event) => event.key === "Enter" && sendMessage()} />
                 <button className="ghost composer-icon">🎁</button>
-                <button onClick={sendMessage} disabled={!activeChannelId || !messageText.trim()}>Send</button>
+                <button className="send-btn" onClick={sendMessage} disabled={!activeChannelId || !messageText.trim()}>Send</button>
               </footer>
             </section>
 
             <aside className="members-pane">
               <h4>Online — {memberList.length}</h4>
               {memberList.map((member) => (
-                <button className="member-row" key={member.id} onClick={(event) => { event.stopPropagation(); openMemberProfile(member); }}>
+                <button className="member-row" key={member.id} title={`View ${member.username}`} onClick={(event) => { event.stopPropagation(); openMemberProfile(member); }}>
                   <div className="avatar member-avatar">{getInitials(member.username)}</div>
                   <div>
                     <strong>{member.username}</strong>
@@ -848,20 +1043,20 @@ export function App() {
           <>
             <header className="chat-header"><h3>{activeDm ? `@ ${activeDm.name}` : "Direct Messages"}</h3></header>
             <div className="messages" ref={messagesRef}>
-              {(activeDm?.messages || []).map((message) => (
-                <article key={message.id} className="msg dm-msg">
-                  <div className="msg-avatar">{getInitials(message.author)}</div>
+              {groupedDmMessages.map((group) => (
+                <article key={group.id} className="msg dm-msg grouped-msg">
+                  <div className="msg-avatar">{getInitials(group.author)}</div>
                   <div className="msg-body">
-                    <strong>{message.author} <span className="msg-time">{formatMessageTime(message.createdAt)}</span></strong>
-                    <p>{message.content}</p>
+                    <strong className="msg-author">{group.author} <span className="msg-time">{formatMessageTime(group.firstMessageTime)}</span></strong>
+                    {group.messages.map((message) => <p key={message.id}>{message.content}</p>)}
                   </div>
                 </article>
               ))}
               {!activeDm && <p className="empty">Select a DM on the left.</p>}
             </div>
-            <footer className="composer">
+            <footer className="composer dm-composer">
               <input value={dmText} onChange={(event) => setDmText(event.target.value)} placeholder={`Message ${activeDm?.name || "friend"}`} onKeyDown={(event) => event.key === "Enter" && sendDm()} />
-              <button onClick={sendDm} disabled={!activeDm || !dmText.trim()}>Send</button>
+              <button className="send-btn" onClick={sendDm} disabled={!activeDm || !dmText.trim()}>Send</button>
             </footer>
           </>
         )}
@@ -875,6 +1070,7 @@ export function App() {
                   <button className={friendView === "online" ? "active" : "ghost"} onClick={() => setFriendView("online")}>Online</button>
                   <button className={friendView === "all" ? "active" : "ghost"} onClick={() => setFriendView("all")}>All</button>
                   <button className={friendView === "add" ? "active" : "ghost"} onClick={() => setFriendView("add")}>Add Friend</button>
+                  <button className={friendView === "requests" ? "active" : "ghost"} onClick={() => setFriendView("requests")}>Requests</button>
                 </div>
               </header>
 
@@ -888,6 +1084,27 @@ export function App() {
                     <input placeholder="Username" value={friendAddInput} onChange={(event) => setFriendAddInput(event.target.value)} />
                     <button onClick={addFriend}>Send Request</button>
                   </div>
+                </div>
+              )}
+
+              {friendView === "requests" && (
+                <div className="friend-add-card">
+                  <h4>Friend Requests</h4>
+                  {friendRequests.incoming.map((request) => (
+                    <div key={request.id} className="friend-row">
+                      <div className="friend-meta"><strong>{request.username}</strong><span>Incoming request</span></div>
+                      <div className="row-actions">
+                        <button onClick={() => respondToFriendRequest(request.id, "accept")}>Accept</button>
+                        <button className="ghost" onClick={() => respondToFriendRequest(request.id, "decline")}>Decline</button>
+                      </div>
+                    </div>
+                  ))}
+                  {friendRequests.outgoing.map((request) => (
+                    <div key={request.id} className="friend-row">
+                      <div className="friend-meta"><strong>{request.username}</strong><span>Pending</span></div>
+                    </div>
+                  ))}
+                  {!friendRequests.incoming.length && !friendRequests.outgoing.length && <p className="hint">No pending friend requests.</p>}
                 </div>
               )}
 
@@ -923,6 +1140,13 @@ export function App() {
           </div>
         )}
       </main>
+
+      {messageContextMenu && (
+        <div className="server-context-menu" style={{ top: messageContextMenu.y, left: messageContextMenu.x }} onClick={(event) => event.stopPropagation()}>
+          <button onClick={() => { setReplyTarget({ author: messageContextMenu.message.author, content: messageContextMenu.message.content }); setMessageContextMenu(null); }}>Reply</button>
+          {messageContextMenu.message.mine && <button className="danger" onClick={() => deleteServerMessage(messageContextMenu.message.id)}>Delete</button>}
+        </div>
+      )}
 
       {serverContextMenu && (
         <div className="server-context-menu" style={{ top: serverContextMenu.y, left: serverContextMenu.x }} onClick={(event) => event.stopPropagation()}>
@@ -969,7 +1193,9 @@ export function App() {
                   <label>Display Name<input value={profileForm.displayName} onChange={(event) => setProfileForm((current) => ({ ...current, displayName: event.target.value }))} /></label>
                   <label>Bio<textarea rows={4} value={profileForm.bio} onChange={(event) => setProfileForm((current) => ({ ...current, bio: event.target.value }))} /></label>
                   <label>Avatar URL<input value={profileForm.pfpUrl} onChange={(event) => setProfileForm((current) => ({ ...current, pfpUrl: event.target.value }))} /></label>
+                  <label>Upload Avatar<input type="file" accept="image/*" onChange={onAvatarUpload} /></label>
                   <label>Banner URL<input value={profileForm.bannerUrl} onChange={(event) => setProfileForm((current) => ({ ...current, bannerUrl: event.target.value }))} /></label>
+                  <label>Upload Banner<input type="file" accept="image/*" onChange={onBannerUpload} /></label>
                   <button onClick={saveProfile}>Save Profile</button>
                 </div>
               )}
@@ -982,6 +1208,14 @@ export function App() {
                     <input placeholder="https://node.provider.tld" value={newServerBaseUrl} onChange={(event) => setNewServerBaseUrl(event.target.value)} />
                     <button onClick={createServer}>Add Server</button>
                   </section>
+
+                  {canManageServer && (
+                    <section className="card">
+                      <h4>Create Workspace</h4>
+                      <input placeholder="Workspace name" value={newWorkspaceName} onChange={(event) => setNewWorkspaceName(event.target.value)} />
+                      <button onClick={createWorkspace}>Create Workspace</button>
+                    </section>
+                  )}
 
                   {canManageServer && (
                     <section className="card">
@@ -1031,8 +1265,17 @@ export function App() {
               {settingsTab === "appearance" && (
                 <section className="card">
                   <h4>Custom CSS Theme</h4>
+                  <label><input type="checkbox" checked={themeEnabled} onChange={(event) => setThemeEnabled(event.target.checked)} /> Enable custom CSS</label>
                   <input type="file" accept="text/css,.css" onChange={onUploadTheme} />
                   <textarea value={themeCss} onChange={(event) => setThemeCss(event.target.value)} rows={10} placeholder="Paste custom CSS" />
+                </section>
+              )}
+
+              {settingsTab === "profile" && (
+                <section className="card">
+                  <h4>Social Privacy</h4>
+                  <label><input type="checkbox" checked={allowFriendRequests} onChange={(event) => setAllowFriendRequests(event.target.checked)} /> Allow incoming friend requests</label>
+                  <button onClick={saveSocialSettings}>Save Privacy</button>
                 </section>
               )}
 

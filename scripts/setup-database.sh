@@ -12,6 +12,7 @@ Usage: ./scripts/setup-database.sh [options]
 Fully configures backend database schema by optionally generating env files,
 optionally provisioning local MariaDB databases/users (via sudo), and running all
 core + server-node migrations.
+Requires Node.js >=22 for backend tooling.
 
 Options:
   --init-env                Generate backend/.env + frontend/.env before setup.
@@ -29,6 +30,18 @@ USAGE
 require_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
     echo "[ERROR] Missing required command: $1"
+    exit 1
+  fi
+}
+
+require_node_major() {
+  local min_major="$1"
+  require_cmd node
+  local node_major
+  node_major="$(node -p 'Number(process.versions.node.split(".")[0])')"
+  if [[ "$node_major" -lt "$min_major" ]]; then
+    echo "[ERROR] Node.js >= ${min_major} is required. Current: $(node -v)"
+    echo "[hint] Backend dependencies (including mediasoup) require Node 22+ on this project."
     exit 1
   fi
 }
@@ -76,6 +89,60 @@ load_backend_env() {
   # shellcheck disable=SC1090
   source "$env_file"
   set +a
+}
+
+normalize_db_urls_for_local_mariadb_if_needed() {
+  local with_docker="$1"
+  local provision_local_db="$2"
+
+  if [[ "$provision_local_db" != "true" || "$with_docker" == "true" ]]; then
+    return
+  fi
+
+  local result
+  result="$(CORE_DATABASE_URL="$CORE_DATABASE_URL" NODE_DATABASE_URL="$NODE_DATABASE_URL" node <<'NODE'
+function normalize(raw) {
+  const u = new URL(raw);
+  const host = u.hostname.toLowerCase();
+  const port = u.port || "3306";
+  if ((host === "localhost" || host === "127.0.0.1") && (port === "3307" || port === "3308")) {
+    u.hostname = "127.0.0.1";
+    u.port = "3306";
+    return { changed: true, value: u.toString() };
+  }
+  return { changed: false, value: raw };
+}
+
+const core = normalize(process.env.CORE_DATABASE_URL);
+const node = normalize(process.env.NODE_DATABASE_URL);
+console.log(`CORE=${core.value}`);
+console.log(`NODE=${node.value}`);
+console.log(`CHANGED=${core.changed || node.changed ? "1" : "0"}`);
+NODE
+)"
+
+  local core_url="" node_url="" changed="0"
+  while IFS='=' read -r key value; do
+    case "$key" in
+      CORE) core_url="$value" ;;
+      NODE) node_url="$value" ;;
+      CHANGED) changed="$value" ;;
+    esac
+  done <<< "$result"
+
+  if [[ "$changed" == "1" ]]; then
+    echo "[db-setup] Detected docker-style DB ports (3307/3308) without --with-docker."
+    echo "[db-setup] Falling back to local MariaDB defaults on 127.0.0.1:3306 for migrations."
+    CORE_DATABASE_URL="$core_url"
+    NODE_DATABASE_URL="$node_url"
+    export CORE_DATABASE_URL NODE_DATABASE_URL
+
+    local env_file="$BACKEND_DIR/.env"
+    if [[ -f "$env_file" ]]; then
+      sed -i "s|^CORE_DATABASE_URL=.*$|CORE_DATABASE_URL=$CORE_DATABASE_URL|" "$env_file"
+      sed -i "s|^NODE_DATABASE_URL=.*$|NODE_DATABASE_URL=$NODE_DATABASE_URL|" "$env_file"
+    fi
+  fi
 }
 
 start_docker_if_requested() {
@@ -168,11 +235,47 @@ NODE
   printf '%s\n' "$sql" | sudo mysql -u "$mariadb_root_user"
 }
 
+ensure_backend_deps() {
+  pushd "$BACKEND_DIR" >/dev/null
+  if [[ ! -x "node_modules/.bin/tsx" ]]; then
+    echo "[db-setup] Installing backend dependencies (tsx not found)"
+    npm install
+  fi
+  popd >/dev/null
+}
+
 run_migrations() {
   echo "[db-setup] Running database migrations"
   pushd "$BACKEND_DIR" >/dev/null
-  npm run migrate:core
-  npm run migrate:node
+
+  local core_log node_log
+  core_log="$(mktemp)"
+  node_log="$(mktemp)"
+
+  set +e
+  npm run migrate:core >"$core_log" 2>&1
+  local core_rc=$?
+  npm run migrate:node >"$node_log" 2>&1
+  local node_rc=$?
+  set -e
+
+  cat "$core_log"
+  cat "$node_log"
+
+  if [[ $core_rc -ne 0 || $node_rc -ne 0 ]]; then
+    if grep -E "ECONNREFUSED|Can't connect to server on 'localhost'" "$core_log" "$node_log" >/dev/null 2>&1; then
+      echo "[db-setup] Hint: database connection was refused."
+      echo "[db-setup] - If using local MariaDB, ensure it's running on 127.0.0.1:3306."
+      echo "[db-setup] - If using Docker ports 3307/3308, run with --with-docker."
+      echo "[db-setup] - Current CORE_DATABASE_URL=$CORE_DATABASE_URL"
+      echo "[db-setup] - Current NODE_DATABASE_URL=$NODE_DATABASE_URL"
+    fi
+    rm -f "$core_log" "$node_log"
+    popd >/dev/null
+    return 1
+  fi
+
+  rm -f "$core_log" "$node_log"
   popd >/dev/null
   echo "[db-setup] Database setup complete"
 }
@@ -214,6 +317,7 @@ main() {
   done
 
   require_cmd npm
+  require_node_major 22
 
   if [[ ! -d "$BACKEND_DIR" ]]; then
     echo "[ERROR] Backend directory not found at $BACKEND_DIR"
@@ -222,8 +326,10 @@ main() {
 
   init_env_if_requested "$init_env"
   load_backend_env
+  normalize_db_urls_for_local_mariadb_if_needed "$with_docker" "$provision_local_db"
   start_docker_if_requested "$with_docker"
   provision_local_db_if_requested "$provision_local_db" "$mariadb_root_user"
+  ensure_backend_deps
   run_migrations
 }
 

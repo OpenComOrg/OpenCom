@@ -13,6 +13,11 @@ export async function guildRoutes(app: FastifyInstance) {
   // Create guild (auth required)
   app.post("/v1/guilds", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
     const ownerId = req.auth.userId as string;
+    const actorRoles = req.auth.roles || [];
+
+    if (!actorRoles.includes("owner") && !actorRoles.includes("platform_admin")) {
+      return rep.code(403).send({ error: "MISSING_PERMS" });
+    }
 
     const body = z.object({
       name: z.string().min(1).max(64),

@@ -9,12 +9,25 @@ print_usage() {
 Usage: ./scripts/setup.sh [backend|frontend|all]
 
 Installs dependencies and prepares local development environment.
+Requires Node.js >=22 for backend dependencies.
 USAGE
 }
 
 require_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
     echo "[ERROR] Missing required command: $1"
+    exit 1
+  fi
+}
+
+require_node_major() {
+  local min_major="$1"
+  require_cmd node
+  local node_major
+  node_major="$(node -p 'Number(process.versions.node.split(".")[0])')"
+  if [[ "$node_major" -lt "$min_major" ]]; then
+    echo "[ERROR] Node.js >= ${min_major} is required. Current: $(node -v)"
+    echo "[hint] OpenCom backend dependencies (e.g. mediasoup) require modern Node runtimes."
     exit 1
   fi
 }
@@ -40,6 +53,7 @@ pick_compose() {
 setup_backend() {
   echo "[setup] Backend dependencies"
   require_cmd npm
+  require_node_major 22
   pushd "$ROOT_DIR/backend" >/dev/null
   npm install
   popd >/dev/null
@@ -58,6 +72,7 @@ setup_backend() {
 setup_frontend() {
   echo "[setup] Frontend dependencies"
   require_cmd npm
+  require_node_major 18
   pushd "$ROOT_DIR/frontend" >/dev/null
   npm install
   popd >/dev/null

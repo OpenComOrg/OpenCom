@@ -11,7 +11,11 @@ const Env = z.object({
   CORE_MEMBERSHIP_PUBLIC_JWK: z.string().min(1),
   CORE_ISSUER: z.string().min(1),
   ADMIN_PANEL_PASSWORD: z.string().min(8),
-  REDIS_URL: z.string().url().optional()
+  REDIS_URL: z.string().url().optional(),
+  
+  // Profile image storage
+  PROFILE_IMAGE_STORAGE_DIR: z.string().default("./storage/profiles"),
+  PROFILE_IMAGE_BASE_URL: z.string().default("/v1/profile-images")
 });
 
 export const env = Env.parse(process.env);

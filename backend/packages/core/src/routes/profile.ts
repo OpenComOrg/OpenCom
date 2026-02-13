@@ -2,6 +2,10 @@ import { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { q } from "../db.js";
 import { parseBody } from "../validation.js";
+import { env } from "../env.js";
+import { saveProfileImage, deleteProfileImage, parseBase64Image } from "../storage.js";
+import fs from "node:fs";
+import path from "node:path";
 
 const imageValue = z.string().max(2_000_000).refine((value) => {
   if (/^https?:\/\//i.test(value)) return true;
@@ -17,6 +21,32 @@ const UpdateProfile = z.object({
 });
 
 export async function profileRoutes(app: FastifyInstance) {
+  // Serve stored profile images: /v1/profile-images/users/{userId}/{filename}
+  app.get("/v1/profile-images/users/:userId/:filename", async (req: any, rep) => {
+    const { userId, filename } = z.object({
+      userId: z.string().min(3),
+      filename: z.string().min(1)
+    }).parse(req.params);
+
+    const relPath = `users/${userId}/${filename}`;
+    const filepath = path.join(env.PROFILE_IMAGE_STORAGE_DIR, relPath);
+
+    // Prevent directory traversal
+    const normDir = path.resolve(env.PROFILE_IMAGE_STORAGE_DIR);
+    const normFile = path.resolve(filepath);
+    if (!normFile.startsWith(normDir)) {
+      return rep.code(403).send({ error: "FORBIDDEN" });
+    }
+
+    if (!fs.existsSync(filepath)) {
+      return rep.code(404).send({ error: "NOT_FOUND" });
+    }
+
+    // Set cache headers
+    rep.header("Cache-Control", "public, max-age=31536000, immutable");
+    return rep.sendFile(filepath);
+  });
+
   app.get("/v1/users/:id/profile", async (req, rep) => {
     const { id } = z.object({ id: z.string().min(3) }).parse(req.params);
 
@@ -49,14 +79,75 @@ export async function profileRoutes(app: FastifyInstance) {
     const userId = req.user.sub as string;
     const body = parseBody(UpdateProfile, req.body);
 
+    // Get current URLs to clean up old images
+    const current = await q<{ pfp_url: string | null; banner_url: string | null }>(
+      `SELECT pfp_url, banner_url FROM users WHERE id=:userId`,
+      { userId }
+    );
+
+    let pfpUrl = current[0]?.pfp_url ?? null;
+    let bannerUrl = current[0]?.banner_url ?? null;
+
+    // Process PFP upload
+    if (body.pfpUrl !== undefined) {
+      if (body.pfpUrl === null) {
+        // Explicitly removing pfp
+        if (pfpUrl?.startsWith("users/")) {
+          deleteProfileImage(env.PROFILE_IMAGE_STORAGE_DIR, pfpUrl);
+        }
+        pfpUrl = null;
+      } else if (body.pfpUrl.startsWith("data:image/")) {
+        // Base64 image upload
+        const saved = saveProfileImage(env.PROFILE_IMAGE_STORAGE_DIR, userId, "pfp", body.pfpUrl);
+        if (saved) {
+          // Delete old image
+          if (pfpUrl?.startsWith("users/")) {
+            deleteProfileImage(env.PROFILE_IMAGE_STORAGE_DIR, pfpUrl);
+          }
+          pfpUrl = `${env.PROFILE_IMAGE_BASE_URL}/${saved}`;
+        } else {
+          return { error: "INVALID_IMAGE", field: "pfpUrl" };
+        }
+      } else if (body.pfpUrl.startsWith("http")) {
+        // External URL - allow it
+        pfpUrl = body.pfpUrl;
+      }
+    }
+
+    // Process banner upload
+    if (body.bannerUrl !== undefined) {
+      if (body.bannerUrl === null) {
+        // Explicitly removing banner
+        if (bannerUrl?.startsWith("users/")) {
+          deleteProfileImage(env.PROFILE_IMAGE_STORAGE_DIR, bannerUrl);
+        }
+        bannerUrl = null;
+      } else if (body.bannerUrl.startsWith("data:image/")) {
+        // Base64 image upload
+        const saved = saveProfileImage(env.PROFILE_IMAGE_STORAGE_DIR, userId, "banner", body.bannerUrl);
+        if (saved) {
+          // Delete old image
+          if (bannerUrl?.startsWith("users/")) {
+            deleteProfileImage(env.PROFILE_IMAGE_STORAGE_DIR, bannerUrl);
+          }
+          bannerUrl = `${env.PROFILE_IMAGE_BASE_URL}/${saved}`;
+        } else {
+          return { error: "INVALID_IMAGE", field: "bannerUrl" };
+        }
+      } else if (body.bannerUrl.startsWith("http")) {
+        // External URL - allow it
+        bannerUrl = body.bannerUrl;
+      }
+    }
+
     await q(
       `UPDATE users SET
          display_name = COALESCE(:displayName, display_name),
          bio = COALESCE(:bio, bio),
-         pfp_url = COALESCE(:pfpUrl, pfp_url),
-         banner_url = COALESCE(:bannerUrl, banner_url)
+         pfp_url = :pfpUrl,
+         banner_url = :bannerUrl
        WHERE id=:userId`,
-      { userId, displayName: body.displayName ?? null, bio: body.bio ?? null, pfpUrl: body.pfpUrl ?? null, bannerUrl: body.bannerUrl ?? null }
+      { userId, displayName: body.displayName ?? null, bio: body.bio ?? null, pfpUrl, bannerUrl }
     );
 
     return { ok: true };

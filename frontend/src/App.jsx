@@ -289,7 +289,8 @@ export function App() {
     activeDm?.messages || [],
     (message) => message.author || "Unknown",
     (message) => message.createdAt,
-    (message) => message.authorId || "unknown"
+    (message) => message.authorId || "unknown",
+    (message) => message.pfp_url || null
   ), [activeDm]);
 
   const activePinnedServerMessages = useMemo(() => pinnedServerMessages[activeChannelId] || [], [pinnedServerMessages, activeChannelId]);
@@ -1361,11 +1362,13 @@ export function App() {
               <div className="messages" ref={messagesRef}>
                 {groupedServerMessages.map((group) => (
                   <article key={group.id} className="msg grouped-msg">
-                    {group.pfpUrl ? (
-                      <img src={group.pfpUrl} alt={group.author} className="msg-avatar" style={{ objectFit: "cover" }} />
-                    ) : (
-                      <div className="msg-avatar">{getInitials(group.author || "User")}</div>
-                    )}
+                    <div className="msg-avatar">
+                      {group.pfpUrl ? (
+                        <img src={group.pfpUrl} alt={group.author} />
+                      ) : (
+                        getInitials(group.author || "User")
+                      )}
+                    </div>
                     <div className="msg-body">
                       <strong className="msg-author">
                         <button className="name-btn" onClick={() => openMemberProfile({ id: group.authorId, username: group.author, status: "online", pfp_url: group.pfpUrl })}>{group.author}</button>
@@ -1445,11 +1448,13 @@ export function App() {
             <div className="messages" ref={messagesRef}>
               {groupedDmMessages.map((group) => (
                 <article key={group.id} className="msg dm-msg grouped-msg">
-                  {group.pfpUrl ? (
-                    <img src={group.pfpUrl} alt={group.author} className="msg-avatar" style={{ objectFit: "cover" }} />
-                  ) : (
-                    <div className="msg-avatar">{getInitials(group.author)}</div>
-                  )}
+                  <div className="msg-avatar">
+                    {group.pfpUrl ? (
+                      <img src={group.pfpUrl} alt={group.author} />
+                    ) : (
+                      getInitials(group.author)
+                    )}
+                  </div>
                   <div className="msg-body">
                     <strong className="msg-author">
                       <button className="name-btn" onClick={() => openMemberProfile({ id: group.authorId, username: group.author, status: "online", pfp_url: group.pfpUrl })}>{group.author}</button>

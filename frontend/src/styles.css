@@ -507,6 +507,15 @@ button.danger { background: linear-gradient(135deg, #eb5d73, #c84159); }
   place-items: center;
   font-weight: 700;
   font-size: 1em;
+  flex-shrink: 0;
+}
+
+.msg-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: inherit;
+  display: block;
 }
 .msg-time { color: var(--text-dim); font-size: 0.85em; margin-left: 0.5em;}
 .msg-body {min-width: 0;}

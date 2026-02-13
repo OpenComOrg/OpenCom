@@ -1516,9 +1516,11 @@ export function App() {
 
             // Handle OFFER: incoming call
             if (signal.type === "offer") {
-              // Only accept if we're not already in a call
               if (callState.dmId) continue;
-              
+              // Ignore stale offers (e.g. from a previous missed call)
+              const createdAt = signal.createdAt ? new Date(signal.createdAt).getTime() : 0;
+              if (createdAt && Date.now() - createdAt > 45_000) continue;
+
               callState.pendingOffer = {
                 offer: signal.payload.offer,
                 fromUserId: signal.fromUserId,
@@ -1630,10 +1632,13 @@ export function App() {
     }
     
     try {
-      // Clean up any existing call
       cleanupCall();
-      
-      // Get user media
+      // Claim caller state before any await so polling won't treat old offers as incoming
+      callState.dmId = activeDmId;
+      callState.remoteUserId = activeDm.participantId;
+      callState.role = "caller";
+      setIncomingCall(null);
+
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       
       // Create peer connection
@@ -1952,7 +1957,7 @@ export function App() {
 
   return (
     <div className="opencom-shell">
-      {incomingCall && (
+      {incomingCall && !(dmCallActive && callStateRef.current.role === "caller") && (
         <div className="call-notification">
           <div className="call-notification-content">
             <div className="call-notification-info">

@@ -410,6 +410,7 @@ export async function socialRoutes(app: FastifyInstance) {
        FROM social_dm_call_signals
        WHERE thread_id=:threadId
          AND target_user_id=:userId
+         AND created_at >= DATE_SUB(NOW(), INTERVAL 2 MINUTE)
          AND (:afterId IS NULL OR id > :afterId)
        ORDER BY id ASC
        LIMIT 100`,

@@ -116,14 +116,19 @@ run_mysql_import() {
   [[ -n "$password" ]] && args+=(--password="$password")
   args+=("$dbname")
 
-  if ! mysql "${args[@]}" < "$in_file"; then
+  # Fix collation compatibility: ensure all VARCHAR columns explicitly use utf8mb4_uca1400_ai_ci
+  # This prevents foreign key constraint errors from collation mismatches
+  local fixed_sql
+  fixed_sql=$(cat "$in_file" | sed 's/DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci/DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci/g' | sed 's/CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci/CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci/g')
+
+  if ! echo "$fixed_sql" | mysql "${args[@]}"; then
     if [[ "$host" == "localhost" && "$port" != "3306" ]]; then
       echo "[warn] Primary import connection failed for ${host}:${port}; retrying 127.0.0.1:3306"
       args=(--protocol=TCP --host="127.0.0.1" --port="3306")
       [[ -n "$user" ]] && args+=(--user="$user")
       [[ -n "$password" ]] && args+=(--password="$password")
       args+=("$dbname")
-      mysql "${args[@]}" < "$in_file"
+      echo "$fixed_sql" | mysql "${args[@]}"
       return
     fi
     return 1

@@ -70,7 +70,7 @@ function splitSqlStatements(sql: string): string[] {
 }
 
 async function main() {
-  await q(`CREATE TABLE IF NOT EXISTS schema_migrations (id VARCHAR(64) PRIMARY KEY, ran_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)`);
+  await q(`CREATE TABLE IF NOT EXISTS schema_migrations (id VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_uca1400_ai_ci PRIMARY KEY, ran_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci`);
 
   const sqlDir = path.join(__dirname, "sql");
   const files = fs.readdirSync(sqlDir).filter(f => f.endsWith(".sql")).sort();

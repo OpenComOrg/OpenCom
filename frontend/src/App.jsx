@@ -322,7 +322,9 @@ export function App() {
   });
   const remoteAudioRef = useRef(null);
   const ringtoneStopRef = useRef(null);
+  const gatewayWsRef = useRef(null);       // Current WebSocket for call signals
   const signalPollingRef = useRef({ lastIds: new Map(), processed: new Map() });
+  const [gatewayReconnect, setGatewayReconnect] = useState(0); // Bump to force reconnect
   const profileCardDragOffsetRef = useRef({ x: 0, y: 0 });
   const storageScope = me?.id || "anonymous";
 
@@ -1489,150 +1491,124 @@ export function App() {
     setIncomingCall(null);
   }
 
-  // WebSocket connection for real-time call signals
+  // Keep latest handler so WebSocket/polling always use current me/dms
+  const handleCallSignalRef = useRef(null);
+  function handleCallSignal(signal, dmList) {
+    if (!signal?.type || signal.fromUserId === me?.id) return;
+    const call = callRef.current;
+    const signalAge = signal.createdAt ? Date.now() - new Date(signal.createdAt).getTime() : 0;
+    const list = dmList || dms;
+    const dm = list.find(d => d.id === signal.threadId);
+
+    if (signal.type === "offer") {
+      if (call.dmId) return;
+      if (signalAge > 30_000) return;
+      call.incomingOffer = { offer: signal.payload.offer, fromUserId: signal.fromUserId, dmId: signal.threadId };
+      stopRingtone();
+      setIncomingCall({ fromUserId: signal.fromUserId, fromUsername: dm?.name || "Unknown", dmId: signal.threadId });
+      setCallStatus("ringing");
+      ringtoneStopRef.current = playRingtone();
+      return;
+    }
+    if (call.dmId !== signal.threadId) return;
+    if (signal.type === "answer" && call.role === "caller" && call.peer && signal.payload?.answer) {
+      (async () => {
+        try {
+          await call.peer.setRemoteDescription(new RTCSessionDescription(signal.payload.answer));
+          for (const c of call.pendingIce) { try { await call.peer.addIceCandidate(new RTCIceCandidate(c)); } catch {} }
+          call.pendingIce = [];
+          setDmCallActive(true);
+          setCallStatus("active");
+          const dmObj = list.find(d => d.id === signal.threadId);
+          setCallParticipants(prev => prev.find(p => p.id === signal.fromUserId) ? prev : [...prev, { id: signal.fromUserId, username: dmObj?.name || "Unknown", muted: false }]);
+        } catch (e) { console.error("Answer handling failed:", e); }
+      })();
+      return;
+    }
+    if (signal.type === "ice" && call.peer && signal.payload?.candidate) {
+      (async () => {
+        try {
+          if (call.peer.remoteDescription) await call.peer.addIceCandidate(new RTCIceCandidate(signal.payload.candidate));
+          else call.pendingIce.push(signal.payload.candidate);
+        } catch {}
+      })();
+      return;
+    }
+    if (signal.type === "end" && signalAge < 30_000) endCall(false);
+  }
+  handleCallSignalRef.current = handleCallSignal;
+
+  // WebSocket gateway – connect when logged in (so we receive call signals from any tab)
   useEffect(() => {
-    if (!accessToken || !me?.id || navMode !== "dms") return;
+    if (!accessToken || !me?.id) return;
 
-    const wsUrl = CORE_API.replace(/^https?/, "wss").replace(/^http/, "ws") + "/gateway";
+    const wsUrl = (CORE_API.replace(/^https/, "wss").replace(/^http/, "ws")) + "/gateway";
     const ws = new WebSocket(wsUrl);
+    gatewayWsRef.current = ws;
     let heartbeatInterval = null;
-    let reconnectTimeout = null;
-
-    const handleSignal = (signal) => {
-      if (!signal?.type || signal.fromUserId === me?.id) return;
-      
-      const call = callRef.current;
-      const signalAge = signal.createdAt ? Date.now() - new Date(signal.createdAt).getTime() : 0;
-      const dm = dms.find(d => d.id === signal.threadId);
-      
-      // OFFER: Incoming call
-      if (signal.type === "offer") {
-        if (call.dmId) return; // Already in a call
-        if (signalAge > 30_000) return; // Ignore stale offers
-        
-        call.incomingOffer = {
-          offer: signal.payload.offer,
-          fromUserId: signal.fromUserId,
-          dmId: signal.threadId
-        };
-        
-        stopRingtone();
-        setIncomingCall({
-          fromUserId: signal.fromUserId,
-          fromUsername: dm?.name || "Unknown",
-          dmId: signal.threadId
-        });
-        setCallStatus("ringing");
-        ringtoneStopRef.current = playRingtone();
-        return;
-      }
-      
-      // Only process other signals if this is our active call
-      if (call.dmId !== signal.threadId) return;
-      
-      // ANSWER: Remote accepted our call
-      if (signal.type === "answer" && call.role === "caller" && call.peer && signal.payload?.answer) {
-        (async () => {
-          try {
-            await call.peer.setRemoteDescription(new RTCSessionDescription(signal.payload.answer));
-            for (const candidate of call.pendingIce) {
-              try {
-                await call.peer.addIceCandidate(new RTCIceCandidate(candidate));
-              } catch {}
-            }
-            call.pendingIce = [];
-            setDmCallActive(true);
-            setCallStatus("active");
-            const dmObj = dms.find(d => d.id === signal.threadId);
-            setCallParticipants(prev => {
-              if (prev.find(p => p.id === signal.fromUserId)) return prev;
-              return [...prev, { 
-                id: signal.fromUserId, 
-                username: dmObj?.name || "Unknown", 
-                muted: false 
-              }];
-            });
-          } catch (err) {
-            console.error("Answer handling failed:", err);
-          }
-        })();
-        return;
-      }
-      
-      // ICE: Add candidate
-      if (signal.type === "ice" && call.peer && signal.payload?.candidate) {
-        (async () => {
-          try {
-            if (call.peer.remoteDescription) {
-              await call.peer.addIceCandidate(new RTCIceCandidate(signal.payload.candidate));
-            } else {
-              call.pendingIce.push(signal.payload.candidate);
-            }
-          } catch {}
-        })();
-        return;
-      }
-      
-      // END: Remote hung up
-      if (signal.type === "end" && signalAge < 30_000) {
-        endCall(false);
-        return;
-      }
-    };
 
     ws.onopen = () => {
-      ws.send(JSON.stringify({
-        op: "IDENTIFY",
-        d: { accessToken, deviceId: localStorage.getItem("deviceId") || undefined }
-      }));
+      ws.send(JSON.stringify({ op: "IDENTIFY", d: { accessToken, deviceId: localStorage.getItem("opencom_device_id") || undefined } }));
     };
 
     ws.onmessage = (event) => {
       try {
         const msg = JSON.parse(event.data);
-        
         if (msg.op === "HELLO") {
           const interval = msg.d?.heartbeat_interval || 25000;
           heartbeatInterval = window.setInterval(() => {
-            if (ws.readyState === WebSocket.OPEN) {
-              ws.send(JSON.stringify({ op: "HEARTBEAT" }));
-            }
+            if (gatewayWsRef.current?.readyState === WebSocket.OPEN)
+              gatewayWsRef.current.send(JSON.stringify({ op: "HEARTBEAT" }));
           }, interval);
         }
-        
-        if (msg.op === "DISPATCH" && msg.t === "CALL_SIGNAL_CREATE") {
-          handleSignal(msg.d);
-        }
-      } catch (err) {
-        console.error("WebSocket message error:", err);
-      }
+        if (msg.op === "DISPATCH" && msg.t === "CALL_SIGNAL_CREATE" && handleCallSignalRef.current)
+          handleCallSignalRef.current(msg.d, dms);
+      } catch (err) { console.error("WebSocket message error:", err); }
     };
 
-    ws.onerror = (err) => {
-      console.error("WebSocket error:", err);
-    };
-
+    ws.onerror = () => { /* reconnect on close */ };
     ws.onclose = () => {
-      if (heartbeatInterval) {
-        clearInterval(heartbeatInterval);
-        heartbeatInterval = null;
-      }
-      // Reconnect after 3 seconds
-      reconnectTimeout = window.setTimeout(() => {
-        if (accessToken && me?.id && navMode === "dms") {
-          // Trigger reconnect by re-running effect
-          setStatus("Reconnecting...");
-        }
-      }, 3000);
+      gatewayWsRef.current = null;
+      if (heartbeatInterval) { clearInterval(heartbeatInterval); heartbeatInterval = null; }
+      window.setTimeout(() => setGatewayReconnect((k) => k + 1), 2000);
     };
 
     return () => {
       ws.close();
+      gatewayWsRef.current = null;
       if (heartbeatInterval) clearInterval(heartbeatInterval);
-      if (reconnectTimeout) clearTimeout(reconnectTimeout);
-      stopRingtone();
     };
-  }, [accessToken, dms, me?.id, navMode]);
+  }, [accessToken, me?.id, gatewayReconnect]);
+
+  // Fallback: poll for call signals only when WebSocket is not open (e.g. WS failed or reconnecting)
+  useEffect(() => {
+    if (!accessToken || !me?.id || !dms?.length) return;
+    const isWsOpen = () => gatewayWsRef.current?.readyState === WebSocket.OPEN;
+
+    const poll = async () => {
+      if (isWsOpen()) return; // Prefer WebSocket
+      try {
+        for (const dm of dms) {
+          if (!dm.id) continue;
+          const polling = signalPollingRef.current;
+          const lastId = polling.lastIds.get(dm.id) || "";
+          const query = lastId ? `?afterId=${encodeURIComponent(lastId)}` : "";
+          const data = await api(`/v1/social/dms/${dm.id}/call-signals${query}`, { headers: { Authorization: `Bearer ${accessToken}` } }).catch(() => ({ signals: [] }));
+          const processed = polling.processed.get(dm.id) || new Set();
+          for (const signal of data.signals || []) {
+            if (processed.has(signal.id)) continue;
+            processed.add(signal.id);
+            polling.processed.set(dm.id, processed);
+            polling.lastIds.set(dm.id, signal.id);
+            if (handleCallSignalRef.current) handleCallSignalRef.current(signal, dms);
+          }
+        }
+      } catch (err) { console.error("Call signal poll error:", err); }
+    };
+
+    const timer = setInterval(poll, 2000);
+    return () => clearInterval(timer);
+  }, [accessToken, dms, me?.id]);
 
   async function startDmCall() {
     if (!activeDm?.participantId || !activeDmId) return;

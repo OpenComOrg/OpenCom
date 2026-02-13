@@ -37,19 +37,21 @@ export async function messageRoutes(
     let rows: any[];
     if (qs.before) {
       rows = await q<any>(
-        `SELECT id,author_id,content,created_at
-         FROM messages
-         WHERE channel_id=:channelId AND created_at < :before
-         ORDER BY created_at DESC
+        `SELECT m.id, m.author_id, u.username, u.pfp_url, m.content, m.created_at
+         FROM messages m
+         LEFT JOIN users u ON m.author_id = u.id
+         WHERE m.channel_id=:channelId AND m.created_at < :before
+         ORDER BY m.created_at DESC
          LIMIT :limit`,
         { channelId, before: qs.before, limit: qs.limit }
       );
     } else {
       rows = await q<any>(
-        `SELECT id,author_id,content,created_at
-         FROM messages
-         WHERE channel_id=:channelId
-         ORDER BY created_at DESC
+        `SELECT m.id, m.author_id, u.username, u.pfp_url, m.content, m.created_at
+         FROM messages m
+         LEFT JOIN users u ON m.author_id = u.id
+         WHERE m.channel_id=:channelId
+         ORDER BY m.created_at DESC
          LIMIT :limit`,
         { channelId, limit: qs.limit }
       );

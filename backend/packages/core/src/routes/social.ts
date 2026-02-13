@@ -60,8 +60,8 @@ export async function socialRoutes(app: FastifyInstance) {
   app.get("/v1/social/friends", { preHandler: [app.authenticate] } as any, async (req: any) => {
     const userId = req.user.sub as string;
 
-    const rows = await q<{ id: string; username: string; display_name: string | null }>(
-      `SELECT u.id, u.username, u.display_name
+    const rows = await q<{ id: string; username: string; display_name: string | null; pfp_url: string | null }>(
+      `SELECT u.id, u.username, u.display_name, u.pfp_url
        FROM friendships f
        JOIN users u ON u.id=f.friend_user_id
        WHERE f.user_id=:userId
@@ -73,6 +73,7 @@ export async function socialRoutes(app: FastifyInstance) {
       friends: rows.map((row) => ({
         id: row.id,
         username: row.display_name || row.username,
+        pfp_url: row.pfp_url,
         status: "online"
       }))
     };
@@ -269,11 +270,12 @@ export async function socialRoutes(app: FastifyInstance) {
   app.get("/v1/social/dms", { preHandler: [app.authenticate] } as any, async (req: any) => {
     const userId = req.user.sub as string;
 
-    const rows = await q<{ id: string; other_user_id: string; other_username: string; other_display_name: string | null; last_message_at: string | null }>(
+    const rows = await q<{ id: string; other_user_id: string; other_username: string; other_display_name: string | null; other_pfp_url: string | null; last_message_at: string | null }>(
       `SELECT t.id,
               CASE WHEN t.user_a=:userId THEN t.user_b ELSE t.user_a END AS other_user_id,
               u.username AS other_username,
               u.display_name AS other_display_name,
+              u.pfp_url AS other_pfp_url,
               t.last_message_at
        FROM social_dm_threads t
        JOIN users u ON u.id = CASE WHEN t.user_a=:userId THEN t.user_b ELSE t.user_a END
@@ -287,6 +289,7 @@ export async function socialRoutes(app: FastifyInstance) {
         id: row.id,
         participantId: row.other_user_id,
         name: row.other_display_name || row.other_username,
+        pfp_url: row.other_pfp_url,
         lastMessageAt: row.last_message_at
       }))
     };
@@ -302,8 +305,8 @@ export async function socialRoutes(app: FastifyInstance) {
     );
     if (!thread.length) return rep.code(404).send({ error: "THREAD_NOT_FOUND" });
 
-    const rows = await q<{ id: string; sender_user_id: string; content: string; created_at: string; sender_name: string; sender_display_name: string | null }>(
-      `SELECT m.id, m.sender_user_id, m.content, m.created_at, u.username AS sender_name, u.display_name AS sender_display_name
+    const rows = await q<{ id: string; sender_user_id: string; content: string; created_at: string; sender_name: string; sender_display_name: string | null; sender_pfp_url: string | null }>(
+      `SELECT m.id, m.sender_user_id, m.content, m.created_at, u.username AS sender_name, u.display_name AS sender_display_name, u.pfp_url AS sender_pfp_url
        FROM social_dm_messages m
        JOIN users u ON u.id=m.sender_user_id
        WHERE m.thread_id=:threadId
@@ -316,6 +319,7 @@ export async function socialRoutes(app: FastifyInstance) {
         id: row.id,
         authorId: row.sender_user_id,
         author: row.sender_display_name || row.sender_name,
+        pfp_url: row.sender_pfp_url,
         content: row.content,
         createdAt: row.created_at
       }))

@@ -1484,8 +1484,15 @@ export function App() {
         {navMode === "dms" && (
           <section className="sidebar-block channels-container">
             {dms.map((dm) => (
-              <button key={dm.id} className={`channel-row dm-sidebar-row ${dm.id === activeDmId ? "active" : ""}`} onClick={() => setActiveDmId(dm.id)} title={`DM ${dm.name}`}>
-                <span className="channel-hash">@</span> {dm.name}
+              <button key={dm.id} className={`channel-row dm-sidebar-row ${dm.id === activeDmId ? "active" : ""}`} onClick={() => setActiveDmId(dm.id)} title={`DM ${dm.name}`} style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                {dm.pfp_url ? (
+                  <img src={dm.pfp_url} alt={dm.name} style={{ width: "28px", height: "28px", borderRadius: "50%", objectFit: "cover", flexShrink: 0 }} />
+                ) : (
+                  <div style={{ width: "28px", height: "28px", borderRadius: "50%", background: `hsl(${Math.abs(dm.participantId.charCodeAt(0) * 7) % 360}, 70%, 60%)`, display: "grid", placeItems: "center", fontSize: "12px", fontWeight: "bold", flexShrink: 0 }}>
+                    {dm.name?.substring(0, 1).toUpperCase()}
+                  </div>
+                )}
+                <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis" }}>{dm.name}</span>
               </button>
             ))}
             {!dms.length && <p className="hint">Add friends to open direct message threads.</p>}
@@ -1495,9 +1502,18 @@ export function App() {
         {navMode === "friends" && (
           <section className="sidebar-block channels-container">
             {friends.map((friend) => (
-              <button className="friend-row friend-sidebar-row" key={friend.id} onClick={() => openDmFromFriend(friend)} title={`Open ${friend.username}`}>
-                <strong>{friend.username}</strong>
-                <span className="hint">{friend.status}</span>
+              <button className="friend-row friend-sidebar-row" key={friend.id} onClick={() => openDmFromFriend(friend)} title={`Open ${friend.username}`} style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                {friend.pfp_url ? (
+                  <img src={friend.pfp_url} alt={friend.username} style={{ width: "28px", height: "28px", borderRadius: "50%", objectFit: "cover", flexShrink: 0 }} />
+                ) : (
+                  <div style={{ width: "28px", height: "28px", borderRadius: "50%", background: `hsl(${Math.abs(friend.id.charCodeAt(0) * 7) % 360}, 70%, 60%)`, display: "grid", placeItems: "center", fontSize: "12px", fontWeight: "bold", flexShrink: 0 }}>
+                    {friend.username?.substring(0, 1).toUpperCase()}
+                  </div>
+                )}
+                <div style={{ flex: 1, textAlign: "left", overflow: "hidden" }}>
+                  <strong style={{ display: "block", overflow: "hidden", textOverflow: "ellipsis" }}>{friend.username}</strong>
+                  <span className="hint">{friend.status}</span>
+                </div>
               </button>
             ))}
             {!friends.length && <p className="hint">No friends yet. Use the Add Friend tab in the main panel.</p>}
@@ -1573,10 +1589,14 @@ export function App() {
               <div className="messages" ref={messagesRef}>
                 {groupedServerMessages.map((group) => (
                   <article key={group.id} className="msg grouped-msg">
-                    <div className="msg-avatar">{getInitials(group.author || "User")}</div>
+                    {group.pfpUrl ? (
+                      <img src={group.pfpUrl} alt={group.author} className="msg-avatar" style={{ objectFit: "cover" }} />
+                    ) : (
+                      <div className="msg-avatar">{getInitials(group.author || "User")}</div>
+                    )}
                     <div className="msg-body">
                       <strong className="msg-author">
-                        <button className="name-btn" onClick={() => openMemberProfile({ id: group.authorId, username: group.author, status: "online" })}>{group.author}</button>
+                        <button className="name-btn" onClick={() => openMemberProfile({ id: group.authorId, username: group.author, status: "online", pfp_url: group.pfpUrl })}>{group.author}</button>
                         <span className="msg-time">{formatMessageTime(group.firstMessageTime)}</span>
                       </strong>
                       {group.messages.map((message) => (
@@ -1615,7 +1635,11 @@ export function App() {
               <h4>Online — {memberList.length}</h4>
               {memberList.map((member) => (
                 <button className="member-row" key={member.id} title={`View ${member.username}`} onClick={(event) => { event.stopPropagation(); openMemberProfile(member); }}>
-                  <div className="avatar member-avatar">{getInitials(member.username)}</div>
+                  {member.pfp_url ? (
+                    <img src={member.pfp_url} alt={member.username} className="avatar member-avatar" style={{ objectFit: "cover" }} />
+                  ) : (
+                    <div className="avatar member-avatar">{getInitials(member.username)}</div>
+                  )}
                   <div>
                     <strong>{member.username}</strong>
                     <span>{member.id === me?.id ? selfStatus : member.status}</span>
@@ -1649,10 +1673,14 @@ export function App() {
             <div className="messages" ref={messagesRef}>
               {groupedDmMessages.map((group) => (
                 <article key={group.id} className="msg dm-msg grouped-msg">
-                  <div className="msg-avatar">{getInitials(group.author)}</div>
+                  {group.pfpUrl ? (
+                    <img src={group.pfpUrl} alt={group.author} className="msg-avatar" style={{ objectFit: "cover" }} />
+                  ) : (
+                    <div className="msg-avatar">{getInitials(group.author)}</div>
+                  )}
                   <div className="msg-body">
                     <strong className="msg-author">
-                      <button className="name-btn" onClick={() => openMemberProfile({ id: group.authorId, username: group.author, status: "online" })}>{group.author}</button>
+                      <button className="name-btn" onClick={() => openMemberProfile({ id: group.authorId, username: group.author, status: "online", pfp_url: group.pfpUrl })}>{group.author}</button>
                       <span className="msg-time">{formatMessageTime(group.firstMessageTime)}</span>
                     </strong>
                     {group.messages.map((message) => (
@@ -1728,6 +1756,13 @@ export function App() {
 
               {(friendView === "online" ? filteredFriends.filter((friend) => friend.status !== "offline") : filteredFriends).map((friend) => (
                 <div key={friend.id} className="friend-row">
+                  {friend.pfp_url ? (
+                    <img src={friend.pfp_url} alt={friend.username} style={{ width: "40px", height: "40px", borderRadius: "50%", objectFit: "cover", marginRight: "12px" }} />
+                  ) : (
+                    <div style={{ width: "40px", height: "40px", borderRadius: "50%", background: `hsl(${Math.abs(friend.id.charCodeAt(0) * 7) % 360}, 70%, 60%)`, display: "grid", placeItems: "center", fontWeight: "bold", marginRight: "12px" }}>
+                      {friend.username?.substring(0, 1).toUpperCase()}
+                    </div>
+                  )}
                   <div className="friend-meta">
                     <strong>{friend.username}</strong>
                     <span>{friend.status}</span>
@@ -1740,9 +1775,18 @@ export function App() {
             <aside className="active-now">
               <h4>Active Now</h4>
               {filteredFriends.slice(0, 5).map((friend) => (
-                <button key={`active-${friend.id}`} className="active-card" onClick={(event) => { event.stopPropagation(); openMemberProfile(friend); }}>
-                  <strong>{friend.username}</strong>
-                  <span>{friend.status === "online" ? "Available now" : "Recently active"}</span>
+                <button key={`active-${friend.id}`} className="active-card" onClick={(event) => { event.stopPropagation(); openMemberProfile(friend); }} style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                  {friend.pfp_url ? (
+                    <img src={friend.pfp_url} alt={friend.username} style={{ width: "40px", height: "40px", borderRadius: "50%", objectFit: "cover" }} />
+                  ) : (
+                    <div style={{ width: "40px", height: "40px", borderRadius: "50%", background: `hsl(${Math.abs(friend.id.charCodeAt(0) * 7) % 360}, 70%, 60%)`, display: "grid", placeItems: "center", fontWeight: "bold", flexShrink: 0 }}>
+                      {friend.username?.substring(0, 1).toUpperCase()}
+                    </div>
+                  )}
+                  <div style={{ textAlign: "left" }}>
+                    <strong>{friend.username}</strong>
+                    <span>{friend.status === "online" ? "Available now" : "Recently active"}</span>
+                  </div>
                 </button>
               ))}
               {!filteredFriends.length && <p className="hint">When friends are active, they will appear here.</p>}

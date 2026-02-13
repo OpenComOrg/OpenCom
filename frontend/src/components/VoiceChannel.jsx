@@ -61,11 +61,41 @@ export function VoiceChannel({
               background: "rgba(255,255,255,0.05)",
               borderRadius: "8px",
               textAlign: "center",
-              fontSize: "12px"
+              fontSize: "12px",
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              gap: "6px"
             }}>
-              {member.username}
-              {member.muted && <span> 🔇</span>}
-              {member.deafened && <span> 🔇🔇</span>}
+              {member.pfp_url ? (
+                <img
+                  src={member.pfp_url}
+                  alt={member.username}
+                  style={{
+                    width: "40px",
+                    height: "40px",
+                    borderRadius: "50%",
+                    objectFit: "cover"
+                  }}
+                />
+              ) : (
+                <div style={{
+                  width: "40px",
+                  height: "40px",
+                  borderRadius: "50%",
+                  background: `hsl(${Math.abs(member.id.charCodeAt(0) * 7) % 360}, 70%, 60%)`,
+                  display: "grid",
+                  placeItems: "center",
+                  fontWeight: "bold"
+                }}>
+                  {member.username?.substring(0, 1).toUpperCase()}
+                </div>
+              )}
+              <div>
+                {member.username}
+                {member.muted && <span> 🔇</span>}
+                {member.deafened && <span> 🔇🔇</span>}
+              </div>
             </div>
           ))}
         </div>

@@ -42,7 +42,8 @@ export function MessageView({
     } else {
       currentGroup = {
         authorId: msg.authorId,
-        author: msg.author,
+        author: msg.username,
+        pfpUrl: msg.pfp_url,
         firstTime: msg.createdAt,
         lastTime: msg.createdAt,
         messages: [msg]
@@ -77,19 +78,33 @@ export function MessageView({
 
         {messageGroups.map((group, idx) => (
           <div key={idx} style={{ display: "flex", gap: "12px" }}>
-            <div style={{
-              width: "36px",
-              height: "36px",
-              borderRadius: "50%",
-              background: `hsl(${Math.abs(group.authorId.charCodeAt(0) * 7) % 360}, 70%, 60%)`,
-              display: "grid",
-              placeItems: "center",
-              fontSize: "14px",
-              fontWeight: "bold",
-              flexShrink: 0
-            }}>
-              {group.author?.substring(0, 1).toUpperCase()}
-            </div>
+            {group.pfpUrl ? (
+              <img
+                src={group.pfpUrl}
+                alt={group.author}
+                style={{
+                  width: "36px",
+                  height: "36px",
+                  borderRadius: "50%",
+                  objectFit: "cover",
+                  flexShrink: 0
+                }}
+              />
+            ) : (
+              <div style={{
+                width: "36px",
+                height: "36px",
+                borderRadius: "50%",
+                background: `hsl(${Math.abs(group.authorId.charCodeAt(0) * 7) % 360}, 70%, 60%)`,
+                display: "grid",
+                placeItems: "center",
+                fontSize: "14px",
+                fontWeight: "bold",
+                flexShrink: 0
+              }}>
+                {group.author?.substring(0, 1).toUpperCase()}
+              </div>
+            )}
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontSize: "13px", marginBottom: "2px" }}>
                 <strong>{group.author}</strong>

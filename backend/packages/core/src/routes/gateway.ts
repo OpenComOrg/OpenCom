@@ -23,6 +23,7 @@ export function attachCoreGateway(app: FastifyInstance, redis?: { pub: any; sub:
   // Redis channels for cross-instance fanout
   const DM_CH = "core:dm";
   const PRES_CH = "core:presence";
+  const CALL_SIGNAL_CH = "core:call-signal";
 
   if (redis) {
     redis.sub.subscribe(DM_CH, (raw: string) => {
@@ -41,6 +42,16 @@ export function attachCoreGateway(app: FastifyInstance, redis?: { pub: any; sub:
           c.seq += 1;
           send(c.ws, { op: "DISPATCH", t: "PRESENCE_UPDATE", s: c.seq, d: { userId, ...presence } });
         }
+      }
+    });
+
+    redis.sub.subscribe(CALL_SIGNAL_CH, (raw: string) => {
+      const { targetUserId, signal } = JSON.parse(raw);
+      const conns = byUser.get(targetUserId);
+      if (!conns) return;
+      for (const c of conns) {
+        c.seq += 1;
+        send(c.ws, { op: "DISPATCH", t: "CALL_SIGNAL_CREATE", s: c.seq, d: signal });
       }
     });
   }
@@ -124,5 +135,19 @@ export function attachCoreGateway(app: FastifyInstance, redis?: { pub: any; sub:
     if (redis) await redis.pub.publish(DM_CH, JSON.stringify({ recipientDeviceId, payload }));
   }
 
-  return { broadcastDM };
+  async function broadcastCallSignal(targetUserId: string, signal: any) {
+    // local deliver if connected
+    const conns = byUser.get(targetUserId);
+    if (conns && conns.size > 0) {
+      for (const c of conns) {
+        c.seq += 1;
+        send(c.ws, { op: "DISPATCH", t: "CALL_SIGNAL_CREATE", s: c.seq, d: signal });
+      }
+      return;
+    }
+    // cross-instance fanout
+    if (redis) await redis.pub.publish(CALL_SIGNAL_CH, JSON.stringify({ targetUserId, signal }));
+  }
+
+  return { broadcastDM, broadcastCallSignal };
 }

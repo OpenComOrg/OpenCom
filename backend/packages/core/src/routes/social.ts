@@ -56,7 +56,7 @@ async function ensureThread(userId: string, friendId: string): Promise<string> {
   return id;
 }
 
-export async function socialRoutes(app: FastifyInstance) {
+export async function socialRoutes(app: FastifyInstance, broadcastCallSignal?: (targetUserId: string, signal: any) => Promise<void>) {
   app.get("/v1/social/friends", { preHandler: [app.authenticate] } as any, async (req: any) => {
     const userId = req.user.sub as string;
 
@@ -390,6 +390,19 @@ export async function socialRoutes(app: FastifyInstance) {
        VALUES (:id,:threadId,:fromUserId,:targetUserId,:type,:payloadJson)`,
       { id, threadId, fromUserId: userId, targetUserId: body.targetUserId, type: body.type, payloadJson: JSON.stringify(body.payload ?? {}) }
     );
+
+    // Broadcast via WebSocket
+    const signal = {
+      id,
+      threadId,
+      fromUserId: userId,
+      type: body.type,
+      payload: body.payload ?? {},
+      createdAt: new Date().toISOString()
+    };
+    if (broadcastCallSignal) {
+      await broadcastCallSignal(body.targetUserId, signal);
+    }
 
     return { ok: true, id };
   });

@@ -68,3 +68,14 @@ export type VoiceCreateTransport = { guildId: string; channelId: string; directi
 export type VoiceConnectTransport = { transportId: string; dtlsParameters: any };
 export type VoiceProduce = { transportId: string; kind: "audio" | "video"; rtpParameters: any; appData?: any };
 export type VoiceConsume = { transportId: string; producerId: string; rtpCapabilities: any };
+
+// DM Call Signals
+export type CallSignal = {
+  id: string;
+  threadId: string;
+  fromUserId: string;
+  type: "offer" | "answer" | "ice" | "end";
+  payload: any;
+  createdAt: string;
+};
+export type CallSignalCreate = CallSignal;

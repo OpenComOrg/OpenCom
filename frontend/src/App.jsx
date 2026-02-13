@@ -303,20 +303,26 @@ export function App() {
   const isAtBottomRef = useRef(true);
   const lastDmMessageCountRef = useRef(0);
   const previousDmIdRef = useRef("");
-  // Voice call state - single source of truth
-  const callStateRef = useRef({
-    dmId: null,           // Which DM this call is for
-    peerConnection: null,  // RTCPeerConnection
-    localStream: null,     // Local audio stream
-    remoteUserId: null,    // Who we're calling / who called us
-    role: null,            // 'caller' | 'callee' | null
-    pendingOffer: null,    // Stored offer when receiving incoming call
-    pendingIceCandidates: [] // ICE candidates received before remote description
+  // Voice call state - completely isolated and simple
+  const callRef = useRef({
+    // Call identity
+    dmId: null,              // Which DM this call is for
+    remoteUserId: null,       // Who we're calling / who called us
+    role: null,               // 'caller' | 'callee' | null
+    
+    // WebRTC resources
+    peer: null,               // RTCPeerConnection
+    localStream: null,        // Local audio stream
+    
+    // Incoming call state
+    incomingOffer: null,      // Offer from remote when we're callee
+    
+    // ICE handling
+    pendingIce: []            // ICE candidates received before remote description
   });
   const remoteAudioRef = useRef(null);
   const ringtoneStopRef = useRef(null);
-  const lastDmCallSignalIdsRef = useRef(new Map()); // Track last signal ID per DM for polling
-  const processedSignalIdsRef = useRef(new Map()); // Track processed signal IDs per DM
+  const signalPollingRef = useRef({ lastIds: new Map(), processed: new Map() });
   const profileCardDragOffsetRef = useRef({ x: 0, y: 0 });
   const storageScope = me?.id || "anonymous";
 
@@ -413,10 +419,9 @@ export function App() {
       return nextDms;
     });
     
-    // Clear any lingering call state when refreshing
-    endDmCall(false);
-    lastDmCallSignalIdsRef.current.clear();
-    processedSignalIdsRef.current.clear();
+    endCall(false);
+    signalPollingRef.current.lastIds.clear();
+    signalPollingRef.current.processed.clear();
     
     // Preserve current DM selection if it still exists, otherwise find last DM with messages
     if (!nextDms.some((item) => item.id === activeDmId)) {
@@ -477,15 +482,13 @@ export function App() {
   }, [activeDmId]);
 
   useEffect(() => () => {
-    // Cleanup on unmount
-    cleanupCall();
+    endCall(false);
   }, []);
 
   useEffect(() => {
-    // Clean up call when switching DMs (but keep call if switching to the DM we're calling)
-    const callState = callStateRef.current;
-    if (dmCallActive && callState.dmId && callState.dmId !== activeDmId) {
-      endDmCall(false);
+    const call = callRef.current;
+    if (dmCallActive && call.dmId && call.dmId !== activeDmId) {
+      endCall(false);
     }
   }, [activeDmId]);
 
@@ -1425,8 +1428,8 @@ export function App() {
     return false;
   }
 
-  // Helper: Send call signal to a specific DM and user
-  async function sendCallSignal(type, payload, dmId, targetUserId) {
+  // Send a call signal to remote user
+  async function sendSignal(type, payload, dmId, targetUserId) {
     if (!accessToken || !dmId || !targetUserId) return;
     try {
       await api(`/v1/social/dms/${dmId}/call-signals`, {
@@ -1435,52 +1438,50 @@ export function App() {
         body: JSON.stringify({ type, targetUserId, payload })
       });
     } catch (err) {
-      console.warn("Failed to send call signal:", err);
+      console.warn("Signal send failed:", err);
     }
   }
 
-  // Helper: Clean up call resources
-  function cleanupCall() {
-    const state = callStateRef.current;
-    
-    // Stop ringtone
+  // Stop ringtone if playing
+  function stopRingtone() {
     if (ringtoneStopRef.current) {
       ringtoneStopRef.current();
       ringtoneStopRef.current = null;
     }
+  }
+
+  // Clean up all call resources and reset state
+  function endCall(notifyRemote = false) {
+    const call = callRef.current;
     
-    // Stop local stream
-    if (state.localStream) {
-      state.localStream.getTracks().forEach(track => {
-        track.stop();
-        track.enabled = false;
-      });
-      state.localStream = null;
+    stopRingtone();
+    
+    if (notifyRemote && call.dmId && call.remoteUserId) {
+      sendSignal("end", {}, call.dmId, call.remoteUserId);
     }
     
-    // Close peer connection
-    if (state.peerConnection) {
-      state.peerConnection.close();
-      state.peerConnection = null;
+    if (call.localStream) {
+      call.localStream.getTracks().forEach(t => { t.stop(); t.enabled = false; });
     }
     
-    // Clear remote audio
+    if (call.peer) {
+      call.peer.close();
+    }
+    
     if (remoteAudioRef.current) {
       remoteAudioRef.current.srcObject = null;
     }
     
-    // Reset state
-    callStateRef.current = {
+    callRef.current = {
       dmId: null,
-      peerConnection: null,
-      localStream: null,
       remoteUserId: null,
       role: null,
-      pendingOffer: null,
-      pendingIceCandidates: []
+      peer: null,
+      localStream: null,
+      incomingOffer: null,
+      pendingIce: []
     };
     
-    // Reset UI state
     setDmCallActive(false);
     setDmCallMuted(false);
     setCallStatus("idle");
@@ -1488,162 +1489,170 @@ export function App() {
     setIncomingCall(null);
   }
 
-  // Call signal polling - checks ALL DMs for incoming signals
+  // WebSocket connection for real-time call signals
   useEffect(() => {
     if (!accessToken || !me?.id || navMode !== "dms") return;
 
-    const timer = window.setInterval(async () => {
-      try {
-        for (const dm of dms) {
-          if (!dm.id) continue;
-          
-          const lastSignalId = lastDmCallSignalIdsRef.current.get(dm.id) || "";
-          const query = lastSignalId ? `?afterId=${encodeURIComponent(lastSignalId)}` : "";
-          const data = await api(`/v1/social/dms/${dm.id}/call-signals${query}`, {
-            headers: { Authorization: `Bearer ${accessToken}` }
-          }).catch(() => ({ signals: [] }));
+    const wsUrl = CORE_API.replace(/^https?/, "wss").replace(/^http/, "ws") + "/gateway";
+    const ws = new WebSocket(wsUrl);
+    let heartbeatInterval = null;
+    let reconnectTimeout = null;
 
-          for (const signal of data.signals || []) {
-            const dmProcessedIds = processedSignalIdsRef.current.get(dm.id) || new Set();
-            if (dmProcessedIds.has(signal.id)) continue;
-            dmProcessedIds.add(signal.id);
-            processedSignalIdsRef.current.set(dm.id, dmProcessedIds);
-            
-            lastDmCallSignalIdsRef.current.set(dm.id, signal.id);
-            if (!signal?.type || signal.fromUserId === me?.id) continue;
-
-            const callState = callStateRef.current;
-
-            // Handle OFFER: incoming call
-            if (signal.type === "offer") {
-              if (callState.dmId) continue;
-              // Ignore stale offers (e.g. from a previous missed call)
-              const createdAt = signal.createdAt ? new Date(signal.createdAt).getTime() : 0;
-              if (createdAt && Date.now() - createdAt > 45_000) continue;
-
-              callState.pendingOffer = {
-                offer: signal.payload.offer,
-                fromUserId: signal.fromUserId,
-                dmId: dm.id
-              };
-              
-              if (ringtoneStopRef.current) {
-                ringtoneStopRef.current();
-                ringtoneStopRef.current = null;
-              }
-              
-              setIncomingCall({
-                fromUserId: signal.fromUserId,
-                fromUsername: dm.name || "Unknown",
-                dmId: dm.id
-              });
-              setCallStatus("ringing");
-              ringtoneStopRef.current = playRingtone();
-              continue;
-            }
-
-            // Handle ANSWER: only if we're the caller for this DM
-            if (signal.type === "answer" && callState.dmId === dm.id && callState.role === "caller") {
-              if (!callState.peerConnection || !signal.payload?.answer) continue;
-              
-              try {
-                await callState.peerConnection.setRemoteDescription(
-                  new RTCSessionDescription(signal.payload.answer)
-                );
-                
-                // Add any pending ICE candidates
-                for (const candidate of callState.pendingIceCandidates) {
-                  try {
-                    await callState.peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
-                  } catch (err) {
-                    console.warn("Failed to add pending ICE candidate:", err);
-                  }
-                }
-                callState.pendingIceCandidates = [];
-                
-                setDmCallActive(true);
-                setCallStatus("active");
-                const dmObj = dms.find(d => d.id === dm.id);
-                setCallParticipants((prev) => {
-                  const exists = prev.find(p => p.id === signal.fromUserId);
-                  if (!exists) {
-                    return [...prev, { 
-                      id: signal.fromUserId, 
-                      username: dmObj?.name || dm.name || "Unknown", 
-                      muted: false 
-                    }];
-                  }
-                  return prev;
-                });
-              } catch (err) {
-                console.error("Failed to handle answer:", err);
-              }
-              continue;
-            }
-
-            // Handle ICE: only for active call
-            if (signal.type === "ice" && callState.dmId === dm.id && callState.peerConnection) {
-              const candidate = signal.payload?.candidate;
-              if (!candidate) continue;
-              
-              try {
-                if (callState.peerConnection.remoteDescription) {
-                  await callState.peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
-                } else {
-                  // Store for later
-                  callState.pendingIceCandidates.push(candidate);
-                }
-              } catch (err) {
-                console.warn("Failed to add ICE candidate:", err);
-              }
-              continue;
-            }
-
-            // Handle END: only for active call or incoming call, and only if signal is recent
-            if (signal.type === "end") {
-              const createdAt = signal.createdAt ? new Date(signal.createdAt).getTime() : 0;
-              if (createdAt && Date.now() - createdAt > 25_000) continue;
-              if (callState.dmId === dm.id || (incomingCall && incomingCall.dmId === dm.id)) {
-                cleanupCall();
-              }
-              continue;
-            }
-          }
-        }
-      } catch (err) {
-        console.error("Call signal polling error:", err);
+    const handleSignal = (signal) => {
+      if (!signal?.type || signal.fromUserId === me?.id) return;
+      
+      const call = callRef.current;
+      const signalAge = signal.createdAt ? Date.now() - new Date(signal.createdAt).getTime() : 0;
+      const dm = dms.find(d => d.id === signal.threadId);
+      
+      // OFFER: Incoming call
+      if (signal.type === "offer") {
+        if (call.dmId) return; // Already in a call
+        if (signalAge > 30_000) return; // Ignore stale offers
+        
+        call.incomingOffer = {
+          offer: signal.payload.offer,
+          fromUserId: signal.fromUserId,
+          dmId: signal.threadId
+        };
+        
+        stopRingtone();
+        setIncomingCall({
+          fromUserId: signal.fromUserId,
+          fromUsername: dm?.name || "Unknown",
+          dmId: signal.threadId
+        });
+        setCallStatus("ringing");
+        ringtoneStopRef.current = playRingtone();
+        return;
       }
-    }, 1000);
-
-    return () => {
-      window.clearInterval(timer);
-      if (ringtoneStopRef.current) {
-        ringtoneStopRef.current();
-        ringtoneStopRef.current = null;
+      
+      // Only process other signals if this is our active call
+      if (call.dmId !== signal.threadId) return;
+      
+      // ANSWER: Remote accepted our call
+      if (signal.type === "answer" && call.role === "caller" && call.peer && signal.payload?.answer) {
+        (async () => {
+          try {
+            await call.peer.setRemoteDescription(new RTCSessionDescription(signal.payload.answer));
+            for (const candidate of call.pendingIce) {
+              try {
+                await call.peer.addIceCandidate(new RTCIceCandidate(candidate));
+              } catch {}
+            }
+            call.pendingIce = [];
+            setDmCallActive(true);
+            setCallStatus("active");
+            const dmObj = dms.find(d => d.id === signal.threadId);
+            setCallParticipants(prev => {
+              if (prev.find(p => p.id === signal.fromUserId)) return prev;
+              return [...prev, { 
+                id: signal.fromUserId, 
+                username: dmObj?.name || "Unknown", 
+                muted: false 
+              }];
+            });
+          } catch (err) {
+            console.error("Answer handling failed:", err);
+          }
+        })();
+        return;
+      }
+      
+      // ICE: Add candidate
+      if (signal.type === "ice" && call.peer && signal.payload?.candidate) {
+        (async () => {
+          try {
+            if (call.peer.remoteDescription) {
+              await call.peer.addIceCandidate(new RTCIceCandidate(signal.payload.candidate));
+            } else {
+              call.pendingIce.push(signal.payload.candidate);
+            }
+          } catch {}
+        })();
+        return;
+      }
+      
+      // END: Remote hung up
+      if (signal.type === "end" && signalAge < 30_000) {
+        endCall(false);
+        return;
       }
     };
-  }, [accessToken, dms, me?.id, navMode, incomingCall]);
+
+    ws.onopen = () => {
+      ws.send(JSON.stringify({
+        op: "IDENTIFY",
+        d: { accessToken, deviceId: localStorage.getItem("deviceId") || undefined }
+      }));
+    };
+
+    ws.onmessage = (event) => {
+      try {
+        const msg = JSON.parse(event.data);
+        
+        if (msg.op === "HELLO") {
+          const interval = msg.d?.heartbeat_interval || 25000;
+          heartbeatInterval = window.setInterval(() => {
+            if (ws.readyState === WebSocket.OPEN) {
+              ws.send(JSON.stringify({ op: "HEARTBEAT" }));
+            }
+          }, interval);
+        }
+        
+        if (msg.op === "DISPATCH" && msg.t === "CALL_SIGNAL_CREATE") {
+          handleSignal(msg.d);
+        }
+      } catch (err) {
+        console.error("WebSocket message error:", err);
+      }
+    };
+
+    ws.onerror = (err) => {
+      console.error("WebSocket error:", err);
+    };
+
+    ws.onclose = () => {
+      if (heartbeatInterval) {
+        clearInterval(heartbeatInterval);
+        heartbeatInterval = null;
+      }
+      // Reconnect after 3 seconds
+      reconnectTimeout = window.setTimeout(() => {
+        if (accessToken && me?.id && navMode === "dms") {
+          // Trigger reconnect by re-running effect
+          setStatus("Reconnecting...");
+        }
+      }, 3000);
+    };
+
+    return () => {
+      ws.close();
+      if (heartbeatInterval) clearInterval(heartbeatInterval);
+      if (reconnectTimeout) clearTimeout(reconnectTimeout);
+      stopRingtone();
+    };
+  }, [accessToken, dms, me?.id, navMode]);
 
   async function startDmCall() {
     if (!activeDm?.participantId || !activeDmId) return;
     
-    const callState = callStateRef.current;
-    if (callState.dmId) {
+    const call = callRef.current;
+    if (call.dmId) {
       setStatus("Call already active.");
       return;
     }
     
     try {
-      cleanupCall();
-      // Claim caller state before any await so polling won't treat old offers as incoming
-      callState.dmId = activeDmId;
-      callState.remoteUserId = activeDm.participantId;
-      callState.role = "caller";
-      setIncomingCall(null);
-
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      endCall(false);
       
-      // Create peer connection
+      // Claim caller state immediately (before any async)
+      call.dmId = activeDmId;
+      call.remoteUserId = activeDm.participantId;
+      call.role = "caller";
+      setIncomingCall(null);
+      
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const peer = new RTCPeerConnection({ 
         iceServers: [
           { urls: "stun:stun.l.google.com:19302" },
@@ -1651,105 +1660,76 @@ export function App() {
         ] 
       });
       
-      // Add local tracks
-      stream.getTracks().forEach(track => peer.addTrack(track, stream));
+      stream.getTracks().forEach(t => peer.addTrack(t, stream));
       
-      // Handle remote track
-      peer.ontrack = (event) => {
+      peer.ontrack = (e) => {
         if (remoteAudioRef.current) {
-          remoteAudioRef.current.srcObject = event.streams[0];
+          remoteAudioRef.current.srcObject = e.streams[0];
         }
-        const dmObj = dms.find(d => d.id === callState.dmId);
-        setCallParticipants((prev) => {
-          const exists = prev.find(p => p.id === activeDm?.participantId);
-          if (!exists) {
-            return [...prev, { 
-              id: activeDm?.participantId, 
-              username: dmObj?.name || activeDm?.name || "Unknown", 
-              muted: false 
-            }];
-          }
-          return prev;
+        const dmObj = dms.find(d => d.id === call.dmId);
+        setCallParticipants(prev => {
+          if (prev.find(p => p.id === activeDm?.participantId)) return prev;
+          return [...prev, { 
+            id: activeDm?.participantId, 
+            username: dmObj?.name || activeDm?.name || "Unknown", 
+            muted: false 
+          }];
         });
       };
       
-      // Handle ICE candidates
-      peer.onicecandidate = (event) => {
-        if (event.candidate && callState.dmId && callState.remoteUserId) {
-          sendCallSignal("ice", { candidate: event.candidate }, callState.dmId, callState.remoteUserId);
+      peer.onicecandidate = (e) => {
+        if (e.candidate && call.dmId && call.remoteUserId) {
+          sendSignal("ice", { candidate: e.candidate }, call.dmId, call.remoteUserId);
         }
       };
       
-      // Handle connection state (don't end on "disconnected" – it can be transient during ICE)
       peer.onconnectionstatechange = () => {
         if (peer.connectionState === "failed" || peer.connectionState === "closed") {
           setStatus("Call connection lost.");
-          endDmCall(true);
+          endCall(true);
         } else if (peer.connectionState === "connected") {
           setCallStatus("active");
         }
       };
       
-      // Create and send offer
       const offer = await peer.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: false });
       await peer.setLocalDescription(offer);
       
-      // Update call state
-      callState.dmId = activeDmId;
-      callState.remoteUserId = activeDm.participantId;
-      callState.role = "caller";
-      callState.peerConnection = peer;
-      callState.localStream = stream;
+      call.peer = peer;
+      call.localStream = stream;
       
-      // Send offer signal
-      await sendCallSignal("offer", { offer }, activeDmId, activeDm.participantId);
+      await sendSignal("offer", { offer }, activeDmId, activeDm.participantId);
       
-      // Update UI
       setDmCallActive(true);
       setCallStatus("ringing");
       setCallParticipants([{ id: me?.id, username: me?.username || "You", muted: dmCallMuted }]);
       setStatus(`Calling ${activeDm?.name || "friend"}...`);
     } catch (err) {
-      console.error("Failed to start call:", err);
-      setStatus("Could not start DM voice call. Microphone permission may be blocked.");
-      cleanupCall();
+      console.error("Start call failed:", err);
+      setStatus("Could not start call. Microphone permission may be blocked.");
+      endCall(false);
     }
   }
 
   function endDmCall(notifyRemote = true) {
-    const callState = callStateRef.current;
-    
-    // Send end signal if we have an active call
-    if (notifyRemote && callState.dmId && callState.remoteUserId) {
-      sendCallSignal("end", {}, callState.dmId, callState.remoteUserId);
-    }
-    
-    cleanupCall();
+    endCall(notifyRemote);
   }
 
   async function acceptCall() {
-    const callState = callStateRef.current;
-    const pendingOffer = callState.pendingOffer;
+    const call = callRef.current;
+    const offer = call.incomingOffer;
     
-    if (!pendingOffer) {
+    if (!offer) {
       setIncomingCall(null);
       return;
     }
     
-    // Stop ringtone
-    if (ringtoneStopRef.current) {
-      ringtoneStopRef.current();
-      ringtoneStopRef.current = null;
-    }
+    stopRingtone();
     
     try {
-      // Clean up any existing call
-      cleanupCall();
+      endCall(false);
       
-      // Get user media
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      
-      // Create peer connection
       const peer = new RTCPeerConnection({ 
         iceServers: [
           { urls: "stun:stun.l.google.com:19302" },
@@ -1757,121 +1737,96 @@ export function App() {
         ] 
       });
       
-      // Add local tracks
-      stream.getTracks().forEach(track => peer.addTrack(track, stream));
+      stream.getTracks().forEach(t => peer.addTrack(t, stream));
       
-      // Handle remote track
-      peer.ontrack = (event) => {
+      peer.ontrack = (e) => {
         if (remoteAudioRef.current) {
-          remoteAudioRef.current.srcObject = event.streams[0];
+          remoteAudioRef.current.srcObject = e.streams[0];
         }
-        const dmObj = dms.find(d => d.id === callState.dmId);
-        setCallParticipants((prev) => {
-          const exists = prev.find(p => p.id === pendingOffer.fromUserId);
-          if (!exists) {
-            return [...prev, { 
-              id: pendingOffer.fromUserId, 
-              username: dmObj?.name || "Unknown", 
-              muted: false 
-            }];
-          }
-          return prev;
+        const dmObj = dms.find(d => d.id === call.dmId);
+        setCallParticipants(prev => {
+          if (prev.find(p => p.id === offer.fromUserId)) return prev;
+          return [...prev, { 
+            id: offer.fromUserId, 
+            username: dmObj?.name || "Unknown", 
+            muted: false 
+          }];
         });
       };
       
-      // Handle ICE candidates
-      peer.onicecandidate = (event) => {
-        if (event.candidate && callState.dmId && callState.remoteUserId) {
-          sendCallSignal("ice", { candidate: event.candidate }, callState.dmId, callState.remoteUserId);
+      peer.onicecandidate = (e) => {
+        if (e.candidate && call.dmId && call.remoteUserId) {
+          sendSignal("ice", { candidate: e.candidate }, call.dmId, call.remoteUserId);
         }
       };
       
-      // Handle connection state (don't end on "disconnected" – transient during ICE)
       peer.onconnectionstatechange = () => {
         if (peer.connectionState === "failed" || peer.connectionState === "closed") {
           setStatus("Call connection lost.");
-          endDmCall(true);
+          endCall(true);
         } else if (peer.connectionState === "connected") {
           setCallStatus("active");
         }
       };
       
-      // Set remote description (the offer)
-      await peer.setRemoteDescription(new RTCSessionDescription(pendingOffer.offer));
+      await peer.setRemoteDescription(new RTCSessionDescription(offer.offer));
       
-      // Add any pending ICE candidates
-      for (const candidate of callState.pendingIceCandidates) {
+      for (const candidate of call.pendingIce) {
         try {
           await peer.addIceCandidate(new RTCIceCandidate(candidate));
-        } catch (err) {
-          console.warn("Failed to add pending ICE candidate:", err);
-        }
+        } catch {}
       }
-      callState.pendingIceCandidates = [];
+      call.pendingIce = [];
       
-      // Create and send answer
       const answer = await peer.createAnswer();
       await peer.setLocalDescription(answer);
       
-      // Update call state
-      callState.dmId = pendingOffer.dmId;
-      callState.remoteUserId = pendingOffer.fromUserId;
-      callState.role = "callee";
-      callState.peerConnection = peer;
-      callState.localStream = stream;
-      callState.pendingOffer = null;
+      call.dmId = offer.dmId;
+      call.remoteUserId = offer.fromUserId;
+      call.role = "callee";
+      call.peer = peer;
+      call.localStream = stream;
+      call.incomingOffer = null;
       
-      // Send answer signal
-      await sendCallSignal("answer", { answer }, pendingOffer.dmId, pendingOffer.fromUserId);
+      await sendSignal("answer", { answer }, offer.dmId, offer.fromUserId);
       
-      // Update UI
-      const dmObj = dms.find(d => d.id === pendingOffer.dmId);
+      const dmObj = dms.find(d => d.id === offer.dmId);
       setDmCallActive(true);
       setCallStatus("active");
       setIncomingCall(null);
       setCallParticipants([
         { id: me?.id, username: me?.username || "You", muted: dmCallMuted },
-        { id: pendingOffer.fromUserId, username: dmObj?.name || "Unknown", muted: false }
+        { id: offer.fromUserId, username: dmObj?.name || "Unknown", muted: false }
       ]);
     } catch (err) {
-      console.error("Failed to accept call:", err);
-      setStatus("Could not accept DM call.");
-      cleanupCall();
+      console.error("Accept call failed:", err);
+      setStatus("Could not accept call.");
+      endCall(false);
     }
   }
 
   function declineCall() {
-    const callState = callStateRef.current;
+    stopRingtone();
     
-    // Stop ringtone
-    if (ringtoneStopRef.current) {
-      ringtoneStopRef.current();
-      ringtoneStopRef.current = null;
-    }
-    
-    // Send end signal if we have incoming call info
     if (incomingCall?.dmId && incomingCall?.fromUserId) {
-      sendCallSignal("end", {}, incomingCall.dmId, incomingCall.fromUserId);
+      sendSignal("end", {}, incomingCall.dmId, incomingCall.fromUserId);
     }
     
-    // Clean up
-    callState.pendingOffer = null;
+    callRef.current.incomingOffer = null;
     setIncomingCall(null);
     setCallStatus("idle");
   }
 
   function toggleDmCallMute() {
-    const callState = callStateRef.current;
-    const stream = callState.localStream;
+    const call = callRef.current;
+    const stream = call.localStream;
     if (!stream) return;
     
     const nextMuted = !dmCallMuted;
-    stream.getAudioTracks().forEach(track => {
-      track.enabled = !nextMuted;
-    });
+    stream.getAudioTracks().forEach(t => { t.enabled = !nextMuted; });
     
     setDmCallMuted(nextMuted);
-    setCallParticipants((prev) => 
+    setCallParticipants(prev => 
       prev.map(p => p.id === me?.id ? { ...p, muted: nextMuted } : p)
     );
   }
@@ -1959,7 +1914,7 @@ export function App() {
 
   return (
     <div className="opencom-shell">
-      {incomingCall && !(dmCallActive && callStateRef.current.role === "caller") && (
+      {incomingCall && !(dmCallActive && callRef.current.role === "caller") && (
         <div className="call-notification">
           <div className="call-notification-content">
             <div className="call-notification-info">
@@ -2049,8 +2004,8 @@ export function App() {
         {navMode === "dms" && (
           <section className="sidebar-block channels-container">
             {dms.map((dm) => {
-              const callState = callStateRef.current;
-              const isInCallWithThisDm = dmCallActive && callState.dmId === dm.id;
+              const call = callRef.current;
+              const isInCallWithThisDm = dmCallActive && call.dmId === dm.id;
               const hasIncomingCall = incomingCall && incomingCall.dmId === dm.id;
               return (
                 <button key={dm.id} className={`channel-row dm-sidebar-row ${dm.id === activeDmId ? "active" : ""}`} onClick={() => setActiveDmId(dm.id)} title={`DM ${dm.name}`} style={{ display: "flex", alignItems: "center", gap: "8px" }}>

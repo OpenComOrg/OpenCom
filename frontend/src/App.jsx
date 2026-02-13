@@ -751,7 +751,7 @@ export function App() {
       } catch {
         // keep UI stable if polling fails
       }
-    }, 3000);
+    }, 5000);
 
     return () => window.clearInterval(timer);
   }, [accessToken, navMode, activeDmId]);
@@ -1534,7 +1534,8 @@ export function App() {
       })();
       return;
     }
-    if (signal.type === "end" && signalAge < 30_000) endCall(false);
+    // Only process "end" if it's from the last 8s so an old end from a previous call doesn't kill the new one
+    if (signal.type === "end" && signalAge < 8_000) endCall(false);
   }
   handleCallSignalRef.current = handleCallSignal;
 
@@ -1580,13 +1581,11 @@ export function App() {
     };
   }, [accessToken, me?.id, gatewayReconnect]);
 
-  // Fallback: poll for call signals only when WebSocket is not open (e.g. WS failed or reconnecting)
+  // Call signals: poll every 3s when on DMs so calls work even if WebSocket never connects (e.g. proxy doesn't forward /gateway)
   useEffect(() => {
-    if (!accessToken || !me?.id || !dms?.length) return;
-    const isWsOpen = () => gatewayWsRef.current?.readyState === WebSocket.OPEN;
+    if (!accessToken || !me?.id || navMode !== "dms" || !dms?.length) return;
 
     const poll = async () => {
-      if (isWsOpen()) return; // Prefer WebSocket
       try {
         for (const dm of dms) {
           if (!dm.id) continue;
@@ -1606,9 +1605,10 @@ export function App() {
       } catch (err) { console.error("Call signal poll error:", err); }
     };
 
-    const timer = setInterval(poll, 2000);
+    poll();
+    const timer = setInterval(poll, 3000);
     return () => clearInterval(timer);
-  }, [accessToken, dms, me?.id]);
+  }, [accessToken, dms, me?.id, navMode]);
 
   async function startDmCall() {
     if (!activeDm?.participantId || !activeDmId) return;
@@ -1660,11 +1660,13 @@ export function App() {
       };
       
       peer.onconnectionstatechange = () => {
-        if (peer.connectionState === "failed" || peer.connectionState === "closed") {
-          setStatus("Call connection lost.");
+        if (peer.connectionState === "closed") {
+          setStatus("Call ended.");
           endCall(true);
         } else if (peer.connectionState === "connected") {
           setCallStatus("active");
+        } else if (peer.connectionState === "failed") {
+          setStatus("Connection problem – try hanging up and calling again.");
         }
       };
       
@@ -1737,15 +1739,17 @@ export function App() {
       };
       
       peer.onconnectionstatechange = () => {
-        if (peer.connectionState === "failed" || peer.connectionState === "closed") {
-          setStatus("Call connection lost.");
+        if (peer.connectionState === "closed") {
+          setStatus("Call ended.");
           endCall(true);
         } else if (peer.connectionState === "connected") {
           setCallStatus("active");
+        } else if (peer.connectionState === "failed") {
+          setStatus("Connection problem – try hanging up and calling again.");
         }
       };
-      
-      await peer.setRemoteDescription(new RTCSessionDescription(offer.offer));
+
+        await peer.setRemoteDescription(new RTCSessionDescription(offer.offer));
       
       for (const candidate of call.pendingIce) {
         try {

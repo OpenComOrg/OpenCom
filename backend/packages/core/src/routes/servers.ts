@@ -71,13 +71,18 @@ async function ensureDefaultGuildOnServerNode(serverId: string, serverName: stri
 }
 
 export async function serverRoutes(app: FastifyInstance) {
-  // Create one server per user hosted on the platform's official node (no baseUrl needed)
+  // Create one server per user hosted on the platform's official node (no baseUrl needed).
+  // Validate all config and quota before writing anything to DB.
   app.post("/v1/servers/official", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
     const userId = req.user.sub as string;
     const body = parseBody(CreateOfficialServer, req.body);
 
     if (!OFFICIAL_NODE_BASE_URL) {
       return rep.code(503).send({ error: "OFFICIAL_SERVER_UNAVAILABLE" });
+    }
+    if (!OFFICIAL_NODE_SERVER_ID) {
+      app.log.warn("OFFICIAL_NODE_SERVER_ID is not set; set it to the same value as NODE_SERVER_ID on the official node");
+      return rep.code(503).send({ error: "OFFICIAL_SERVER_NOT_CONFIGURED" });
     }
 
     const platformRole = await getPlatformRole(userId);
@@ -89,26 +94,22 @@ export async function serverRoutes(app: FastifyInstance) {
     }
 
     const id = ulidLike();
-    await q(`INSERT INTO servers (id,name,base_url,owner_user_id) VALUES (:id,:name,:baseUrl,:userId)`,
-      { id, name: body.name, baseUrl: OFFICIAL_NODE_BASE_URL, userId }
-    );
-    await q(`INSERT INTO memberships (server_id,user_id,roles) VALUES (:id,:userId,:roles)`,
-      { id, userId, roles: JSON.stringify(["owner"]) }
-    );
-
-    if (!OFFICIAL_NODE_SERVER_ID) {
-      app.log.warn("OFFICIAL_NODE_SERVER_ID is not set; set it to the same value as NODE_SERVER_ID on the official node");
-      await q(`DELETE FROM memberships WHERE server_id=:id`, { id });
-      await q(`DELETE FROM servers WHERE id=:id`, { id });
-      return rep.code(503).send({ error: "OFFICIAL_SERVER_NOT_CONFIGURED" });
-    }
     try {
+      await q(`INSERT INTO servers (id,name,base_url,owner_user_id) VALUES (:id,:name,:baseUrl,:userId)`,
+        { id, name: body.name, baseUrl: OFFICIAL_NODE_BASE_URL, userId }
+      );
+      await q(`INSERT INTO memberships (server_id,user_id,roles) VALUES (:id,:userId,:roles)`,
+        { id, userId, roles: JSON.stringify(["owner"]) }
+      );
       await ensureDefaultGuildOnServerNode(id, body.name, OFFICIAL_NODE_BASE_URL, userId, OFFICIAL_NODE_SERVER_ID);
     } catch (error: any) {
-      app.log.error({ err: error, serverId: id }, "Failed to create default guild on official node");
-      await q(`DELETE FROM memberships WHERE server_id=:id`, { id });
-      await q(`DELETE FROM servers WHERE id=:id`, { id });
-      return rep.code(502).send({ error: "DEFAULT_GUILD_CREATE_FAILED" });
+      if (error.message?.startsWith("DEFAULT_GUILD_CREATE_FAILED_")) {
+        app.log.error({ err: error, serverId: id }, "Failed to create default guild on official node");
+        await q(`DELETE FROM memberships WHERE server_id=:id`, { id }).catch(() => {});
+        await q(`DELETE FROM servers WHERE id=:id`, { id }).catch(() => {});
+        return rep.code(502).send({ error: "DEFAULT_GUILD_CREATE_FAILED" });
+      }
+      throw error;
     }
 
     return rep.send({ serverId: id });
@@ -146,26 +147,19 @@ export async function serverRoutes(app: FastifyInstance) {
     return rep.send({ serverId: id });
   });
 
+  // Only return servers this user is a member of.
   app.get("/v1/servers", { preHandler: [app.authenticate] } as any, async (req: any) => {
     const userId = req.user.sub as string;
     const platformRole = await getPlatformRole(userId);
 
-    const rows = platformRole === "user"
-      ? await q<{ id: string; name: string; base_url: string; roles: string }>(
-        `SELECT s.id, s.name, s.base_url, m.roles
-         FROM memberships m
-         JOIN servers s ON s.id=m.server_id
-         WHERE m.user_id=:userId
-         ORDER BY s.created_at DESC`,
-        { userId }
-      )
-      : await q<{ id: string; name: string; base_url: string; roles: string }>(
-        `SELECT s.id, s.name, s.base_url,
-                COALESCE((SELECT m.roles FROM memberships m WHERE m.server_id=s.id AND m.user_id=:userId LIMIT 1), '[]') AS roles
-         FROM servers s
-         ORDER BY s.created_at DESC`,
-        { userId }
-      );
+    const rows = await q<{ id: string; name: string; base_url: string; roles: string }>(
+      `SELECT s.id, s.name, s.base_url, m.roles
+       FROM memberships m
+       JOIN servers s ON s.id = m.server_id
+       WHERE m.user_id = :userId
+       ORDER BY s.created_at DESC`,
+      { userId }
+    );
 
     const servers = await Promise.all(rows.map(async (r) => {
       const membershipRoles = Array.isArray(r.roles) ? r.roles : JSON.parse(r.roles || "[]");

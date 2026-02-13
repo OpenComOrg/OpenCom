@@ -5,9 +5,18 @@ import { q } from "../db.js";
 import { DEFAULT_EVERYONE_PERMS } from "../permissions/defaults.js";
 
 export async function guildRoutes(app: FastifyInstance) {
-  // List all guilds (admin-ish; you can remove later)
-  app.get("/v1/guilds", async () => {
-    return q(`SELECT id,name,owner_user_id,created_at FROM guilds ORDER BY created_at DESC`);
+  // List only guilds the authenticated user is a member of (or owns).
+  app.get("/v1/guilds", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
+    const userId = req.auth.userId as string;
+    const guilds = await q<{ id: string; name: string; owner_user_id: string; created_at: string }>(
+      `SELECT g.id, g.name, g.owner_user_id, g.created_at
+       FROM guilds g
+       LEFT JOIN guild_members gm ON gm.guild_id = g.id AND gm.user_id = :userId
+       WHERE g.owner_user_id = :userId OR gm.user_id = :userId
+       ORDER BY g.created_at DESC`,
+      { userId }
+    );
+    return rep.send(guilds);
   });
 
   // Create guild (auth required)

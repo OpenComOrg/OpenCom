@@ -206,6 +206,14 @@ export function App() {
   const [replyTarget, setReplyTarget] = useState(null);
   const [memberProfileCard, setMemberProfileCard] = useState(null);
   const [themeCss, setThemeCss, themeEnabled, setThemeEnabled] = useThemeCss();
+  
+  const [securitySettings, setSecuritySettings] = useState({ twoFactorEnabled: false });
+  const [showPasswordChange, setShowPasswordChange] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [activeSessions, setActiveSessions] = useState([{ id: "current", device: "Current Device", location: "Your Location", lastActive: "Now", status: "active" }]);
+  const [lastLoginInfo, setLastLoginInfo] = useState({ date: new Date().toISOString(), device: "Current Device", location: "Your Location" });
 
   const messagesRef = useRef(null);
   const composerInputRef = useRef(null);
@@ -1306,10 +1314,11 @@ export function App() {
               <option value="invisible">Invisible</option>
             </select>
             <div className="user-controls">
-              <button className={`icon-btn ${isMuted ? "danger" : "ghost"}`} onClick={() => setIsMuted((value) => !value)}>{isMuted ? "🎙️" : "🎤"}</button>
-              <button className={`icon-btn ${isDeafened ? "danger" : "ghost"}`} onClick={() => setIsDeafened((value) => !value)}>{isDeafened ? "🔇" : "🎧"}</button>
-              <button className="icon-btn ghost" onClick={() => { setSettingsOpen(true); setSettingsTab("profile"); }}>⚙️</button>
-              <button className="icon-btn danger" onClick={() => { setAccessToken(""); setServers([]); setGuildState(null); setMessages([]); }}>⎋</button>
+              <button className={`icon-btn ${isMuted ? "danger" : "ghost"}`} onClick={() => setIsMuted((value) => !value)} title={isMuted ? "Unmute" : "Mute"}>{isMuted ? "🎙️" : "🎤"}</button>
+              <button className={`icon-btn ${isDeafened ? "danger" : "ghost"}`} onClick={() => setIsDeafened((value) => !value)} title={isDeafened ? "Undeafen" : "Deafen"}>{isDeafened ? "🔇" : "🎧"}</button>
+              <button className="icon-btn ghost" onClick={() => { setSettingsOpen(true); setSettingsTab("security"); }} title="Security Settings">🔒</button>
+              <button className="icon-btn ghost" onClick={() => { setSettingsOpen(true); setSettingsTab("profile"); }} title="Profile Settings">⚙️</button>
+              <button className="icon-btn danger" onClick={() => { setAccessToken(""); setServers([]); setGuildState(null); setMessages([]); }} title="Logout">🚪</button>
             </div>
           </div>
         </footer>
@@ -1589,6 +1598,7 @@ export function App() {
             <aside className="settings-nav">
               <h3>Settings</h3>
               <button className={settingsTab === "profile" ? "active" : "ghost"} onClick={() => setSettingsTab("profile")}>Profile</button>
+              <button className={settingsTab === "security" ? "active" : "ghost"} onClick={() => setSettingsTab("security")}>🔒 Security</button>
               <button className={settingsTab === "server" ? "active" : "ghost"} onClick={() => setSettingsTab("server")}>Server</button>
               <button className={settingsTab === "roles" ? "active" : "ghost"} onClick={() => setSettingsTab("roles")}>Roles</button>
               <button className={settingsTab === "invites" ? "active" : "ghost"} onClick={() => setSettingsTab("invites")}>Invites</button>
@@ -1608,6 +1618,77 @@ export function App() {
                   <label>Upload Banner<input type="file" accept="image/*" onChange={onBannerUpload} /></label>
                   <button onClick={saveProfile}>Save Profile</button>
                 </div>
+              )}
+
+              {settingsTab === "security" && (
+                <>
+                  <section className="card security-card">
+                    <h4>🔐 Account Security</h4>
+                    <div className="security-info">
+                      <p className="hint">Last login: {new Date(lastLoginInfo.date).toLocaleString()}</p>
+                      <p className="hint">Device: {lastLoginInfo.device}</p>
+                    </div>
+                  </section>
+
+                  <section className="card security-card">
+                    <h4>🔑 Change Password</h4>
+                    {!showPasswordChange ? (
+                      <button onClick={() => setShowPasswordChange(true)}>Change Password</button>
+                    ) : (
+                      <>
+                        <label>Current Password<input type="password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} /></label>
+                        <label>New Password<input type="password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} /></label>
+                        <label>Confirm Password<input type="password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} /></label>
+                        <div className="row-actions">
+                          <button className="ghost" onClick={() => { setShowPasswordChange(false); setCurrentPassword(""); setNewPassword(""); setConfirmPassword(""); }}>Cancel</button>
+                          <button onClick={() => { if (newPassword === confirmPassword && newPassword.length >= 8) { setStatus("Password would be updated."); setShowPasswordChange(false); setCurrentPassword(""); setNewPassword(""); setConfirmPassword(""); } else if (newPassword.length < 8) setStatus("Password must be at least 8 characters."); else setStatus("Passwords do not match."); }}>Update Password</button>
+                        </div>
+                      </>
+                    )}
+                  </section>
+
+                  <section className="card security-card">
+                    <h4>🛡️ Two-Factor Authentication</h4>
+                    <p className="hint">Secure your account with an additional authentication layer</p>
+                    <label><input type="checkbox" checked={securitySettings.twoFactorEnabled} onChange={(event) => setSecuritySettings((current) => ({ ...current, twoFactorEnabled: event.target.checked }))} /> Enable 2FA</label>
+                    {securitySettings.twoFactorEnabled && (
+                      <>
+                        <p className="hint" style={{ marginTop: "var(--space-sm)" }}>Scan this QR code with an authenticator app:</p>
+                        <div style={{ background: "#fff", padding: "1em", borderRadius: "var(--radius)", display: "grid", placeItems: "center", lineHeight: 0, marginBottom: "var(--space-sm)" }}>█░█░█░█░█ (QR code placeholder)</div>
+                        <p className="hint"><strong>Backup codes:</strong> Save these in a secure place</p>
+                        <code style={{ display: "block", background: "var(--bg-input)", padding: "var(--space-sm)", borderRadius: "calc(var(--radius)*0.8)", fontSize: "0.85em", marginBottom: "var(--space-sm)", whiteSpace: "pre-wrap", wordBreak: "break-all" }}>XXXX-XXXX XXXX-XXXX XXXX-XXXX XXXX-XXXX</code>
+                      </>
+                    )}
+                  </section>
+
+                  <section className="card security-card">
+                    <h4>📱 Active Sessions</h4>
+                    <p className="hint">Devices where you're logged in. Sign out of any session you don't recognize.</p>
+                    {activeSessions.map((session) => (
+                      <div key={session.id} className="session-item">
+                        <div className="session-info">
+                          <strong>{session.device}</strong>
+                          <span className="hint">{session.location}</span>
+                          <span className="hint">Last active: {session.lastActive}</span>
+                        </div>
+                        <button className={session.status === "active" ? "ghost" : "danger"} onClick={() => setStatus(`Session ${session.device} would be signed out.`)}>{session.status === "active" ? "Current" : "Sign Out"}</button>
+                      </div>
+                    ))}
+                  </section>
+
+                  <section className="card security-card danger-card">
+                    <h4>⚠️ Danger Zone</h4>
+                    <p className="hint">Irreversible actions. Proceed with caution.</p>
+                    <button className="danger" onClick={() => { if (window.confirm("Are you absolutely sure? This cannot be undone.")) setStatus("Account deletion request submitted for review."); }}>Delete Account Permanently</button>
+                  </section>
+
+                  <section className="card">
+                    <h4>Security Privacy</h4>
+                    <label><input type="checkbox" /> Log out of all other sessions</label>
+                    <label><input type="checkbox" /> Show security alerts</label>
+                    <button onClick={() => setStatus("Privacy settings saved.")}>Save Security Settings</button>
+                  </section>
+                </>
               )}
 
               {settingsTab === "server" && (

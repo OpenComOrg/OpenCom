@@ -236,6 +236,8 @@ export function App() {
   const [messageContextMenu, setMessageContextMenu] = useState(null);
   const [replyTarget, setReplyTarget] = useState(null);
   const [memberProfileCard, setMemberProfileCard] = useState(null);
+  const [userCache, setUserCache] = useState({});
+  const userCacheFetchingRef = useRef(new Set());
   const [themeCss, setThemeCss, themeEnabled, setThemeEnabled] = useThemeCss();
   const [sessions, setSessions] = useState([]);
   const [passwordForm, setPasswordForm] = useState({ current: "", new: "", confirm: "" });
@@ -262,6 +264,57 @@ export function App() {
   const previousDmIdRef = useRef("");
   const profileCardDragOffsetRef = useRef({ x: 0, y: 0 });
   const storageScope = me?.id || "anonymous";
+
+  // Resolve usernames and profile pictures from core for guild members and message authors
+  useEffect(() => {
+    if (!accessToken) return;
+    const ids = new Set();
+    (guildState?.members || []).forEach((m) => m.id && ids.add(m.id));
+    messages.forEach((msg) => {
+      const id = msg.author_id || msg.authorId;
+      if (id) ids.add(id);
+    });
+    if (me?.id) ids.add(me.id);
+    const toFetch = [...ids].filter((id) => !userCache[id] && !userCacheFetchingRef.current.has(id));
+    if (toFetch.length === 0) return;
+    toFetch.forEach((id) => userCacheFetchingRef.current.add(id));
+    Promise.all(
+      toFetch.map((id) =>
+        fetch(`${CORE_API}/v1/users/${id}/profile`, { headers: { Authorization: `Bearer ${accessToken}` } })
+          .then((r) => (r.ok ? r.json() : null))
+          .catch(() => null)
+      )
+    ).then((results) => {
+      toFetch.forEach((id) => userCacheFetchingRef.current.delete(id));
+      setUserCache((prev) => {
+        const next = { ...prev };
+        toFetch.forEach((id, i) => {
+          const data = results[i];
+          if (data && (data.username != null || data.displayName != null || data.pfpUrl != null)) {
+            next[id] = {
+              username: data.username ?? data.displayName ?? id,
+              displayName: data.displayName ?? data.username ?? id,
+              pfpUrl: data.pfpUrl ?? null
+            };
+          }
+        });
+        return next;
+      });
+    });
+  }, [accessToken, guildState?.members, messages, me?.id]);
+
+  // Seed current user into cache when we have profile
+  useEffect(() => {
+    if (!me?.id || !profile) return;
+    setUserCache((prev) => ({
+      ...prev,
+      [me.id]: {
+        username: profile.username ?? me.username ?? me.id,
+        displayName: profile.displayName ?? profile.username ?? me.username ?? me.id,
+        pfpUrl: profile.pfpUrl ?? null
+      }
+    }));
+  }, [me?.id, me?.username, profile?.username, profile?.displayName, profile?.pfpUrl]);
 
   const activeServer = useMemo(() => servers.find((server) => server.id === activeServerId) || null, [servers, activeServerId]);
   const activeGuild = useMemo(() => guilds.find((guild) => guild.id === activeGuildId) || null, [guilds, activeGuildId]);
@@ -291,17 +344,26 @@ export function App() {
     for (const message of messages) {
       const id = message.author_id || message.authorId;
       if (!id || members.has(id)) continue;
-      members.set(id, { id, username: message.username || id, status: "online", pfp_url: message.pfp_url || null });
+      members.set(id, { id, username: message.username || id, status: "online", pfp_url: message.pfp_url || null, roleIds: [] });
     }
 
     if (me?.id && !members.has(me.id)) {
-      members.set(me.id, { id: me.id, username: me.username || me.id, status: "online", pfp_url: profile?.pfpUrl || null });
+      members.set(me.id, { id: me.id, username: me.username || me.id, status: "online", pfp_url: profile?.pfpUrl || null, roleIds: guildState?.me?.roleIds || [] });
     }
 
     return Array.from(members.values());
   }, [guildState, messages, me, profile]);
 
-  const memberNameById = useMemo(() => new Map(memberList.map((member) => [member.id, member.username])), [memberList]);
+  const resolvedMemberList = useMemo(() =>
+    memberList.map((m) => ({
+      ...m,
+      username: userCache[m.id]?.displayName || userCache[m.id]?.username || m.username,
+      pfp_url: userCache[m.id]?.pfpUrl ?? m.pfp_url
+    })),
+    [memberList, userCache]
+  );
+
+  const memberNameById = useMemo(() => new Map(resolvedMemberList.map((member) => [member.id, member.username])), [resolvedMemberList]);
 
   const groupedChannelSections = useMemo(() => {
     const categories = categoryChannels.map((category) => ({
@@ -325,8 +387,11 @@ export function App() {
     },
     (message) => message.created_at || message.createdAt,
     (message) => message.author_id || message.authorId || "unknown",
-    (message) => message.pfp_url || null
-  ), [messages, memberNameById]);
+    (message) => {
+      const id = message.author_id || message.authorId;
+      return userCache[id]?.pfpUrl ?? message.pfp_url ?? null;
+    }
+  ), [messages, memberNameById, userCache]);
 
   const groupedDmMessages = useMemo(() => groupMessages(
     activeDm?.messages || [],
@@ -1287,6 +1352,25 @@ export function App() {
     }
   }
 
+  async function updateRole(roleId, { color, position }) {
+    if (!activeServer || !roleId) return;
+    try {
+      const body = {};
+      if (color !== undefined) body.color = typeof color === "string" && color.startsWith("#") ? parseInt(color.slice(1), 16) : color;
+      if (position !== undefined) body.position = position;
+      if (Object.keys(body).length === 0) return;
+      await nodeApi(activeServer.baseUrl, `/v1/roles/${roleId}`, activeServer.membershipToken, {
+        method: "PATCH",
+        body: JSON.stringify(body)
+      });
+      const state = await nodeApi(activeServer.baseUrl, `/v1/guilds/${activeGuildId}/state`, activeServer.membershipToken);
+      setGuildState(state);
+      setStatus("Role updated.");
+    } catch (error) {
+      setStatus(`Update role failed: ${error.message}`);
+    }
+  }
+
   function startDraggingProfileCard(event) {
     event.preventDefault();
     profileCardDragOffsetRef.current = {
@@ -1495,6 +1579,14 @@ export function App() {
       const profileData = await api(`/v1/users/${member.id}/profile`, {
         headers: { Authorization: `Bearer ${accessToken}` }
       });
+      setUserCache((prev) => ({
+        ...prev,
+        [member.id]: {
+          username: profileData.username ?? prev[member.id]?.username ?? member.username,
+          displayName: profileData.displayName ?? profileData.username ?? member.username,
+          pfpUrl: profileData.pfpUrl ?? null
+        }
+      }));
       setMemberProfileCard({
         ...profileData,
         username: profileData.username || member.username,
@@ -1736,7 +1828,12 @@ export function App() {
               )}
 
               <div className="messages" ref={messagesRef}>
-                {groupedServerMessages.map((group) => (
+                {groupedServerMessages.map((group) => {
+                  const member = resolvedMemberList.find((m) => m.id === group.authorId);
+                  const roles = (guildState?.roles || []).filter((r) => (member?.roleIds || []).includes(r.id)).sort((a, b) => (b.position ?? 0) - (a.position ?? 0));
+                  const topRole = roles[0];
+                  const roleColor = topRole?.color != null && topRole.color !== "" ? (typeof topRole.color === "number" ? `#${Number(topRole.color).toString(16).padStart(6, "0")}` : topRole.color) : null;
+                  return (
                   <article key={group.id} className="msg grouped-msg">
                     <div className="msg-avatar">
                       {group.pfpUrl ? (
@@ -1747,7 +1844,8 @@ export function App() {
                     </div>
                     <div className="msg-body">
                       <strong className="msg-author">
-                        <button className="name-btn" onClick={() => openMemberProfile({ id: group.authorId, username: group.author, status: "online", pfp_url: group.pfpUrl })}>{group.author}</button>
+                        <button className="name-btn" style={roleColor ? { color: roleColor } : undefined} onClick={() => openMemberProfile({ id: group.authorId, username: group.author, status: "online", pfp_url: group.pfpUrl })}>{group.author}</button>
+                        {topRole && <span className="msg-role-tag">{topRole.name}</span>}
                         <span className="msg-time">{formatMessageTime(group.firstMessageTime)}</span>
                       </strong>
                       {group.messages.map((message) => (
@@ -1763,7 +1861,8 @@ export function App() {
                       ))}
                     </div>
                   </article>
-                ))}
+                  );
+                })}
                 {!messages.length && <p className="empty">No messages yet. Start the conversation.</p>}
               </div>
 
@@ -1783,21 +1882,27 @@ export function App() {
             </section>
 
             <aside className="members-pane">
-              <h4>Online — {memberList.length}</h4>
-              {memberList.map((member) => (
-                <button className="member-row" key={member.id} title={`View ${member.username}`} onClick={(event) => { event.stopPropagation(); openMemberProfile(member); }}>
-                  {member.pfp_url ? (
-                    <img src={profileImageUrl(member.pfp_url)} alt={member.username} className="avatar member-avatar" style={{ objectFit: "cover" }} />
-                  ) : (
-                    <div className="avatar member-avatar">{getInitials(member.username)}</div>
-                  )}
-                  <div>
-                    <strong>{member.username}</strong>
-                    <span>{member.id === me?.id ? selfStatus : member.status}</span>
-                  </div>
-                </button>
-              ))}
-              {!memberList.length && <p className="hint">No visible members yet.</p>}
+              <h4>Online — {resolvedMemberList.length}</h4>
+              {resolvedMemberList.map((member) => {
+                const roles = (guildState?.roles || []).filter((r) => (member.roleIds || []).includes(r.id)).sort((a, b) => (b.position ?? 0) - (a.position ?? 0));
+                const topRole = roles[0];
+                const roleColor = topRole?.color != null && topRole.color !== "" ? (typeof topRole.color === "number" ? `#${Number(topRole.color).toString(16).padStart(6, "0")}` : topRole.color) : null;
+                return (
+                  <button className="member-row" key={member.id} title={`View ${member.username}`} onClick={(event) => { event.stopPropagation(); openMemberProfile(member); }}>
+                    {member.pfp_url ? (
+                      <img src={profileImageUrl(member.pfp_url)} alt={member.username} className="avatar member-avatar" style={{ objectFit: "cover" }} />
+                    ) : (
+                      <div className="avatar member-avatar">{getInitials(member.username)}</div>
+                    )}
+                    <div>
+                      <strong style={roleColor ? { color: roleColor } : undefined}>{member.username}</strong>
+                      {topRole && <span className="member-role-tag">{topRole.name}</span>}
+                      <span>{member.id === me?.id ? selfStatus : member.status}</span>
+                    </div>
+                  </button>
+                );
+              })}
+              {!resolvedMemberList.length && <p className="hint">No visible members yet.</p>}
             </aside>
           </div>
         )}
@@ -2125,10 +2230,27 @@ export function App() {
                   </section>
 
                   <section className="card">
+                    <h4>Edit Roles (colour & hierarchy)</h4>
+                    <p className="hint">Higher position = higher in the list. Colours show in member list and chat.</p>
+                    <ul className="role-edit-list">
+                      {(guildState?.roles || []).filter((r) => !r.is_everyone).sort((a, b) => (b.position ?? 0) - (a.position ?? 0)).map((role) => {
+                        const hexColor = role.color != null && role.color !== "" ? (typeof role.color === "number" ? `#${Number(role.color).toString(16).padStart(6, "0")}` : role.color) : "#99aab5";
+                        return (
+                          <li key={role.id} className="role-edit-row">
+                            <span className="role-edit-name" style={{ color: hexColor }}>{role.name}</span>
+                            <input type="color" value={hexColor} onChange={(e) => updateRole(role.id, { color: e.target.value })} title="Role colour" />
+                            <label>Position <input type="number" min={0} value={role.position ?? 0} onChange={(e) => updateRole(role.id, { position: parseInt(e.target.value, 10) || 0 })} /></label>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </section>
+
+                  <section className="card">
                     <h4>Assign Role</h4>
                     <select value={selectedMemberId} onChange={(event) => setSelectedMemberId(event.target.value)}>
                       <option value="">Select member</option>
-                      {memberList.map((member) => <option key={member.id} value={member.id}>{member.username}</option>)}
+                      {resolvedMemberList.map((member) => <option key={member.id} value={member.id}>{member.username}</option>)}
                     </select>
                     <select value={selectedRoleId} onChange={(event) => setSelectedRoleId(event.target.value)}>
                       <option value="">Select role</option>

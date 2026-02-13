@@ -64,6 +64,7 @@ export async function roleRoutes(
     const body = z.object({
       name: z.string().min(1).max(64).optional(),
       color: z.number().int().nonnegative().nullable().optional(),
+      position: z.number().int().min(0).optional(),
       permissions: z.string().regex(/^\d+$/).optional()
     }).parse(req.body);
 
@@ -80,6 +81,7 @@ export async function roleRoutes(
       `UPDATE roles SET
         name = COALESCE(:name, name),
         color = CASE WHEN :colorSet=1 THEN :color ELSE color END,
+        position = CASE WHEN :positionSet=1 THEN :position ELSE position END,
         permissions = COALESCE(:permissions, permissions)
        WHERE id=:roleId`,
       {
@@ -87,6 +89,8 @@ export async function roleRoutes(
         name: body.name ?? null,
         colorSet: body.color !== undefined ? 1 : 0,
         color: body.color ?? null,
+        positionSet: body.position !== undefined ? 1 : 0,
+        position: body.position ?? null,
         permissions: body.permissions ?? null
       }
     );

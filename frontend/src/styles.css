@@ -751,7 +751,14 @@ button.danger { background: linear-gradient(135deg, #eb5d73, #c84159); }
 }
 .member-row:hover { background: rgba(132, 165, 255, 0.15); transform: translateX(1px);}
 .member-row span { color: var(--text-dim); display: block; font-size: 0.85em;}
+.member-row .member-role-tag { display: inline-block; margin-left: 0.35em; font-size: 0.75em; font-weight: 500; color: var(--text-dim);}
 .member-avatar { width: clamp(20px, 2vw, 34px); height: clamp(20px, 2vw, 34px);}
+.msg-role-tag { margin-left: 0.35em; font-size: 0.8em; font-weight: 500; color: var(--text-dim);}
+.role-edit-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: var(--space-xs);}
+.role-edit-row { display: flex; align-items: center; gap: var(--space-sm); flex-wrap: wrap;}
+.role-edit-row .role-edit-name { font-weight: 600; min-width: 100px;}
+.role-edit-row input[type="color"] { width: 28px; height: 28px; padding: 2px; cursor: pointer; border-radius: 4px;}
+.role-edit-row input[type="number"] { width: 4em;}
 
 .friends-surface {
   display: grid;

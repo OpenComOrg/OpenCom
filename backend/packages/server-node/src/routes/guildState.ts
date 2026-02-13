@@ -51,6 +51,16 @@ export async function guildStateRoutes(app: FastifyInstance) {
       { guildId }
     );
 
+    const memberRoleRows = await q<{ user_id: string; role_id: string }>(
+      `SELECT user_id, role_id FROM member_roles WHERE guild_id=:guildId`,
+      { guildId }
+    );
+    const roleIdsByUser = new Map<string, string[]>();
+    for (const row of memberRoleRows) {
+      if (!roleIdsByUser.has(row.user_id)) roleIdsByUser.set(row.user_id, []);
+      roleIdsByUser.get(row.user_id)!.push(row.role_id);
+    }
+
     return rep.send({
       guild,
       channels,
@@ -60,7 +70,8 @@ export async function guildStateRoutes(app: FastifyInstance) {
         id: member.user_id,
         username: member.nick || member.user_id,
         pfp_url: null,
-        status: "online"
+        status: "online",
+        roleIds: roleIdsByUser.get(member.user_id) || []
       })),
       me: { userId, roleIds: myRoleIds.map(r => r.role_id) }
     });

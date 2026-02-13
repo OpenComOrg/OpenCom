@@ -7,7 +7,7 @@ import { saveProfileImage, deleteProfileImage, parseBase64Image } from "../stora
 import fs from "node:fs";
 import path from "node:path";
 
-const imageValue = z.string().max(2_000_000).refine((value) => {
+const imageValue = z.string().max(6_000_000).refine((value) => {
   if (/^https?:\/\//i.test(value)) return true;
   if (/^data:image\/[a-zA-Z0-9.+-]+;base64,/i.test(value)) return true;
   return false;
@@ -19,6 +19,15 @@ const UpdateProfile = z.object({
   pfpUrl: imageValue.nullable().optional(),
   bannerUrl: imageValue.nullable().optional()
 });
+
+/** Extract relative path (users/userId/filename) from stored URL for deleteProfileImage */
+function relPathFromStoredUrl(stored: string | null): string | null {
+  if (!stored || stored.startsWith("http")) return null;
+  const base = env.PROFILE_IMAGE_BASE_URL.replace(/\/$/, "");
+  if (stored.startsWith(base + "/")) return stored.slice(base.length).replace(/^\//, "") || null;
+  if (stored.startsWith("users/")) return stored;
+  return null;
+}
 
 export async function profileRoutes(app: FastifyInstance) {
   // Serve stored profile images: /v1/profile-images/users/{userId}/{filename}
@@ -60,7 +69,7 @@ export async function profileRoutes(app: FastifyInstance) {
     const { id } = z.object({ id: z.string().min(3) }).parse(req.params);
 
     const u = await q<any>(
-      `SELECT id, username, display_name, bio, pfp_url, banner_url FROM users WHERE id=:id`,
+      `SELECT id, username, display_name, bio, pfp_url, banner_url, created_at FROM users WHERE id=:id`,
       { id }
     );
     if (!u.length) return rep.code(404).send({ error: "NOT_FOUND" });
@@ -78,6 +87,7 @@ export async function profileRoutes(app: FastifyInstance) {
       bio: u[0].bio ?? null,
       pfpUrl: u[0].pfp_url ?? null,
       bannerUrl: u[0].banner_url ?? null,
+      createdAt: u[0].created_at ?? null,
       badges: badges.map(b => b.badge),
       platformRole: isOwner ? "owner" : (isAdmin ? "admin" : "user"),
       platformTitle: isOwner ? "Platform Owner" : (isAdmin ? "Platform Admin" : null)
@@ -101,18 +111,15 @@ export async function profileRoutes(app: FastifyInstance) {
     if (body.pfpUrl !== undefined) {
       if (body.pfpUrl === null) {
         // Explicitly removing pfp
-        if (pfpUrl?.startsWith("users/")) {
-          deleteProfileImage(env.PROFILE_IMAGE_STORAGE_DIR, pfpUrl);
-        }
+        const oldRel = relPathFromStoredUrl(pfpUrl);
+        if (oldRel) deleteProfileImage(env.PROFILE_IMAGE_STORAGE_DIR, oldRel);
         pfpUrl = null;
       } else if (body.pfpUrl.startsWith("data:image/")) {
         // Base64 image upload
         const saved = saveProfileImage(env.PROFILE_IMAGE_STORAGE_DIR, userId, "pfp", body.pfpUrl);
         if (saved) {
-          // Delete old image
-          if (pfpUrl?.startsWith("users/")) {
-            deleteProfileImage(env.PROFILE_IMAGE_STORAGE_DIR, pfpUrl);
-          }
+          const oldRel = relPathFromStoredUrl(pfpUrl);
+          if (oldRel) deleteProfileImage(env.PROFILE_IMAGE_STORAGE_DIR, oldRel);
           pfpUrl = `${env.PROFILE_IMAGE_BASE_URL}/${saved}`;
         } else {
           return rep.code(400).send({ error: "INVALID_IMAGE", field: "pfpUrl" });
@@ -127,18 +134,15 @@ export async function profileRoutes(app: FastifyInstance) {
     if (body.bannerUrl !== undefined) {
       if (body.bannerUrl === null) {
         // Explicitly removing banner
-        if (bannerUrl?.startsWith("users/")) {
-          deleteProfileImage(env.PROFILE_IMAGE_STORAGE_DIR, bannerUrl);
-        }
+        const oldRel = relPathFromStoredUrl(bannerUrl);
+        if (oldRel) deleteProfileImage(env.PROFILE_IMAGE_STORAGE_DIR, oldRel);
         bannerUrl = null;
       } else if (body.bannerUrl.startsWith("data:image/")) {
         // Base64 image upload
         const saved = saveProfileImage(env.PROFILE_IMAGE_STORAGE_DIR, userId, "banner", body.bannerUrl);
         if (saved) {
-          // Delete old image
-          if (bannerUrl?.startsWith("users/")) {
-            deleteProfileImage(env.PROFILE_IMAGE_STORAGE_DIR, bannerUrl);
-          }
+          const oldRel = relPathFromStoredUrl(bannerUrl);
+          if (oldRel) deleteProfileImage(env.PROFILE_IMAGE_STORAGE_DIR, oldRel);
           bannerUrl = `${env.PROFILE_IMAGE_BASE_URL}/${saved}`;
         } else {
           return rep.code(400).send({ error: "INVALID_IMAGE", field: "bannerUrl" });

@@ -1673,8 +1673,20 @@ export function App() {
         bio: "Profile details are private or unavailable.",
         badges: [],
         status: member.status || "online",
-        platformTitle: null
+        platformTitle: null,
+        createdAt: null
       });
+    }
+  }
+
+  function formatAccountCreated(createdAt) {
+    if (!createdAt) return null;
+    try {
+      const d = new Date(createdAt);
+      if (Number.isNaN(d.getTime())) return null;
+      return d.toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" });
+    } catch {
+      return null;
     }
   }
 
@@ -2214,6 +2226,7 @@ export function App() {
             <h4>{memberProfileCard.displayName || memberProfileCard.username}</h4>
             <p className="hint">@{memberProfileCard.username} · {memberProfileCard.status || "online"}</p>
             {memberProfileCard.platformTitle && <p className="hint">{memberProfileCard.platformTitle}</p>}
+            {formatAccountCreated(memberProfileCard.createdAt) && <p className="hint">Account created: {formatAccountCreated(memberProfileCard.createdAt)}</p>}
             <p>{memberProfileCard.bio || "No bio set."}</p>
             <div className="popout-actions">
               <button className="ghost" onClick={() => openDmFromFriend({ id: memberProfileCard.id, username: memberProfileCard.username })}>Message</button>

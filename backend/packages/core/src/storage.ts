@@ -50,7 +50,9 @@ export function saveProfileImage(
   if (!parsed) return null;
 
   ensureDir(storageDir);
-  const userDir = path.join(storageDir, userId);
+  const usersDir = path.join(storageDir, "users");
+  ensureDir(usersDir);
+  const userDir = path.join(usersDir, userId);
   ensureDir(userDir);
 
   const filename = `${imageType}_${randomId(8)}.${parsed.ext}`;
@@ -58,7 +60,7 @@ export function saveProfileImage(
 
   try {
     fs.writeFileSync(filepath, parsed.buffer, { flag: "w" });
-    // Return relative path for URL construction: users/{userId}/{filename}
+    // Return relative path for URL construction: users/{userId}/{filename} (matches serve route)
     return `users/${userId}/${filename}`;
   } catch {
     return null;

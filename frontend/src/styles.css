@@ -862,6 +862,21 @@ textarea { resize: vertical; min-height: clamp(80px, 13vw, 120px); font-size: 1e
   border-color: rgba(125, 164, 255, 0.3);
 }
 
+.session-info {
+  display: grid;
+  gap: 2px;
+}
+
+.session-info strong {
+  display: block;
+  color: var(--text-main);
+}
+
+.session-info .hint {
+  font-size: 0.85em;
+  color: var(--text-dim);
+}
+
 .session-info { display: grid; gap: 3px; }
 .session-info strong { font-size: 0.95em; }
 

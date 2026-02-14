@@ -24,7 +24,7 @@ load_backend_env() {
   source "$env_file"
   # Configure for reverse proxy (localhost only)
   export CORE_HOST="${CORE_HOST:-127.0.0.1}"
-  export NODE_HOST="${NODE_HOST:-127.0.0.1}"
+  export NODE_HOST="${NODE_HOST:-0.0.0.0}"
   set +a
 }
 

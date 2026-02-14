@@ -28,6 +28,18 @@ async function getPlatformRole(userId: string): Promise<"user" | "admin" | "owne
   return "user";
 }
 
+async function canOwnMoreServers(userId: string): Promise<boolean> {
+  const owned = await q<{ count: number }>(`SELECT COUNT(*) as count FROM servers WHERE owner_user_id=:userId`, { userId });
+  const totalOwned = Number(owned[0]?.count || 0);
+  if (totalOwned < 1) return true;
+
+  const boostBadge = await q<{ badge: string }>(
+    `SELECT badge FROM user_badges WHERE user_id=:userId AND badge='boost' LIMIT 1`,
+    { userId }
+  );
+  return boostBadge.length > 0;
+}
+
 async function ensureDefaultGuildOnServerNode(serverId: string, serverName: string, baseUrl: string, ownerUserId: string, tokenServerId?: string): Promise<string> {
   const platformRole = await getPlatformRole(ownerUserId);
   const ownerRoles = ["owner"];
@@ -36,7 +48,7 @@ async function ensureDefaultGuildOnServerNode(serverId: string, serverName: stri
 
   // Use tokenServerId when calling the official node so the node accepts the token (it expects server_id === NODE_SERVER_ID)
   const idForToken = tokenServerId ?? serverId;
-  const membershipToken = await signMembershipToken(idForToken, ownerUserId, ownerRoles, platformRole);
+  const membershipToken = await signMembershipToken(idForToken, ownerUserId, ownerRoles, platformRole, serverId);
 
   const response = await fetch(`${baseUrl.replace(/\/$/, "")}/v1/guilds`, {
     method: "POST",
@@ -57,7 +69,7 @@ async function ensureDefaultGuildOnServerNode(serverId: string, serverName: stri
 }
 
 export async function serverRoutes(app: FastifyInstance) {
-  // Create one server per user hosted on the platform's official node (no baseUrl needed).
+  // Create a server hosted on the platform's official node (no baseUrl needed).
   // Validate all config and quota before writing anything to DB.
   app.post("/v1/servers/official", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
     const userId = req.user.sub as string;
@@ -76,8 +88,8 @@ export async function serverRoutes(app: FastifyInstance) {
 
     const platformRole = await getPlatformRole(userId);
     if (platformRole === "user") {
-      const owned = await q<{ count: number }>(`SELECT COUNT(*) as count FROM servers WHERE owner_user_id=:userId`, { userId });
-      if (Number(owned[0]?.count || 0) >= 1) {
+      const allowed = await canOwnMoreServers(userId);
+      if (!allowed) {
         return rep.code(403).send({ error: "SERVER_LIMIT_REACHED" });
       }
     }
@@ -113,12 +125,8 @@ export async function serverRoutes(app: FastifyInstance) {
 
     const platformRole = await getPlatformRole(userId);
     if (platformRole === "user") {
-      const ownedServers = await q<{ count: number }>(
-        `SELECT COUNT(*) as count FROM servers WHERE owner_user_id=:userId`,
-        { userId }
-      );
-      const totalOwned = Number(ownedServers[0]?.count || 0);
-      if (totalOwned >= 1) return rep.code(403).send({ error: "SERVER_LIMIT_REACHED" });
+      const allowed = await canOwnMoreServers(userId);
+      if (!allowed) return rep.code(403).send({ error: "SERVER_LIMIT_REACHED" });
     }
 
     const id = ulidLike();
@@ -193,7 +201,7 @@ export async function serverRoutes(app: FastifyInstance) {
       const idForToken = (OFFICIAL_NODE_BASE_URL && OFFICIAL_NODE_SERVER_ID && r.base_url === OFFICIAL_NODE_BASE_URL)
         ? OFFICIAL_NODE_SERVER_ID
         : r.id;
-      const membershipToken = await signMembershipToken(idForToken, userId, membershipRoles, platformRole);
+      const membershipToken = await signMembershipToken(idForToken, userId, membershipRoles, platformRole, r.id);
 
       return {
         id: r.id,

@@ -21,8 +21,24 @@ const GATEWAY_DEVICE_ID_KEY = "opencom_gateway_device_id";
 
 function getGatewayWsUrl() {
   const explicit = import.meta.env.VITE_GATEWAY_WS_URL;
-  if (explicit && typeof explicit === "string" && explicit.trim()) return explicit.trim().replace(/\/$/, "");
-  return "wss://ws.opencom.online:9443";
+  const raw = (explicit && typeof explicit === "string" && explicit.trim())
+    ? explicit.trim()
+    : "wss://ws.opencom.online:9443";
+
+  try {
+    const url = new URL(raw);
+    if (url.protocol !== "ws:" && url.protocol !== "wss:") {
+      url.protocol = url.protocol === "http:" ? "ws:" : "wss:";
+    }
+    // Node gateway upgrades on /gateway
+    if (!url.pathname || url.pathname === "/") {
+      url.pathname = "/gateway";
+    }
+    return url.toString().replace(/\/$/, "");
+  } catch {
+    const normalized = raw.replace(/\/$/, "");
+    return normalized.endsWith("/gateway") ? normalized : `${normalized}/gateway`;
+  }
 }
 
 function useThemeCss() {

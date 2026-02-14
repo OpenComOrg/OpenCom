@@ -27,97 +27,76 @@ const AUDIO_OUTPUT_DEVICE_KEY = "opencom_audio_output_device";
 const SERVER_VOICE_GATEWAY_PREFS_KEY = "opencom_server_voice_gateway_prefs";
 const LAST_CORE_GATEWAY_KEY = "opencom_last_core_gateway";
 const LAST_SERVER_GATEWAY_KEY = "opencom_last_server_gateway";
-const CANONICAL_GATEWAY_WS_URL =
-  import.meta.env.VITE_NODE_GATEWAY_WS_URL ?? "wss://node.opencom.online/gateway";
+const FALLBACK_CORE_GATEWAY_WS_URL = "wss://ws.opencom.online/gateway";
 
-
-function getGatewayWsUrl() {
-  const explicit = import.meta.env.VITE_GATEWAY_WS_URL;
-  const raw = (explicit && typeof explicit === "string" && explicit.trim())
-    ? explicit.trim()
-    : CANONICAL_GATEWAY_WS_URL;
+function normalizeGatewayWsUrl(value) {
+  if (!value || typeof value !== "string") return "";
+  const trimmed = value.trim();
+  if (!trimmed) return "";
 
   try {
-    const url = new URL(raw);
+    const url = new URL(trimmed, window.location.origin);
     if (url.protocol !== "ws:" && url.protocol !== "wss:") {
       url.protocol = url.protocol === "http:" ? "ws:" : "wss:";
     }
-    // Node gateway upgrades on /gateway
-    if (!url.pathname || url.pathname === "/") {
-      url.pathname = "/gateway";
-    }
+    url.pathname = "/gateway";
+    url.search = "";
+    url.hash = "";
     return url.toString().replace(/\/$/, "");
   } catch {
-    const normalized = raw.replace(/\/$/, "");
+    const normalized = trimmed.replace(/\/$/, "");
     return normalized.endsWith("/gateway") ? normalized : `${normalized}/gateway`;
   }
 }
 
-function getGatewayWsCandidates() {
-  const explicit = import.meta.env.VITE_GATEWAY_WS_URL;
+function getDefaultCoreGatewayWsUrl() {
+  if (typeof window === "undefined") return FALLBACK_CORE_GATEWAY_WS_URL;
+  const hostname = window.location.hostname || "";
+  if (hostname === "opencom.online" || hostname.endsWith(".opencom.online")) {
+    return FALLBACK_CORE_GATEWAY_WS_URL;
+  }
+  return normalizeGatewayWsUrl("/gateway");
+}
+
+function getCoreGatewayWsCandidates() {
+  const explicit = import.meta.env.VITE_CORE_GATEWAY_URL || import.meta.env.VITE_GATEWAY_WS_URL;
   const candidates = [];
 
   const push = (value) => {
-    if (!value || typeof value !== "string") return;
-    const trimmed = value.trim();
-    if (!trimmed) return;
-    const normalized = (() => {
-      try {
-        const url = new URL(trimmed);
-        if (url.protocol !== "ws:" && url.protocol !== "wss:") {
-          url.protocol = url.protocol === "http:" ? "ws:" : "wss:";
-        }
-        if (!url.pathname || url.pathname === "/") url.pathname = "/gateway";
-        return url.toString().replace(/\/$/, "");
-      } catch {
-        const raw = trimmed.replace(/\/$/, "");
-        return raw.endsWith("/gateway") ? raw : `${raw}/gateway`;
-      }
-    })();
+    const normalized = normalizeGatewayWsUrl(value);
+    if (!normalized) return;
     if (!candidates.includes(normalized)) candidates.push(normalized);
   };
 
-  // User-configured explicit endpoint first when provided.
+  // Explicit endpoint first when provided.
   if (explicit && typeof explicit === "string" && explicit.trim()) push(explicit);
-
-  // Canonical platform endpoint.
-  push(getGatewayWsUrl());
+  push(getDefaultCoreGatewayWsUrl());
 
   return candidates;
 }
 
 
-function getNodeGatewayWsCandidates(serverBaseUrl, includeDirectNodeWsFallback = false) {
+function getVoiceGatewayWsCandidates(serverBaseUrl, includeDirectNodeWsFallback = false) {
+  const explicitVoiceGateway = import.meta.env.VITE_VOICE_GATEWAY_URL;
   const candidates = [];
   const push = (value) => {
-    if (!value || typeof value !== "string") return;
-    const trimmed = value.trim();
-    if (!trimmed) return;
-    const normalized = (() => {
-      try {
-        const url = new URL(trimmed);
-        if (url.protocol !== "ws:" && url.protocol !== "wss:") {
-          url.protocol = url.protocol === "http:" ? "ws:" : "wss:";
-        }
-        if (!url.pathname || url.pathname === "/") url.pathname = "/gateway";
-        return url.toString().replace(/\/$/, "");
-      } catch {
-        const raw = trimmed.replace(/\/$/, "");
-        return raw.endsWith("/gateway") ? raw : `${raw}/gateway`;
-      }
-    })();
+    const normalized = normalizeGatewayWsUrl(value);
+    if (!normalized) return;
     if (!candidates.includes(normalized)) candidates.push(normalized);
   };
 
-  // Prefer the core gateway first so users only need one public WS endpoint.
-  // Core gateway proxies membershipToken sessions to node gateways.
-  for (const wsUrl of getGatewayWsCandidates()) push(wsUrl);
+  // Optional explicit voice gateway override for direct-node deployments.
+  if (explicitVoiceGateway && typeof explicitVoiceGateway === "string" && explicitVoiceGateway.trim()) {
+    push(explicitVoiceGateway);
+  }
+
+  // Prefer core gateway routing by default so clients don't guess node addresses.
+  for (const wsUrl of getCoreGatewayWsCandidates()) push(wsUrl);
 
   const allowDirectNodeWsFallback = includeDirectNodeWsFallback
     || String(import.meta.env.VITE_ENABLE_DIRECT_NODE_WS_FALLBACK || "").trim() === "1";
   if (allowDirectNodeWsFallback) {
-    // Optional escape hatch for deployments that explicitly want direct node WS fallback.
-    // Also used automatically if core gateway proxy to node is unavailable.
+    // Optional escape hatch: derive WS from the node base URL.
     push(serverBaseUrl);
   }
 
@@ -385,6 +364,7 @@ export function App() {
   const nodeGatewayWsRef = useRef(null);
   const nodeGatewayHeartbeatRef = useRef(null);
   const nodeGatewayReadyRef = useRef(false);
+  const voiceGatewayCandidatesRef = useRef([]);
   const voiceSpeakingDetectorRef = useRef({ audioCtx: null, stream: null, analyser: null, timer: null, lastSpeaking: false });
   const pendingVoiceEventsRef = useRef(new Map());
   const voiceSfuRef = useRef(null);
@@ -836,7 +816,7 @@ export function App() {
     let reconnectTimer = null;
     let candidateIndex = 0;
     let reconnectAttempts = 0;
-    const candidates = prioritizeLastSuccessfulGateway(getGatewayWsCandidates(), LAST_CORE_GATEWAY_KEY);
+    const candidates = prioritizeLastSuccessfulGateway(getCoreGatewayWsCandidates(), LAST_CORE_GATEWAY_KEY);
 
     const scheduleReconnect = () => {
       if (disposed) return;
@@ -931,7 +911,7 @@ export function App() {
         scheduleReconnect();
 
         if (!hasEverConnected) {
-          setStatus("Gateway websocket unavailable. Check DNS/TLS or set VITE_GATEWAY_WS_URL/VITE_GATEWAY_WS_IP.");
+          setStatus("Gateway websocket unavailable. Check DNS/TLS or set VITE_CORE_GATEWAY_URL.");
         } else {
           setStatus("Gateway disconnected. Reconnecting...");
         }
@@ -961,6 +941,7 @@ export function App() {
   useEffect(() => {
     const server = activeServer;
     if (navMode !== "servers" || !server?.baseUrl || !server?.membershipToken) {
+      voiceGatewayCandidatesRef.current = [];
       nodeGatewayReadyRef.current = false;
       if (nodeGatewayHeartbeatRef.current) {
         clearInterval(nodeGatewayHeartbeatRef.current);
@@ -975,6 +956,7 @@ export function App() {
     }
 
     if (nodeGatewayUnavailableByServer[server.id]) {
+      voiceGatewayCandidatesRef.current = [];
       nodeGatewayReadyRef.current = false;
       if (nodeGatewayHeartbeatRef.current) {
         clearInterval(nodeGatewayHeartbeatRef.current);
@@ -988,20 +970,8 @@ export function App() {
       return;
     }
 
-    if (nodeGatewayUnavailableByServer[server.id]) {
-      nodeGatewayReadyRef.current = false;
-      if (nodeGatewayHeartbeatRef.current) {
-        clearInterval(nodeGatewayHeartbeatRef.current);
-        nodeGatewayHeartbeatRef.current = null;
-      }
-      if (nodeGatewayWsRef.current) {
-        nodeGatewayWsRef.current.close();
-        nodeGatewayWsRef.current = null;
-      }
-      return;
-    }
-
-    const wsCandidates = prioritizeLastSuccessfulGateway(getNodeGatewayWsCandidates(server.baseUrl), LAST_SERVER_GATEWAY_KEY);
+    const wsCandidates = prioritizeLastSuccessfulGateway(getVoiceGatewayWsCandidates(server.baseUrl), LAST_SERVER_GATEWAY_KEY);
+    voiceGatewayCandidatesRef.current = wsCandidates;
     if (!wsCandidates.length) return;
 
     let disposed = false;
@@ -1349,7 +1319,7 @@ export function App() {
       if (activeGuildId && me?.id) {
         setVoiceSpeakingByGuild((prev) => ({ ...prev, [activeGuildId]: { ...(prev[activeGuildId] || {}), [me.id]: false } }));
       }
-      try { sendNodeVoiceDispatch("VOICE_SPEAKING", { guildId: activeGuildId, channelId: voiceConnectedChannelId, speaking: false }); } catch {}
+      void sendNodeVoiceDispatch("VOICE_SPEAKING", { guildId: activeGuildId, channelId: voiceConnectedChannelId, speaking: false }).catch(() => {});
       return;
     }
 
@@ -1393,9 +1363,7 @@ export function App() {
           if (activeGuildId && me?.id) {
             setVoiceSpeakingByGuild((prev) => ({ ...prev, [activeGuildId]: { ...(prev[activeGuildId] || {}), [me.id]: speaking } }));
           }
-          try {
-            sendNodeVoiceDispatch("VOICE_SPEAKING", { guildId: activeGuildId, channelId: voiceConnectedChannelId, speaking });
-          } catch {}
+          void sendNodeVoiceDispatch("VOICE_SPEAKING", { guildId: activeGuildId, channelId: voiceConnectedChannelId, speaking }).catch(() => {});
         }, 150);
       } catch {
         setStatus("Mic speaking detection unavailable. Check microphone permissions.");
@@ -2484,12 +2452,32 @@ export function App() {
     await voiceSfuRef.current?.cleanup();
   }
 
-  function sendNodeVoiceDispatch(type, data) {
-
-    const ws = nodeGatewayWsRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN || !nodeGatewayReadyRef.current) {
-      throw new Error("VOICE_GATEWAY_UNAVAILABLE");
+  async function waitForVoiceGatewayReady(timeoutMs = 5000) {
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < timeoutMs) {
+      const ws = nodeGatewayWsRef.current;
+      if (ws && ws.readyState === WebSocket.OPEN && nodeGatewayReadyRef.current) return ws;
+      await new Promise((resolve) => setTimeout(resolve, 120));
     }
+
+    const wsState = nodeGatewayWsRef.current?.readyState;
+    const wsStateName = wsState === WebSocket.CONNECTING
+      ? "CONNECTING"
+      : wsState === WebSocket.OPEN
+        ? "OPEN"
+        : wsState === WebSocket.CLOSING
+          ? "CLOSING"
+          : wsState === WebSocket.CLOSED
+            ? "CLOSED"
+            : "MISSING";
+    const candidates = voiceGatewayCandidatesRef.current?.length
+      ? voiceGatewayCandidatesRef.current.join(",")
+      : "none";
+    throw new Error(`VOICE_GATEWAY_UNAVAILABLE:ready=${nodeGatewayReadyRef.current ? "1" : "0"},ws=${wsStateName},candidates=${candidates}`);
+  }
+
+  async function sendNodeVoiceDispatch(type, data) {
+    const ws = await waitForVoiceGatewayReady();
     ws.send(JSON.stringify({ op: "DISPATCH", t: type, d: data }));
   }
 
@@ -2528,7 +2516,7 @@ export function App() {
   async function leaveVoiceChannel() {
     if (!voiceConnectedChannelId || !activeServer?.baseUrl || !activeServer?.membershipToken) return;
     try {
-      sendNodeVoiceDispatch("VOICE_LEAVE", { channelId: voiceConnectedChannelId });
+      await sendNodeVoiceDispatch("VOICE_LEAVE", { channelId: voiceConnectedChannelId });
       setIsScreenSharing(false);
       await cleanupVoiceRtc();
       return;

@@ -1,4 +1,4 @@
-import { Device } from "mediasoup-client";
+import * as mediasoupClient from "mediasoup-client";
 
 const DEFAULT_TIMEOUT_MS = 10000;
 
@@ -28,7 +28,7 @@ export function createSfuVoiceClient({selfUserId, sendDispatch, waitForEvent, on
   }
 
   async function createTransport(direction, token) {
-    sendDispatch("VOICE_CREATE_TRANSPORT", { guildId: state.guildId, channelId: state.channelId, direction });
+    await sendDispatch("VOICE_CREATE_TRANSPORT", { guildId: state.guildId, channelId: state.channelId, direction });
     const created = await waitDispatch("VOICE_TRANSPORT_CREATED", (d) => d?.direction === direction);
     if (!isActive(token)) throw new Error("VOICE_SESSION_CANCELLED");
     return direction === "send"
@@ -40,7 +40,7 @@ export function createSfuVoiceClient({selfUserId, sendDispatch, waitForEvent, on
     if (!producerId || !state.recvTransport || !state.device || !isActive(token)) return;
     if (state.consumersByProducerId.has(producerId)) return;
 
-    sendDispatch("VOICE_CONSUME", {
+    await sendDispatch("VOICE_CONSUME", {
       guildId: state.guildId,
       channelId: state.channelId,
       transportId: state.recvTransport.id,
@@ -78,7 +78,7 @@ export function createSfuVoiceClient({selfUserId, sendDispatch, waitForEvent, on
     state.isDeafened = !!isDeafened;
     state.audioOutputDeviceId = audioOutputDeviceId || "";
 
-    sendDispatch("VOICE_JOIN", { guildId, channelId });
+    await sendDispatch("VOICE_JOIN", { guildId, channelId });
     const joined = await waitForEvent({
       type: "VOICE_JOINED",
       match: (d) => d?.guildId === guildId && d?.channelId === channelId,
@@ -89,13 +89,13 @@ export function createSfuVoiceClient({selfUserId, sendDispatch, waitForEvent, on
     });
     if (!isActive(token)) throw new Error("VOICE_SESSION_CANCELLED");
 
-    state.device = new Device();
+    state.device = new mediasoupClient.Device();
     await state.device.load({ routerRtpCapabilities: joined.rtpCapabilities });
 
     state.sendTransport = await createTransport("send", token);
     state.sendTransport.on("connect", async ({ dtlsParameters }, callback, errback) => {
       try {
-        sendDispatch("VOICE_CONNECT_TRANSPORT", {
+        await sendDispatch("VOICE_CONNECT_TRANSPORT", {
           guildId: state.guildId,
           channelId: state.channelId,
           transportId: state.sendTransport.id,
@@ -109,7 +109,7 @@ export function createSfuVoiceClient({selfUserId, sendDispatch, waitForEvent, on
     });
     state.sendTransport.on("produce", async ({ kind, rtpParameters }, callback, errback) => {
       try {
-        sendDispatch("VOICE_PRODUCE", {
+        await sendDispatch("VOICE_PRODUCE", {
           guildId: state.guildId,
           channelId: state.channelId,
           transportId: state.sendTransport.id,
@@ -147,7 +147,7 @@ export function createSfuVoiceClient({selfUserId, sendDispatch, waitForEvent, on
     state.recvTransport = await createTransport("recv", token);
     state.recvTransport.on("connect", async ({ dtlsParameters }, callback, errback) => {
       try {
-        sendDispatch("VOICE_CONNECT_TRANSPORT", {
+        await sendDispatch("VOICE_CONNECT_TRANSPORT", {
           guildId: state.guildId,
           channelId: state.channelId,
           transportId: state.recvTransport.id,

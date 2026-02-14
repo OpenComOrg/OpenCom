@@ -277,6 +277,8 @@ export function attachNodeGateway(app: FastifyInstance) {
           }
 
           if (conn.voice && (conn.voice.guildId !== guildId || conn.voice.channelId !== channelId)) {
+            // Clean up and notify for the previous voice context stored on conn.voice.
+            // Do not use incoming join target context here.
             cleanupVoicePeerAndNotify(conn);
             await leaveVoice(conn);
           }
@@ -454,12 +456,12 @@ export function attachNodeGateway(app: FastifyInstance) {
 
           const result = await produce(guildId, channelId, conn.userId, transportId, kind, rtpParameters);
           sendDispatch(conn, "VOICE_PRODUCED", { ...result, userId: conn.userId, guildId, channelId });
-          broadcastGuild(guildId, "VOICE_NEW_PRODUCER", {
+          broadcastVoiceChannel(guildId, channelId, "VOICE_NEW_PRODUCER", {
             guildId,
             channelId,
             userId: conn.userId,
             producerId: result.producerId
-          });
+          }, conn.userId);
         } catch {
           sendDispatch(conn, "VOICE_ERROR", { error: "VOICE_PRODUCE_FAILED" });
         }

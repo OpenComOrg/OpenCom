@@ -166,15 +166,15 @@ export function closePeer(guildId: string, channelId: string, userId: string): s
 
   const closedProducerIds = [...peer.producers.keys()];
 
-  for (const consumer of peer.consumers.values()) {
-    try { consumer.close(); } catch {}
-  }
-  peer.consumers.clear();
-
   for (const producer of peer.producers.values()) {
     try { producer.close(); } catch {}
   }
   peer.producers.clear();
+
+  for (const consumer of peer.consumers.values()) {
+    try { consumer.close(); } catch {}
+  }
+  peer.consumers.clear();
 
   for (const transport of peer.transports.values()) {
     try { transport.close(); } catch {}

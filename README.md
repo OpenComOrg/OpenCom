@@ -106,7 +106,17 @@ Generate a trusted Let's Encrypt certificate for `wss://` (no browser warnings) 
 > By default this uses `certbot --standalone`, so port **80** for that domain must be free/reachable during issuance.
 > If nginx already uses `:80`, use webroot mode instead:
 > `./scripts/configure-ws.sh --domain ws.opencom.online --generate-letsencrypt-cert --letsencrypt-email admin@opencom.online --letsencrypt-webroot /var/www/certbot`
+> The script now performs a preflight HTTP probe for `/.well-known/acme-challenge/...` and fails fast with nginx guidance if the webroot is not being served.
 > Cert files are expected at `/etc/letsencrypt/live/<domain>/fullchain.pem` and `privkey.pem`, and are written to `CORE_GATEWAY_TLS_CERT_FILE` / `CORE_GATEWAY_TLS_KEY_FILE` in `backend/.env`.
+
+Minimal nginx example for webroot challenge path:
+
+```nginx
+location ^~ /.well-known/acme-challenge/ {
+    root /var/www/certbot;
+    default_type text/plain;
+}
+```
 
 Force plain `ws://` if your WS endpoint does not use TLS:
 

@@ -157,6 +157,16 @@ export function attachCoreGateway(app: FastifyInstance, redis?: { pub: any; sub:
     });
   });
 
+
+  async function broadcastToUser(targetUserId: string, t: string, d: any) {
+    const conns = byUser.get(targetUserId);
+    if (!conns || conns.size === 0) return;
+    for (const c of conns) {
+      c.seq += 1;
+      send(c.ws, { op: "DISPATCH", t, s: c.seq, d });
+    }
+  }
+
   async function broadcastDM(recipientDeviceId: string, payload: any) {
     // local deliver if connected
     const c = byDevice.get(recipientDeviceId);
@@ -183,5 +193,5 @@ export function attachCoreGateway(app: FastifyInstance, redis?: { pub: any; sub:
     if (redis) await redis.pub.publish(CALL_SIGNAL_CH, JSON.stringify({ targetUserId, signal }));
   }
 
-  return { broadcastDM, broadcastCallSignal };
+  return { broadcastDM, broadcastCallSignal, broadcastToUser };
 }

@@ -791,6 +791,40 @@ export function App() {
         if (msg.op === "DISPATCH" && msg.t === "PRESENCE_UPDATE" && msg.d?.userId) {
           setPresenceByUserId((prev) => ({ ...prev, [msg.d.userId]: { status: msg.d.status ?? "offline", customStatus: msg.d.customStatus ?? null } }));
         }
+        if (msg.op === "DISPATCH" && msg.t === "SOCIAL_DM_MESSAGE_CREATE" && msg.d?.threadId && msg.d?.message?.id) {
+          const threadId = msg.d.threadId;
+          const incoming = msg.d.message;
+          setDms((current) => {
+            const next = [...current];
+            const idx = next.findIndex((item) => item.id === threadId);
+            const already = (messages = []) => messages.some((m) => m.id === incoming.id);
+            if (idx >= 0) {
+              const existing = next[idx];
+              if (already(existing.messages || [])) return current;
+              next[idx] = { ...existing, messages: [...(existing.messages || []), incoming] };
+              return next;
+            }
+            return [{
+              id: threadId,
+              participantId: incoming.authorId === me?.id ? "unknown" : incoming.authorId,
+              name: incoming.authorId === me?.id ? "Unknown" : (incoming.author || "Unknown"),
+              messages: [incoming]
+            }, ...next];
+          });
+          if (incoming.authorId && incoming.authorId !== me?.id) {
+            playNotificationBeep(selfStatusRef.current === "dnd");
+            setDmNotification({ dmId: threadId, at: Date.now() });
+          }
+        }
+        if (msg.op === "DISPATCH" && msg.t === "SOCIAL_DM_MESSAGE_DELETE" && msg.d?.threadId && msg.d?.messageId) {
+          const threadId = msg.d.threadId;
+          const messageId = msg.d.messageId;
+          setDms((current) => current.map((item) =>
+            item.id === threadId
+              ? { ...item, messages: (item.messages || []).filter((m) => m.id !== messageId) }
+              : item
+          ));
+        }
       } catch (_) {}
       };
 
@@ -1021,9 +1055,9 @@ export function App() {
       .catch((error) => setStatus(`Message fetch failed: ${error.message}`));
   }, [activeServer, activeChannelId, navMode]);
 
-  // Server channel message polling - only when gateway not connected; when connected we skip to avoid hammering the node
+  // Server channel message polling keeps server chat live until dedicated node-gateway subscription is wired in the client.
   useEffect(() => {
-    if (navMode !== "servers" || !activeServer?.baseUrl || !activeChannelId || gatewayConnected) return;
+    if (navMode !== "servers" || !activeServer?.baseUrl || !activeChannelId) return;
 
     const channelId = activeChannelId;
     const baseUrl = activeServer.baseUrl;
@@ -1039,7 +1073,7 @@ export function App() {
     }, 5000);
 
     return () => window.clearInterval(timer);
-  }, [navMode, activeServer, activeChannelId, gatewayConnected]);
+  }, [navMode, activeServer, activeChannelId]);
 
   async function handleAuthSubmit(event) {
     event.preventDefault();

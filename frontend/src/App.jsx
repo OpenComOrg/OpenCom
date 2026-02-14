@@ -84,9 +84,36 @@ function getGatewayWsCandidates() {
 }
 
 
-function getNodeGatewayWsCandidates() {
-  // VC should always use the canonical core gateway endpoint.
-  return getGatewayWsCandidates();
+function getNodeGatewayWsCandidates(serverBaseUrl) {
+  const candidates = [];
+  const push = (value) => {
+    if (!value || typeof value !== "string") return;
+    const trimmed = value.trim();
+    if (!trimmed) return;
+    const normalized = (() => {
+      try {
+        const url = new URL(trimmed);
+        if (url.protocol !== "ws:" && url.protocol !== "wss:") {
+          url.protocol = url.protocol === "http:" ? "ws:" : "wss:";
+        }
+        if (!url.pathname || url.pathname === "/") url.pathname = "/gateway";
+        return url.toString().replace(/\/$/, "");
+      } catch {
+        const raw = trimmed.replace(/\/$/, "");
+        return raw.endsWith("/gateway") ? raw : `${raw}/gateway`;
+      }
+    })();
+    if (!candidates.includes(normalized)) candidates.push(normalized);
+  };
+
+  // Prefer the core gateway first so users only need one public WS endpoint.
+  // Core gateway proxies membershipToken sessions to node gateways.
+  for (const wsUrl of getGatewayWsCandidates()) push(wsUrl);
+
+  // Keep direct node gateway as fallback if proxy path is unavailable.
+  push(serverBaseUrl);
+
+  return candidates;
 }
 
 function prioritizeLastSuccessfulGateway(candidates, storageKey) {
@@ -926,7 +953,7 @@ export function App() {
       return;
     }
 
-    const wsCandidates = prioritizeLastSuccessfulGateway(getNodeGatewayWsCandidates(), LAST_SERVER_GATEWAY_KEY);
+    const wsCandidates = prioritizeLastSuccessfulGateway(getNodeGatewayWsCandidates(server.baseUrl), LAST_SERVER_GATEWAY_KEY);
     if (!wsCandidates.length) return;
 
     let disposed = false;
@@ -1134,7 +1161,10 @@ export function App() {
           return;
         }
 
-        setActiveGuildId(nextGuilds[0].id);
+        const hasActiveGuild = nextGuilds.some((guild) => guild.id === activeGuildId);
+        if (!hasActiveGuild) {
+          setActiveGuildId(nextGuilds[0].id);
+        }
       })
       .catch((error) => {
         setGuilds([]);
@@ -1163,7 +1193,7 @@ export function App() {
         setMessages([]);
         setStatus(`Workspace state failed: ${error.message}`);
       });
-  }, [activeServer, activeGuildId, navMode]);
+  }, [activeServer, activeGuildId, navMode, activeChannelId]);
 
   useEffect(() => {
     if (navMode !== "dms" || !activeDmId || !accessToken) return;
@@ -1269,8 +1299,19 @@ export function App() {
     }
 
     nodeApi(activeServer.baseUrl, `/v1/channels/${activeChannelId}/messages`, activeServer.membershipToken)
-      .then((data) => setMessages((data.messages || []).slice().reverse()))
-      .catch((error) => setStatus(`Message fetch failed: ${error.message}`));
+      .then((data) => {
+        setStatus("");
+        setMessages((data.messages || []).slice().reverse());
+      })
+      .catch((error) => {
+        if (error?.message?.startsWith("HTTP 403")) {
+          setMessages([]);
+          setStatus("You no longer have access to that channel.");
+          setActiveChannelId("");
+          return;
+        }
+        setStatus(`Message fetch failed: ${error.message}`);
+      });
   }, [activeServer, activeChannelId, navMode]);
 
   async function handleAuthSubmit(event) {

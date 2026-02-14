@@ -340,6 +340,7 @@ export function App() {
   const [gatewayConnected, setGatewayConnected] = useState(false);
   const [dmNotification, setDmNotification] = useState(null);
   const [voiceStatesByGuild, setVoiceStatesByGuild] = useState({});
+  const [serverVoiceGatewayPrefs, setServerVoiceGatewayPrefs] = useState(getStoredJson(SERVER_VOICE_GATEWAY_PREFS_KEY, {}));
 
   const messagesRef = useRef(null);
   const gatewayWsRef = useRef(null);
@@ -537,6 +538,14 @@ export function App() {
 
   const activePinnedServerMessages = useMemo(() => pinnedServerMessages[activeChannelId] || [], [pinnedServerMessages, activeChannelId]);
   const activePinnedDmMessages = useMemo(() => pinnedDmMessages[activeDmId] || [], [pinnedDmMessages, activeDmId]);
+  const activeServerVoiceGatewayPref = useMemo(() => {
+    if (!activeServerId) return { mode: "core", customUrl: "" };
+    const pref = serverVoiceGatewayPrefs[activeServerId] || {};
+    return {
+      mode: pref.mode === "server" ? "server" : "core",
+      customUrl: typeof pref.customUrl === "string" ? pref.customUrl : ""
+    };
+  }, [activeServerId, serverVoiceGatewayPrefs]);
 
   async function refreshSocialData(token = accessToken) {
     if (!token) return;
@@ -1704,6 +1713,15 @@ export function App() {
     } catch (error) {
       setStatus(`Add server failed: ${error.message}`);
     }
+  }
+
+  function updateActiveServerVoiceGatewayPref(patch) {
+    if (!activeServerId) return;
+    setServerVoiceGatewayPrefs((current) => {
+      const prev = current[activeServerId] || { mode: "core", customUrl: "" };
+      const next = { ...prev, ...patch };
+      return { ...current, [activeServerId]: next };
+    });
   }
 
   async function createWorkspace() {
@@ -3033,6 +3051,30 @@ export function App() {
                     <input placeholder="https://node.provider.tld" value={newServerBaseUrl ?? "https://"} onChange={(e) => setNewServerBaseUrl(e.target.value)} />
                     <button onClick={createServer}>Add Server</button>
                   </section>
+
+                  {activeServer && canManageServer && (
+                    <section className="card">
+                      <h4>Voice Gateway Routing</h4>
+                      <p className="hint">Default is OpenCom core gateway. Switch to self-hosted to reduce latency for your server.</p>
+                      <label>Voice Gateway Mode
+                        <select
+                          value={activeServerVoiceGatewayPref.mode}
+                          onChange={(e) => updateActiveServerVoiceGatewayPref({ mode: e.target.value === "server" ? "server" : "core" })}
+                        >
+                          <option value="core">OpenCom Core (default)</option>
+                          <option value="server">Self-hosted/Server-first</option>
+                        </select>
+                      </label>
+                      <label>Optional custom gateway URL
+                        <input
+                          placeholder="https://gateway.yourserver.tld"
+                          value={activeServerVoiceGatewayPref.customUrl}
+                          onChange={(e) => updateActiveServerVoiceGatewayPref({ customUrl: e.target.value })}
+                        />
+                      </label>
+                      <p className="hint">Client fallback order follows this mode and automatically tries the other gateways if one fails.</p>
+                    </section>
+                  )}
 
                   {activeServer && canManageServer && (
                     <section className="card">

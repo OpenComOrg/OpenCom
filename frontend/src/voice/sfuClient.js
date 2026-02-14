@@ -2,7 +2,7 @@ import { Device } from "mediasoup-client";
 
 const DEFAULT_TIMEOUT_MS = 10000;
 
-export function createSfuVoiceClient({ sendDispatch, waitForEvent, onRemoteAudioAdded, onRemoteAudioRemoved }) {
+export function createSfuVoiceClient({selfUserId, sendDispatch, waitForEvent, onRemoteAudioAdded, onRemoteAudioRemoved }) {
   const state = {
     sessionToken: 0,
     guildId: "",
@@ -116,7 +116,13 @@ export function createSfuVoiceClient({ sendDispatch, waitForEvent, onRemoteAudio
           kind,
           rtpParameters
         });
-        const produced = await waitDispatch("VOICE_PRODUCED", (d) => d?.guildId === state.guildId && d?.channelId === state.channelId);
+        const produced = await waitDispatch(
+          "VOICE_PRODUCED",
+          (d) =>
+            d?.guildId === state.guildId &&
+            d?.channelId === state.channelId &&
+            d?.userId === selfUserId
+        );
         callback({ id: produced.producerId });
       } catch (error) {
         errback(error);
@@ -193,11 +199,15 @@ export function createSfuVoiceClient({ sendDispatch, waitForEvent, onRemoteAudio
     if (!state.channelId || !state.guildId) return;
     if (data?.guildId && data.guildId !== state.guildId) return;
     if (data?.channelId && data.channelId !== state.channelId) return;
+    if (state.localProducer && data.producerId === state.localProducer.id) return;
+
 
     if (type === "VOICE_NEW_PRODUCER" && data?.producerId) {
-      await consumeProducer(data.producerId, data.userId, state.sessionToken).catch(() => {});
-      return;
-    }
+      if (data.userId && data.userId === selfUserId) return; // ignore self
+        await consumeProducer(data.producerId, data.userId, state.sessionToken).catch(() => {});
+        return;
+      }
+      
 
     if (type === "VOICE_PRODUCER_CLOSED" && data?.producerId) {
       await cleanupConsumer(data.producerId);

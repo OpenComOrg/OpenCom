@@ -1179,8 +1179,11 @@ export function App() {
   useEffect(() => {
     if (navMode !== "servers" || !activeServer || !activeGuildId) return;
 
-    nodeApi(activeServer.baseUrl, `/v1/guilds/${activeGuildId}/state`, activeServer.membershipToken)
+    let cancelled = false;
+
+    const loadGuildState = () => nodeApi(activeServer.baseUrl, `/v1/guilds/${activeGuildId}/state`, activeServer.membershipToken)
       .then((state) => {
+        if (cancelled) return;
         const allChannels = state.channels || [];
         setGuildState(state);
 
@@ -1191,11 +1194,19 @@ export function App() {
         setActiveChannelId(firstTextChannel);
       })
       .catch((error) => {
+        if (cancelled) return;
         setGuildState(null);
         setActiveChannelId("");
         setMessages([]);
         setStatus(`Workspace state failed: ${error.message}`);
       });
+
+    loadGuildState();
+    const timer = window.setInterval(loadGuildState, 3000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
   }, [activeServer, activeGuildId, navMode, activeChannelId]);
 
   useEffect(() => {
@@ -1301,12 +1312,16 @@ export function App() {
       return;
     }
 
-    nodeApi(activeServer.baseUrl, `/v1/channels/${activeChannelId}/messages`, activeServer.membershipToken)
+    let cancelled = false;
+
+    const loadChannelMessages = () => nodeApi(activeServer.baseUrl, `/v1/channels/${activeChannelId}/messages`, activeServer.membershipToken)
       .then((data) => {
+        if (cancelled) return;
         setStatus("");
         setMessages((data.messages || []).slice().reverse());
       })
       .catch((error) => {
+        if (cancelled) return;
         if (error?.message?.startsWith("HTTP 403")) {
           setMessages([]);
           setStatus("You no longer have access to that channel.");
@@ -1315,7 +1330,42 @@ export function App() {
         }
         setStatus(`Message fetch failed: ${error.message}`);
       });
+
+    loadChannelMessages();
+    const timer = window.setInterval(loadChannelMessages, 2000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
   }, [activeServer, activeChannelId, navMode]);
+
+  useEffect(() => {
+    if (navMode !== "servers" || !accessToken || !activeGuildId) return;
+
+    let cancelled = false;
+
+    const loadGuildPresence = () => {
+      const memberIds = Array.from(new Set((guildState?.members || []).map((m) => m?.id).filter(Boolean)));
+      if (!memberIds.length) return;
+      const params = new URLSearchParams({ userIds: memberIds.join(",") });
+      fetch(`${CORE_API}/v1/presence?${params}`, { headers: { Authorization: `Bearer ${accessToken}` } })
+        .then((r) => r.ok ? r.json() : {})
+        .then((data) => {
+          if (cancelled || !data || typeof data !== "object") return;
+          setPresenceByUserId((prev) => ({ ...prev, ...data }));
+        })
+        .catch(() => {});
+    };
+
+    loadGuildPresence();
+    const timer = window.setInterval(loadGuildPresence, 3000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [navMode, accessToken, activeGuildId, guildState?.members]);
 
   async function handleAuthSubmit(event) {
     event.preventDefault();

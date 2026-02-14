@@ -147,8 +147,8 @@ export async function serverRoutes(app: FastifyInstance) {
     const userId = req.user.sub as string;
     const platformRole = await getPlatformRole(userId);
 
-    const rows = await q<{ id: string; name: string; base_url: string; default_guild_id: string | null; roles: string }>(
-      `SELECT s.id, s.name, s.base_url, s.default_guild_id, m.roles
+    const rows = await q<{ id: string; name: string; base_url: string; default_guild_id: string | null; owner_user_id: string; roles: string }>(
+      `SELECT s.id, s.name, s.base_url, s.default_guild_id, s.owner_user_id, m.roles
        FROM memberships m
        JOIN servers s ON s.id = m.server_id
        WHERE m.user_id = :userId
@@ -157,7 +157,32 @@ export async function serverRoutes(app: FastifyInstance) {
     );
 
     const servers = await Promise.all(rows.map(async (r) => {
-      const membershipRoles = Array.isArray(r.roles) ? r.roles : JSON.parse(r.roles || "[]");
+      let membershipRoles = Array.isArray(r.roles) ? r.roles : JSON.parse(r.roles || "[]");
+
+      // If this server has only one member, that member is the owner (ensure DB is consistent)
+      const memberCount = await q<{ c: number }>(
+        `SELECT COUNT(*) as c FROM memberships WHERE server_id = :serverId`,
+        { serverId: r.id }
+      );
+      const count = Number(memberCount[0]?.c ?? 0);
+      let isServerOwner = r.owner_user_id === userId;
+      if (count === 1) {
+        await q(`UPDATE servers SET owner_user_id = :userId WHERE id = :serverId`, { userId, serverId: r.id });
+        isServerOwner = true;
+        if (!membershipRoles.includes("owner")) membershipRoles = [...membershipRoles, "owner"];
+        await q(`UPDATE memberships SET roles = :roles WHERE server_id = :serverId AND user_id = :userId`, {
+          serverId: r.id,
+          userId,
+          roles: JSON.stringify(membershipRoles)
+        });
+      }
+
+      // Only include "owner" in returned roles if user is the actual server owner (or platform staff)
+      const isPlatformStaff = platformRole === "admin" || platformRole === "owner";
+      if (!isServerOwner && !isPlatformStaff && membershipRoles.includes("owner")) {
+        membershipRoles = membershipRoles.filter((role: string) => role !== "owner");
+      }
+
       if (platformRole === "admin" && !membershipRoles.includes("platform_admin")) membershipRoles.push("platform_admin");
       if (platformRole === "owner") {
         if (!membershipRoles.includes("platform_admin")) membershipRoles.push("platform_admin");

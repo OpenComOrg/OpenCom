@@ -76,3 +76,50 @@ Or explicitly:
 ```bash
 ./scripts/start.sh all
 ```
+
+## Configure direct WebSocket hosting (frontend via nginx, WS direct)
+If your frontend is proxied by nginx but websocket is exposed directly (for example on `ws.opencom.online:9443`), run:
+
+```bash
+./scripts/configure-ws.sh --domain ws.opencom.online --ip 37.114.58.186
+```
+
+> Do **not** pass `--backend-env /tmp/...` and `--frontend-env /tmp/...` unless you intentionally want a dry-run-like temp output.
+> To apply real config, run it against defaults (`backend/.env` and `frontend/.env`) by omitting those flags.
+
+Generate a self-signed certificate/key pair for `wss://` testing (writes `fullchain.pem` + `privkey.pem`):
+
+```bash
+./scripts/configure-ws.sh --domain ws.opencom.online --ip 37.114.58.186 --generate-self-signed-cert
+```
+
+Use `--cert-dir <path>` to change output location and `--force-cert-overwrite` to replace existing files.
+
+> Self-signed certificates are for diagnostics only; browsers will still show trust errors unless you install the CA/cert.
+
+Generate a trusted Let's Encrypt certificate for `wss://` (no browser warnings) and auto-wire backend TLS env vars:
+
+```bash
+./scripts/configure-ws.sh --domain ws.opencom.online --generate-letsencrypt-cert --letsencrypt-email admin@opencom.online
+```
+
+> By default this uses `certbot --standalone`, so port **80** for that domain must be free/reachable during issuance.
+> If nginx already uses `:80`, use webroot mode instead:
+> `./scripts/configure-ws.sh --domain ws.opencom.online --generate-letsencrypt-cert --letsencrypt-email admin@opencom.online --letsencrypt-webroot /var/www/certbot`
+> The script now performs a preflight HTTP probe for `/.well-known/acme-challenge/...` and fails fast with nginx guidance if the webroot is not being served.
+> Cert files are expected at `/etc/letsencrypt/live/<domain>/fullchain.pem` and `privkey.pem`, and are written to `CORE_GATEWAY_TLS_CERT_FILE` / `CORE_GATEWAY_TLS_KEY_FILE` in `backend/.env`.
+
+Minimal nginx example for webroot challenge path:
+
+```nginx
+location ^~ /.well-known/acme-challenge/ {
+    root /var/www/certbot;
+    default_type text/plain;
+}
+```
+
+Force plain `ws://` if your WS endpoint does not use TLS:
+
+```bash
+./scripts/configure-ws.sh --ip 37.114.58.186 --direct-ip --insecure
+```

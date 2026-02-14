@@ -56,7 +56,11 @@ async function ensureThread(userId: string, friendId: string): Promise<string> {
   return id;
 }
 
-export async function socialRoutes(app: FastifyInstance, broadcastCallSignal?: (targetUserId: string, signal: any) => Promise<void>) {
+export async function socialRoutes(
+  app: FastifyInstance,
+  broadcastCallSignal?: (targetUserId: string, signal: any) => Promise<void>,
+  broadcastToUser?: (targetUserId: string, t: string, d: any) => Promise<void>
+) {
   app.get("/v1/social/friends", { preHandler: [app.authenticate] } as any, async (req: any) => {
     const userId = req.user.sub as string;
 
@@ -332,20 +336,43 @@ export async function socialRoutes(app: FastifyInstance, broadcastCallSignal?: (
     const { threadId } = z.object({ threadId: z.string().min(3) }).parse(req.params);
     const body = parseBody(SendDm, req.body);
 
-    const thread = await q<{ id: string }>(
-      `SELECT id FROM social_dm_threads WHERE id=:threadId AND (user_a=:userId OR user_b=:userId) LIMIT 1`,
+    const thread = await q<{ id: string; user_a: string; user_b: string }>(
+      `SELECT id,user_a,user_b FROM social_dm_threads WHERE id=:threadId AND (user_a=:userId OR user_b=:userId) LIMIT 1`,
       { threadId, userId }
     );
 
     if (!thread.length) return rep.code(404).send({ error: "THREAD_NOT_FOUND" });
 
     const id = ulidLike();
+    const content = body.content.trim();
     await q(
       `INSERT INTO social_dm_messages (id,thread_id,sender_user_id,content) VALUES (:id,:threadId,:userId,:content)`,
-      { id, threadId, userId, content: body.content.trim() }
+      { id, threadId, userId, content }
     );
 
     await q(`UPDATE social_dm_threads SET last_message_at=NOW() WHERE id=:threadId`, { threadId });
+
+    if (broadcastToUser) {
+      const sender = await q<{ username: string; display_name: string | null; pfp_url: string | null }>(
+        `SELECT username,display_name,pfp_url FROM users WHERE id=:userId LIMIT 1`,
+        { userId }
+      );
+      const otherUserId = thread[0].user_a === userId ? thread[0].user_b : thread[0].user_a;
+      const createdAt = new Date().toISOString();
+      const payload = {
+        threadId,
+        message: {
+          id,
+          authorId: userId,
+          author: sender[0]?.display_name || sender[0]?.username || userId,
+          pfp_url: sender[0]?.pfp_url ?? null,
+          content,
+          createdAt
+        }
+      };
+      await broadcastToUser(userId, "SOCIAL_DM_MESSAGE_CREATE", payload);
+      await broadcastToUser(otherUserId, "SOCIAL_DM_MESSAGE_CREATE", payload);
+    }
 
     return { ok: true, messageId: id };
   });
@@ -354,8 +381,8 @@ export async function socialRoutes(app: FastifyInstance, broadcastCallSignal?: (
     const userId = req.user.sub as string;
     const { threadId, messageId } = DmMessageParams.parse(req.params);
 
-    const thread = await q<{ id: string }>(
-      `SELECT id FROM social_dm_threads WHERE id=:threadId AND (user_a=:userId OR user_b=:userId) LIMIT 1`,
+    const thread = await q<{ id: string; user_a: string; user_b: string }>(
+      `SELECT id,user_a,user_b FROM social_dm_threads WHERE id=:threadId AND (user_a=:userId OR user_b=:userId) LIMIT 1`,
       { threadId, userId }
     );
     if (!thread.length) return rep.code(404).send({ error: "THREAD_NOT_FOUND" });
@@ -368,6 +395,14 @@ export async function socialRoutes(app: FastifyInstance, broadcastCallSignal?: (
     if (message[0].sender_user_id !== userId) return rep.code(403).send({ error: "MISSING_PERMS" });
 
     await q(`DELETE FROM social_dm_messages WHERE id=:messageId`, { messageId });
+
+    if (broadcastToUser) {
+      const otherUserId = thread[0].user_a === userId ? thread[0].user_b : thread[0].user_a;
+      const payload = { threadId, messageId };
+      await broadcastToUser(userId, "SOCIAL_DM_MESSAGE_DELETE", payload);
+      await broadcastToUser(otherUserId, "SOCIAL_DM_MESSAGE_DELETE", payload);
+    }
+
     return { ok: true };
   });
 

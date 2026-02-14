@@ -15,7 +15,7 @@ export async function channelRoutes(
     const userId = req.auth.userId as string;
 
     try {
-      await requireGuildMember(guildId, userId, req.auth.roles);
+      await requireGuildMember(guildId, userId, req.auth.roles, req.auth.coreServerId);
     } catch {
       return rep.code(403).send({ error: "NOT_GUILD_MEMBER" });
     }
@@ -44,7 +44,7 @@ export async function channelRoutes(
     }).parse(req.body);
 
     try {
-      await requireGuildMember(guildId, userId, req.auth.roles);
+      await requireGuildMember(guildId, userId, req.auth.roles, req.auth.coreServerId);
     } catch {
       return rep.code(403).send({ error: "NOT_GUILD_MEMBER" });
     }
@@ -112,7 +112,7 @@ export async function channelRoutes(
     if (!ch.length) return rep.code(404).send({ error: "CHANNEL_NOT_FOUND" });
     const guildId = ch[0].guild_id;
 
-    try { await requireGuildMember(guildId, userId, req.auth.roles); }
+    try { await requireGuildMember(guildId, userId, req.auth.roles, req.auth.coreServerId); }
     catch { return rep.code(403).send({ error: "NOT_GUILD_MEMBER" }); }
 
     try {
@@ -165,7 +165,7 @@ export async function channelRoutes(
     if (!ch.length) return rep.code(404).send({ error: "CHANNEL_NOT_FOUND" });
     const guildId = ch[0].guild_id;
 
-    try { await requireGuildMember(guildId, userId, req.auth.roles); }
+    try { await requireGuildMember(guildId, userId, req.auth.roles, req.auth.coreServerId); }
     catch { return rep.code(403).send({ error: "NOT_GUILD_MEMBER" }); }
 
     try {

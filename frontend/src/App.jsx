@@ -286,6 +286,7 @@ export function App() {
   const isAtBottomRef = useRef(true);
   const lastDmMessageCountRef = useRef(0);
   const previousDmIdRef = useRef("");
+  const activeChannelIdRef = useRef("");
   const profileCardDragOffsetRef = useRef({ x: 0, y: 0 });
   const storageScope = me?.id || "anonymous";
 
@@ -879,6 +880,8 @@ export function App() {
     return () => window.clearInterval(timer);
   }, [accessToken, navMode]);
 
+  activeChannelIdRef.current = activeChannelId;
+
   useEffect(() => {
     if (navMode !== "servers" || !activeServer || !activeChannelId) {
       if (navMode !== "servers") setMessages([]);
@@ -889,6 +892,26 @@ export function App() {
       .then((data) => setMessages((data.messages || []).slice().reverse()))
       .catch((error) => setStatus(`Message fetch failed: ${error.message}`));
   }, [activeServer, activeChannelId, navMode]);
+
+  // Server channel message polling - keep messages in sync (backup when no real-time)
+  useEffect(() => {
+    if (navMode !== "servers" || !activeServer?.baseUrl || !activeChannelId) return;
+
+    const channelId = activeChannelId;
+    const baseUrl = activeServer.baseUrl;
+    const token = activeServer.membershipToken;
+
+    const timer = window.setInterval(() => {
+      nodeApi(baseUrl, `/v1/channels/${channelId}/messages`, token)
+        .then((data) => {
+          if (activeChannelIdRef.current !== channelId) return;
+          setMessages((data.messages || []).slice().reverse());
+        })
+        .catch(() => {});
+    }, 5000);
+
+    return () => window.clearInterval(timer);
+  }, [navMode, activeServer, activeChannelId]);
 
   async function handleAuthSubmit(event) {
     event.preventDefault();

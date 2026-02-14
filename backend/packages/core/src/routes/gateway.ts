@@ -1,4 +1,6 @@
 import { createServer } from "node:http";
+import { createServer as createTlsServer } from "node:https";
+import { readFileSync } from "node:fs";
 import { WebSocketServer } from "ws";
 import type { FastifyInstance } from "fastify";
 import { GatewayEnvelope, CoreIdentify, PresenceUpdate } from "@ods/shared/events.js";
@@ -75,10 +77,23 @@ export function attachCoreGateway(app: FastifyInstance, redis?: { pub: any; sub:
   // Gateway on its own host (0.0.0.0) and port so it's reachable externally and doesn't conflict with main API (CORE_HOST:CORE_PORT)
   const gatewayHost = env.CORE_GATEWAY_HOST;
   const gatewayPort = env.CORE_GATEWAY_PORT;
-  const gatewayServer = createServer();
+  const tlsCertFile = env.CORE_GATEWAY_TLS_CERT_FILE;
+  const tlsKeyFile = env.CORE_GATEWAY_TLS_KEY_FILE;
+
+  if ((tlsCertFile && !tlsKeyFile) || (!tlsCertFile && tlsKeyFile)) {
+    throw new Error("CORE_GATEWAY_TLS_CERT_FILE and CORE_GATEWAY_TLS_KEY_FILE must be provided together");
+  }
+
+  const gatewayServer = (tlsCertFile && tlsKeyFile)
+    ? createTlsServer({
+        cert: readFileSync(tlsCertFile, "utf8"),
+        key: readFileSync(tlsKeyFile, "utf8")
+      })
+    : createServer();
+
   gatewayServer.on("upgrade", handleUpgrade(true)); // accept / or /gateway on dedicated port
   gatewayServer.listen(gatewayPort, gatewayHost, () => {
-    (app as any).log?.info?.({ host: gatewayHost, port: gatewayPort }, "Gateway listening (WS only)");
+    (app as any).log?.info?.({ host: gatewayHost, port: gatewayPort, tls: Boolean(tlsCertFile && tlsKeyFile) }, "Gateway listening (WS only)");
   });
 
   wss.on("connection", (ws) => {

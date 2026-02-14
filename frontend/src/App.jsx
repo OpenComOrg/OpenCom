@@ -21,8 +21,99 @@ const GATEWAY_DEVICE_ID_KEY = "opencom_gateway_device_id";
 
 function getGatewayWsUrl() {
   const explicit = import.meta.env.VITE_GATEWAY_WS_URL;
-  if (explicit && typeof explicit === "string" && explicit.trim()) return explicit.trim().replace(/\/$/, "");
-  return "wss://ws.opencom.online:9443";
+  const directHost = import.meta.env.VITE_GATEWAY_WS_HOST || "ws.opencom.online";
+  const forceInsecureWs = import.meta.env.VITE_GATEWAY_WS_INSECURE === "1";
+  const defaultScheme = forceInsecureWs ? "ws" : "wss";
+  const raw = (explicit && typeof explicit === "string" && explicit.trim())
+    ? explicit.trim()
+    : `${defaultScheme}://${directHost}:9443/gateway`;
+
+  try {
+    const url = new URL(raw);
+    if (url.protocol !== "ws:" && url.protocol !== "wss:") {
+      url.protocol = url.protocol === "http:" ? "ws:" : "wss:";
+    }
+    // Node gateway upgrades on /gateway
+    if (!url.pathname || url.pathname === "/") {
+      url.pathname = "/gateway";
+    }
+    return url.toString().replace(/\/$/, "");
+  } catch {
+    const normalized = raw.replace(/\/$/, "");
+    return normalized.endsWith("/gateway") ? normalized : `${normalized}/gateway`;
+  }
+}
+
+function getGatewayWsCandidates() {
+  const explicit = import.meta.env.VITE_GATEWAY_WS_URL;
+  const configuredIp = import.meta.env.VITE_GATEWAY_WS_IP;
+  const forceInsecureWs = import.meta.env.VITE_GATEWAY_WS_INSECURE === "1";
+  const candidates = [];
+  const preferSecure = window.location.protocol === "https:";
+
+  const push = (value) => {
+    if (!value || typeof value !== "string") return;
+    const trimmed = value.trim();
+    if (!trimmed) return;
+    const normalized = (() => {
+      try {
+        const url = new URL(trimmed);
+        if (url.protocol !== "ws:" && url.protocol !== "wss:") {
+          url.protocol = url.protocol === "http:" ? "ws:" : "wss:";
+        }
+        if (!url.pathname || url.pathname === "/") url.pathname = "/gateway";
+        return url.toString().replace(/\/$/, "");
+      } catch {
+        const raw = trimmed.replace(/\/$/, "");
+        return raw.endsWith("/gateway") ? raw : `${raw}/gateway`;
+      }
+    })();
+    if (!candidates.includes(normalized)) candidates.push(normalized);
+  };
+
+  const pushHost = (host, port = "9443") => {
+    if (!host) return;
+    const h = String(host).trim();
+    if (!h) return;
+    if (forceInsecureWs) {
+      push(`ws://${h}:${port}/gateway`);
+      return;
+    }
+    if (preferSecure) {
+      push(`wss://${h}:${port}/gateway`);
+      return;
+    }
+    // In local/dev deployments the gateway commonly runs plain WS on 9443.
+    push(`ws://${h}:${port}/gateway`);
+    push(`wss://${h}:${port}/gateway`);
+  };
+
+  if (explicit && typeof explicit === "string" && explicit.trim()) push(explicit);
+  push(getGatewayWsUrl());
+
+  // Prefer same-machine and same-origin hosts first in development.
+  pushHost(window.location.hostname, "9443");
+  if (window.location.hostname === "127.0.0.1" || window.location.hostname === "localhost") {
+    pushHost("127.0.0.1", "9443");
+    pushHost("localhost", "9443");
+  }
+
+  // If CORE API points at a host, try that host's gateway as well.
+  try {
+    const core = new URL(CORE_API);
+    pushHost(core.hostname, "9443");
+  } catch {
+    // ignore invalid CORE_API
+  }
+
+  if (configuredIp && typeof configuredIp === "string" && configuredIp.trim()) {
+    pushHost(configuredIp.trim(), "9443");
+  }
+
+  // Direct host fallback for environments where DNS/proxy is not set yet.
+  pushHost("37.114.58.186", "9443");
+
+  return candidates;
 }
 
 function useThemeCss() {
@@ -663,13 +754,24 @@ export function App() {
       deviceId = "web-" + Math.random().toString(36).slice(2) + "-" + Date.now();
       localStorage.setItem(GATEWAY_DEVICE_ID_KEY, deviceId);
     }
-    const wsUrl = getGatewayWsUrl();
-    const ws = new WebSocket(wsUrl);
-    gatewayWsRef.current = ws;
-    ws.onopen = () => {
-      ws.send(JSON.stringify({ op: "IDENTIFY", d: { accessToken, deviceId } }));
-    };
-    ws.onmessage = (event) => {
+    let disposed = false;
+    let connected = false;
+    let reconnectTimer = null;
+    let candidateIndex = 0;
+    const candidates = getGatewayWsCandidates();
+
+    const connectNext = () => {
+      if (disposed || connected || candidateIndex >= candidates.length) return;
+
+      const wsUrl = candidates[candidateIndex++];
+      const ws = new WebSocket(wsUrl);
+      gatewayWsRef.current = ws;
+
+      ws.onopen = () => {
+        ws.send(JSON.stringify({ op: "IDENTIFY", d: { accessToken, deviceId } }));
+      };
+
+      ws.onmessage = (event) => {
       try {
         const msg = JSON.parse(event.data);
         if (msg.op === "HELLO" && msg.d?.heartbeat_interval) {
@@ -679,7 +781,9 @@ export function App() {
           }, msg.d.heartbeat_interval);
         }
         if (msg.op === "READY") {
+          connected = true;
           setGatewayConnected(true);
+          setStatus("");
           if (gatewayWsRef.current?.readyState === WebSocket.OPEN) {
             gatewayWsRef.current.send(JSON.stringify({ op: "DISPATCH", t: "SET_PRESENCE", d: { status: selfStatus, customStatus: null } }));
           }
@@ -688,21 +792,37 @@ export function App() {
           setPresenceByUserId((prev) => ({ ...prev, [msg.d.userId]: { status: msg.d.status ?? "offline", customStatus: msg.d.customStatus ?? null } }));
         }
       } catch (_) {}
+      };
+
+      ws.onclose = () => {
+        if (disposed) return;
+        setGatewayConnected(false);
+        gatewayWsRef.current = null;
+        if (gatewayHeartbeatRef.current) {
+          clearInterval(gatewayHeartbeatRef.current);
+          gatewayHeartbeatRef.current = null;
+        }
+
+        // Try the next websocket endpoint if this one failed before READY.
+        if (!connected && candidateIndex < candidates.length) {
+          reconnectTimer = setTimeout(connectNext, 300);
+        } else if (!connected) {
+          setStatus("Gateway websocket unavailable. Check DNS/TLS or set VITE_GATEWAY_WS_URL/VITE_GATEWAY_WS_IP.");
+        }
+      };
+
+      ws.onerror = () => {};
     };
-    ws.onclose = () => {
-      setGatewayConnected(false);
-      gatewayWsRef.current = null;
-      if (gatewayHeartbeatRef.current) {
-        clearInterval(gatewayHeartbeatRef.current);
-        gatewayHeartbeatRef.current = null;
-      }
-    };
-    ws.onerror = () => {};
+
+    connectNext();
+
     return () => {
+      disposed = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
       setGatewayConnected(false);
       if (gatewayHeartbeatRef.current) clearInterval(gatewayHeartbeatRef.current);
       gatewayHeartbeatRef.current = null;
-      ws.close();
+      if (gatewayWsRef.current) gatewayWsRef.current.close();
       gatewayWsRef.current = null;
     };
   }, [accessToken, me?.id]);

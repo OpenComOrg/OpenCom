@@ -7,6 +7,10 @@ const Env = z.object({
   CORE_GATEWAY_HOST: z.string().default("0.0.0.0"),
   /** Port for WebSocket gateway only. Default 9443 to avoid conflicting with nginx/other on 443; point ws.opencom.online to this port or proxy 443→9443. */
   CORE_GATEWAY_PORT: z.coerce.number().default(9443),
+  /** Optional TLS cert file for native wss listener. If both cert+key are set, gateway serves HTTPS/WSS directly. */
+  CORE_GATEWAY_TLS_CERT_FILE: z.string().min(1).optional(),
+  /** Optional TLS key file for native wss listener. */
+  CORE_GATEWAY_TLS_KEY_FILE: z.string().min(1).optional(),
   CORE_DATABASE_URL: z.string().min(1),
   CORE_JWT_ACCESS_SECRET: z.string().min(16),
   CORE_JWT_REFRESH_SECRET: z.string().min(16),

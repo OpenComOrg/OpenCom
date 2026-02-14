@@ -23,7 +23,7 @@ export async function overwriteRoutes(
     if (!ch.length) return rep.code(404).send({ error: "CHANNEL_NOT_FOUND" });
     const guildId = ch[0].guild_id;
 
-    try { await requireGuildMember(guildId, userId, req.auth.roles); } catch { return rep.code(403).send({ error: "NOT_GUILD_MEMBER" }); }
+    try { await requireGuildMember(guildId, userId, req.auth.roles, req.auth.coreServerId); } catch { return rep.code(403).send({ error: "NOT_GUILD_MEMBER" }); }
 
     try {
       await requireManageChannels({ guildId, channelIdForPerms: channelId, actorId: userId, actorRoles: req.auth.roles });
@@ -55,7 +55,7 @@ export async function overwriteRoutes(
     if (!ch.length) return rep.code(404).send({ error: "CHANNEL_NOT_FOUND" });
     const guildId = ch[0].guild_id;
 
-    try { await requireGuildMember(guildId, userId, req.auth.roles); } catch { return rep.code(403).send({ error: "NOT_GUILD_MEMBER" }); }
+    try { await requireGuildMember(guildId, userId, req.auth.roles, req.auth.coreServerId); } catch { return rep.code(403).send({ error: "NOT_GUILD_MEMBER" }); }
 
     try {
       await requireManageChannels({ guildId, channelIdForPerms: channelId, actorId: userId, actorRoles: req.auth.roles });
@@ -87,7 +87,7 @@ export async function overwriteRoutes(
     const parentId = ch[0].parent_id;
     if (!parentId) return rep.code(400).send({ error: "NO_PARENT_CATEGORY" });
 
-    try { await requireGuildMember(guildId, userId, req.auth.roles); } catch { return rep.code(403).send({ error: "NOT_GUILD_MEMBER" }); }
+    try { await requireGuildMember(guildId, userId, req.auth.roles, req.auth.coreServerId); } catch { return rep.code(403).send({ error: "NOT_GUILD_MEMBER" }); }
 
     const parent = await q<{ id: string; type: string }>(
       `SELECT id,type FROM channels WHERE id=:parentId AND guild_id=:guildId`,

@@ -388,6 +388,13 @@ export function App() {
     peerConnections: new Map(),
     remoteAudioByUserId: new Map()
   });
+  const voiceRelayRef = useRef({
+    mediaRecorder: null,
+    sequence: 0,
+    audioCtx: null,
+    nextPlaybackByUserId: new Map(),
+    sourceNodesByUserId: new Map()
+  });
   const selfStatusRef = useRef(selfStatus);
   selfStatusRef.current = selfStatus;
 
@@ -1124,6 +1131,11 @@ export function App() {
             return;
           }
 
+          if (msg.op === "DISPATCH" && msg.t === "VOICE_AUDIO_CHUNK" && msg.d?.fromUserId && msg.d?.encoded) {
+            playIncomingVoiceAudioChunk(msg.d.fromUserId, msg.d.encoded).catch(() => {});
+            return;
+          }
+
           if (msg.op === "DISPATCH" && msg.t === "VOICE_JOINED" && msg.d?.channelId) {
             setVoiceConnectedChannelId(msg.d.channelId);
             ensureLocalVoiceStream().catch(() => {
@@ -1426,6 +1438,72 @@ export function App() {
     localStorage.setItem(AUDIO_OUTPUT_DEVICE_KEY, audioOutputDeviceId || "");
   }, [audioOutputDeviceId]);
 
+
+  useEffect(() => {
+    const canStream = !!voiceConnectedChannelId
+      && !!activeGuildId
+      && !isMuted
+      && !isDeafened
+      && !!me?.id
+      && !!navigator.mediaDevices?.getUserMedia
+      && !!window.MediaRecorder;
+
+    if (!canStream) {
+      const relay = voiceRelayRef.current;
+      if (relay.mediaRecorder) {
+        try { relay.mediaRecorder.stop(); } catch {}
+        relay.mediaRecorder = null;
+      }
+      return;
+    }
+
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const stream = await ensureLocalVoiceStream();
+        if (cancelled) return;
+
+        const preferredTypes = ["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus"];
+        const mimeType = preferredTypes.find((m) => window.MediaRecorder.isTypeSupported?.(m));
+        const recorder = mimeType ? new window.MediaRecorder(stream, { mimeType, audioBitsPerSecond: 48000 }) : new window.MediaRecorder(stream);
+        const relay = voiceRelayRef.current;
+        relay.mediaRecorder = recorder;
+
+        recorder.ondataavailable = async (event) => {
+          if (cancelled || !event.data || event.data.size === 0) return;
+          if (isMuted || isDeafened) return;
+          try {
+            const arr = new Uint8Array(await event.data.arrayBuffer());
+            let binary = "";
+            for (let i = 0; i < arr.length; i += 1) binary += String.fromCharCode(arr[i]);
+            const encoded = btoa(binary);
+            sendNodeVoiceDispatch("VOICE_AUDIO_CHUNK", {
+              guildId: activeGuildId,
+              channelId: voiceConnectedChannelId,
+              mimeType: recorder.mimeType || mimeType || "audio/webm",
+              sequence: relay.sequence++,
+              encoded
+            });
+          } catch {}
+        };
+
+        recorder.start(120);
+      } catch {
+        setStatus("Microphone access is required for voice chat.");
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      const relay = voiceRelayRef.current;
+      if (relay.mediaRecorder) {
+        try { relay.mediaRecorder.stop(); } catch {}
+        relay.mediaRecorder = null;
+      }
+    };
+  }, [voiceConnectedChannelId, activeGuildId, me?.id, isMuted, isDeafened]);
+
   useEffect(() => {
     if (settingsTab !== "voice" || !settingsOpen || !navigator.mediaDevices?.enumerateDevices) return;
     let cancelled = false;
@@ -1460,6 +1538,9 @@ export function App() {
 
   useEffect(() => {
     if (!me?.id || !voiceConnectedChannelId) return;
+    // WebRTC mesh is disabled in favor of websocket-relayed Opus chunks,
+    // which works without direct peer connectivity.
+    return;
     const members = (voiceMembersByChannel.get(voiceConnectedChannelId) || []).map((m) => m.userId).filter(Boolean);
     const peers = members.filter((id) => id !== me.id);
     const peerSet = new Set(peers);
@@ -2452,6 +2533,53 @@ export function App() {
       try { audio.pause(); audio.srcObject = null; audio.remove(); } catch {}
     }
     rtc.remoteAudioByUserId.clear();
+
+    const relay = voiceRelayRef.current;
+    if (relay.mediaRecorder) {
+      try { relay.mediaRecorder.stop(); } catch {}
+      relay.mediaRecorder = null;
+    }
+    relay.sequence = 0;
+    relay.nextPlaybackByUserId.clear();
+    for (const node of relay.sourceNodesByUserId.values()) {
+      try { node.stop(); } catch {}
+    }
+    relay.sourceNodesByUserId.clear();
+    if (relay.audioCtx) {
+      relay.audioCtx.close().catch(() => {});
+      relay.audioCtx = null;
+    }
+  }
+
+  async function playIncomingVoiceAudioChunk(fromUserId, encoded) {
+    if (!fromUserId || fromUserId === me?.id || isDeafened) return;
+    const relay = voiceRelayRef.current;
+    if (!relay.audioCtx || relay.audioCtx.state === "closed") {
+      relay.audioCtx = new window.AudioContext();
+    }
+
+    if (relay.audioCtx.state === "suspended") {
+      await relay.audioCtx.resume().catch(() => {});
+    }
+
+    const binary = atob(encoded);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+
+    const buffer = await relay.audioCtx.decodeAudioData(bytes.buffer.slice(0));
+    const source = relay.audioCtx.createBufferSource();
+    source.buffer = buffer;
+    source.connect(relay.audioCtx.destination);
+
+    const nextAt = Math.max(relay.audioCtx.currentTime + 0.02, relay.nextPlaybackByUserId.get(fromUserId) || 0);
+    relay.nextPlaybackByUserId.set(fromUserId, nextAt + buffer.duration);
+    relay.sourceNodesByUserId.set(fromUserId, source);
+    source.onended = () => {
+      if (relay.sourceNodesByUserId.get(fromUserId) === source) {
+        relay.sourceNodesByUserId.delete(fromUserId);
+      }
+    };
+    source.start(nextAt);
   }
 
   async function ensureLocalVoiceStream() {

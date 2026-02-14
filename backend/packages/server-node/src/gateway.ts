@@ -49,6 +49,15 @@ export function attachNodeGateway(app: FastifyInstance) {
     }
   }
 
+  function broadcastVoiceChannel(guildId: string, channelId: string, t: string, d: any, excludeUserId?: string) {
+    for (const c of conns) {
+      if (!c.voice) continue;
+      if (c.voice.guildId !== guildId || c.voice.channelId !== channelId) continue;
+      if (excludeUserId && c.userId === excludeUserId) continue;
+      sendDispatch(c, t, d);
+    }
+  }
+
   async function emitVoiceState(guildId: string, userId: string) {
     const rows = await q<any>(
       `SELECT guild_id, channel_id, user_id, muted, deafened, updated_at
@@ -325,6 +334,47 @@ export function attachNodeGateway(app: FastifyInstance) {
           });
         } catch {
           sendDispatch(conn, "VOICE_ERROR", { error: "VOICE_SPEAKING_FAILED" });
+        }
+        return;
+      }
+
+      if (msg.op === "DISPATCH" && msg.t === "VOICE_AUDIO_CHUNK") {
+        try {
+          if (!conn.voice) {
+            sendDispatch(conn, "VOICE_ERROR", { error: "NOT_IN_VOICE_CHANNEL" });
+            return;
+          }
+
+          const encoded = (msg.d as any)?.encoded;
+          const mimeType = (msg.d as any)?.mimeType;
+          const sequence = Number((msg.d as any)?.sequence || 0);
+
+          if (typeof encoded !== "string" || !encoded.length || encoded.length > 512_000) {
+            sendDispatch(conn, "VOICE_ERROR", { error: "BAD_VOICE_AUDIO_CHUNK" });
+            return;
+          }
+
+          if (typeof mimeType !== "string" || !mimeType.startsWith("audio/")) {
+            sendDispatch(conn, "VOICE_ERROR", { error: "BAD_VOICE_AUDIO_CHUNK" });
+            return;
+          }
+
+          broadcastVoiceChannel(
+            conn.voice.guildId,
+            conn.voice.channelId,
+            "VOICE_AUDIO_CHUNK",
+            {
+              guildId: conn.voice.guildId,
+              channelId: conn.voice.channelId,
+              fromUserId: conn.userId,
+              encoded,
+              mimeType,
+              sequence
+            },
+            conn.userId
+          );
+        } catch {
+          sendDispatch(conn, "VOICE_ERROR", { error: "VOICE_AUDIO_CHUNK_FAILED" });
         }
         return;
       }

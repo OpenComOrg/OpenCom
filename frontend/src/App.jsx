@@ -41,6 +41,50 @@ function getGatewayWsUrl() {
   }
 }
 
+function getGatewayWsCandidates() {
+  const explicit = import.meta.env.VITE_GATEWAY_WS_URL;
+  const configuredIp = import.meta.env.VITE_GATEWAY_WS_IP;
+  const candidates = [];
+
+  const push = (value) => {
+    if (!value || typeof value !== "string") return;
+    const trimmed = value.trim();
+    if (!trimmed) return;
+    const normalized = (() => {
+      try {
+        const url = new URL(trimmed);
+        if (url.protocol !== "ws:" && url.protocol !== "wss:") {
+          url.protocol = url.protocol === "http:" ? "ws:" : "wss:";
+        }
+        if (!url.pathname || url.pathname === "/") url.pathname = "/gateway";
+        return url.toString().replace(/\/$/, "");
+      } catch {
+        const raw = trimmed.replace(/\/$/, "");
+        return raw.endsWith("/gateway") ? raw : `${raw}/gateway`;
+      }
+    })();
+    if (!candidates.includes(normalized)) candidates.push(normalized);
+  };
+
+  if (explicit && typeof explicit === "string" && explicit.trim()) push(explicit);
+  push(getGatewayWsUrl());
+
+  if (configuredIp && typeof configuredIp === "string" && configuredIp.trim()) {
+    push(`wss://${configuredIp.trim()}:9443/gateway`);
+    if (window.location.protocol !== "https:") {
+      push(`ws://${configuredIp.trim()}:9443/gateway`);
+    }
+  }
+
+  // Direct host fallback for environments where DNS/proxy is not set yet.
+  push("wss://37.114.58.186:9443/gateway");
+  if (window.location.protocol !== "https:") {
+    push("ws://37.114.58.186:9443/gateway");
+  }
+
+  return candidates;
+}
+
 function useThemeCss() {
   const [css, setCss] = useState(localStorage.getItem(THEME_STORAGE_KEY) || "");
   const [enabled, setEnabled] = useState(localStorage.getItem(THEME_ENABLED_STORAGE_KEY) !== "0");
@@ -679,13 +723,24 @@ export function App() {
       deviceId = "web-" + Math.random().toString(36).slice(2) + "-" + Date.now();
       localStorage.setItem(GATEWAY_DEVICE_ID_KEY, deviceId);
     }
-    const wsUrl = getGatewayWsUrl();
-    const ws = new WebSocket(wsUrl);
-    gatewayWsRef.current = ws;
-    ws.onopen = () => {
-      ws.send(JSON.stringify({ op: "IDENTIFY", d: { accessToken, deviceId } }));
-    };
-    ws.onmessage = (event) => {
+    let disposed = false;
+    let connected = false;
+    let reconnectTimer = null;
+    let candidateIndex = 0;
+    const candidates = getGatewayWsCandidates();
+
+    const connectNext = () => {
+      if (disposed || connected || candidateIndex >= candidates.length) return;
+
+      const wsUrl = candidates[candidateIndex++];
+      const ws = new WebSocket(wsUrl);
+      gatewayWsRef.current = ws;
+
+      ws.onopen = () => {
+        ws.send(JSON.stringify({ op: "IDENTIFY", d: { accessToken, deviceId } }));
+      };
+
+      ws.onmessage = (event) => {
       try {
         const msg = JSON.parse(event.data);
         if (msg.op === "HELLO" && msg.d?.heartbeat_interval) {
@@ -695,7 +750,9 @@ export function App() {
           }, msg.d.heartbeat_interval);
         }
         if (msg.op === "READY") {
+          connected = true;
           setGatewayConnected(true);
+          setStatus("");
           if (gatewayWsRef.current?.readyState === WebSocket.OPEN) {
             gatewayWsRef.current.send(JSON.stringify({ op: "DISPATCH", t: "SET_PRESENCE", d: { status: selfStatus, customStatus: null } }));
           }
@@ -704,21 +761,37 @@ export function App() {
           setPresenceByUserId((prev) => ({ ...prev, [msg.d.userId]: { status: msg.d.status ?? "offline", customStatus: msg.d.customStatus ?? null } }));
         }
       } catch (_) {}
+      };
+
+      ws.onclose = () => {
+        if (disposed) return;
+        setGatewayConnected(false);
+        gatewayWsRef.current = null;
+        if (gatewayHeartbeatRef.current) {
+          clearInterval(gatewayHeartbeatRef.current);
+          gatewayHeartbeatRef.current = null;
+        }
+
+        // Try the next websocket endpoint if this one failed before READY.
+        if (!connected && candidateIndex < candidates.length) {
+          reconnectTimer = setTimeout(connectNext, 300);
+        } else if (!connected) {
+          setStatus("Gateway websocket unavailable. Check DNS/TLS or set VITE_GATEWAY_WS_URL/VITE_GATEWAY_WS_IP.");
+        }
+      };
+
+      ws.onerror = () => {};
     };
-    ws.onclose = () => {
-      setGatewayConnected(false);
-      gatewayWsRef.current = null;
-      if (gatewayHeartbeatRef.current) {
-        clearInterval(gatewayHeartbeatRef.current);
-        gatewayHeartbeatRef.current = null;
-      }
-    };
-    ws.onerror = () => {};
+
+    connectNext();
+
     return () => {
+      disposed = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
       setGatewayConnected(false);
       if (gatewayHeartbeatRef.current) clearInterval(gatewayHeartbeatRef.current);
       gatewayHeartbeatRef.current = null;
-      ws.close();
+      if (gatewayWsRef.current) gatewayWsRef.current.close();
       gatewayWsRef.current = null;
     };
   }, [accessToken, me?.id]);

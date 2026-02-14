@@ -1041,6 +1041,16 @@ export function App() {
             return;
           }
 
+          if (msg.op === "DISPATCH" && msg.t === "VOICE_STATE_REMOVE" && msg.d?.guildId && msg.d?.userId) {
+            setVoiceStatesByGuild((prev) => {
+              const guildId = msg.d.guildId;
+              const byUser = { ...(prev[guildId] || {}) };
+              delete byUser[msg.d.userId];
+              return { ...prev, [guildId]: byUser };
+            });
+            return;
+          }
+
           if (msg.op === "DISPATCH" && msg.t === "VOICE_JOINED" && msg.d?.channelId) {
             setVoiceConnectedChannelId(msg.d.channelId);
             return;
@@ -1290,10 +1300,9 @@ export function App() {
   }, [settingsTab, settingsOpen, audioInputDeviceId, audioOutputDeviceId]);
 
   useEffect(() => {
-    if (!me?.id || !mergedVoiceStates.length) return;
+    if (!me?.id) return;
     const selfState = mergedVoiceStates.find((vs) => vs.userId === me.id);
-    if (!selfState?.channelId) return;
-    setVoiceConnectedChannelId((current) => current || selfState.channelId);
+    setVoiceConnectedChannelId(selfState?.channelId || "");
   }, [mergedVoiceStates, me?.id]);
 
 

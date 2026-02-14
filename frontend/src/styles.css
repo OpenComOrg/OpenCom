@@ -290,6 +290,63 @@ button.danger { background: linear-gradient(135deg, #eb5d73, #c84159); }
   text-align: center;
 }
 
+.channel-row.channel-dragging {
+  opacity: 0.6;
+  cursor: grabbing;
+}
+.channel-row.channel-drop-target {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+
+/* Member list by role */
+.members-role-section {
+  margin-bottom: var(--space-md);
+}
+.members-role-label {
+  font-size: 0.8em;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: var(--space-xs) var(--space-sm);
+  margin-bottom: var(--space-xs);
+  border-radius: calc(var(--radius) * 0.6);
+  color: var(--text-dim);
+}
+
+/* Profile popout roles */
+.popout-roles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-xs);
+  margin-top: var(--space-sm);
+}
+.popout-role-tag {
+  font-size: 0.85em;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+/* Channel permissions (settings) */
+.channel-perms-role-list {
+  list-style: none;
+  padding: 0;
+  margin: var(--space-sm) 0 0;
+}
+.channel-perms-role-list li {
+  padding: var(--space-xs) 0;
+}
+.channel-perms-role-list label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  cursor: pointer;
+}
+.channel-perms-role-name {
+  font-weight: 500;
+}
+
 /* User, friends & profile */
 .friend-row {
   display: flex;

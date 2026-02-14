@@ -254,6 +254,8 @@ export function App() {
   const [twoFactorVerified, setTwoFactorVerified] = useState(false);
   const [show2FASetup, setShow2FASetup] = useState(false);
   const [securitySettings, setSecuritySettings] = useState({ twoFactorEnabled: false });
+  const [channelDragId, setChannelDragId] = useState(null);
+  const [channelPermsChannelId, setChannelPermsChannelId] = useState("");
 
   const messagesRef = useRef(null);
   const dmMessagesRef = useRef(null);
@@ -1349,6 +1351,100 @@ export function App() {
     }
   }
 
+  async function updateChannelPosition(channelId, newPosition) {
+    if (!activeServer || !activeGuildId) return;
+    try {
+      await nodeApi(activeServer.baseUrl, `/v1/channels/${channelId}`, activeServer.membershipToken, {
+        method: "PATCH",
+        body: JSON.stringify({ position: newPosition })
+      });
+      const state = await nodeApi(activeServer.baseUrl, `/v1/guilds/${activeGuildId}/state`, activeServer.membershipToken);
+      setGuildState(state);
+    } catch (e) {
+      setStatus(`Move channel failed: ${e.message}`);
+    }
+  }
+
+  async function handleChannelDrop(draggedId, targetId, sectionItems) {
+    const fromIndex = sectionItems.findIndex((c) => c.id === draggedId);
+    const toIndex = sectionItems.findIndex((c) => c.id === targetId);
+    if (fromIndex === -1 || toIndex === -1 || fromIndex === toIndex) return;
+    const reordered = [...sectionItems];
+    const [removed] = reordered.splice(fromIndex, 1);
+    reordered.splice(toIndex, 0, removed);
+    const channels = guildState?.channels || [];
+    const byParent = new Map();
+    for (const c of channels) {
+      const pid = c.parent_id || "__uncat__";
+      if (!byParent.has(pid)) byParent.set(pid, []);
+      byParent.get(pid).push(c);
+    }
+    const sectionParentId = sectionItems[0]?.parent_id ?? "__uncat__";
+    const flatOrder = [];
+    const sortedParents = [...byParent.keys()].sort((a, b) => {
+      const listA = byParent.get(a);
+      const listB = byParent.get(b);
+      const posA = Math.min(...listA.map((c) => c.position ?? 0));
+      const posB = Math.min(...listB.map((c) => c.position ?? 0));
+      return posA - posB;
+    });
+    for (const pid of sortedParents) {
+      const list = byParent.get(pid);
+      const isThisSection = (pid === sectionParentId);
+      const ordered = isThisSection ? reordered : list.sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+      flatOrder.push(...ordered);
+    }
+    const updates = flatOrder.map((ch, idx) => ((ch.position ?? -1) !== idx ? updateChannelPosition(ch.id, idx) : Promise.resolve()));
+    await Promise.all(updates);
+    setChannelDragId(null);
+  }
+
+  const SEND_MESSAGES_BIT = 2;
+  const VIEW_CHANNEL_BIT = 1;
+
+  async function setChannelRoleSend(channelId, roleId, canSend) {
+    if (!activeServer || !channelId || !roleId) return;
+    try {
+      const everyoneRole = (guildState?.roles || []).find((r) => r.is_everyone);
+      if (canSend) {
+        if (everyoneRole) {
+          await nodeApi(activeServer.baseUrl, `/v1/channels/${channelId}/overwrites`, activeServer.membershipToken, {
+            method: "PUT",
+            body: JSON.stringify({ targetType: "role", targetId: everyoneRole.id, allow: "0", deny: String(SEND_MESSAGES_BIT) })
+          });
+        }
+        await nodeApi(activeServer.baseUrl, `/v1/channels/${channelId}/overwrites`, activeServer.membershipToken, {
+          method: "PUT",
+          body: JSON.stringify({ targetType: "role", targetId: roleId, allow: String(SEND_MESSAGES_BIT), deny: "0" })
+        });
+      } else {
+        await nodeApi(activeServer.baseUrl, `/v1/channels/${channelId}/overwrites`, activeServer.membershipToken, {
+          method: "DELETE",
+          body: JSON.stringify({ targetType: "role", targetId: roleId })
+        });
+        const otherRoleAllows = (guildState?.overwrites || []).filter(
+          (o) => o.channel_id === channelId && o.target_type === "role" && o.target_id !== roleId && (parseInt(o.allow, 10) & SEND_MESSAGES_BIT)
+        );
+        if (everyoneRole && otherRoleAllows.length === 0) {
+          await nodeApi(activeServer.baseUrl, `/v1/channels/${channelId}/overwrites`, activeServer.membershipToken, {
+            method: "DELETE",
+            body: JSON.stringify({ targetType: "role", targetId: everyoneRole.id })
+          });
+        }
+      }
+      const state = await nodeApi(activeServer.baseUrl, `/v1/guilds/${activeGuildId}/state`, activeServer.membershipToken);
+      setGuildState(state);
+    } catch (e) {
+      setStatus(`Permission update failed: ${e.message}`);
+    }
+  }
+
+  function channelOverwriteAllowsSend(channelId, roleId) {
+    const ov = (guildState?.overwrites || []).find((o) => o.channel_id === channelId && o.target_type === "role" && o.target_id === roleId);
+    if (!ov) return false;
+    return (parseInt(ov.allow, 10) & SEND_MESSAGES_BIT) !== 0;
+  }
+
   async function createRole() {
     if (!activeServer || !activeGuildId || !newRoleName.trim()) return;
     try {
@@ -1663,7 +1759,8 @@ export function App() {
       setMemberProfileCard({
         ...profileData,
         username: profileData.username || member.username,
-        status: member.status || "online"
+        status: member.status || "online",
+        roleIds: member.roleIds || []
       });
     } catch {
       setMemberProfileCard({
@@ -1674,7 +1771,8 @@ export function App() {
         badges: [],
         status: member.status || "online",
         platformTitle: null,
-        createdAt: null
+        createdAt: null,
+        roleIds: member.roleIds || []
       });
     }
   }
@@ -1772,7 +1870,17 @@ export function App() {
                         {items.map((channel) => (
                           <button
                             key={channel.id}
-                            className={`channel-row ${channel.id === activeChannelId ? "active" : ""}`}
+                            className={`channel-row ${channel.id === activeChannelId ? "active" : ""} ${channelDragId === channel.id ? "channel-dragging" : ""}`}
+                            draggable={canManageServer}
+                            onDragStart={() => canManageServer && setChannelDragId(channel.id)}
+                            onDragOver={(e) => { e.preventDefault(); e.currentTarget.classList.add("channel-drop-target"); }}
+                            onDragLeave={(e) => e.currentTarget.classList.remove("channel-drop-target"); }}
+                            onDrop={(e) => {
+                              e.preventDefault();
+                              e.currentTarget.classList.remove("channel-drop-target");
+                              if (canManageServer && channelDragId && channelDragId !== channel.id) handleChannelDrop(channelDragId, channel.id, items);
+                            }}
+                            onDragEnd={() => setChannelDragId(null)}
                             onClick={() => {
                               if (channel.type === "text") setActiveChannelId(channel.id);
                               if (channel.type === "voice") setVoiceConnectedChannelId(channel.id);
@@ -1967,26 +2075,49 @@ export function App() {
             </section>
 
             <aside className="members-pane">
-              <h4>Online — {resolvedMemberList.length}</h4>
-              {resolvedMemberList.map((member) => {
-                const roles = (guildState?.roles || []).filter((r) => (member.roleIds || []).includes(r.id)).sort((a, b) => (b.position ?? 0) - (a.position ?? 0));
-                const topRole = roles[0];
-                const roleColor = topRole?.color != null && topRole.color !== "" ? (typeof topRole.color === "number" ? `#${Number(topRole.color).toString(16).padStart(6, "0")}` : topRole.color) : null;
-                return (
-                  <button className="member-row" key={member.id} title={`View ${member.username}`} onClick={(event) => { event.stopPropagation(); openMemberProfile(member); }}>
-                    {member.pfp_url ? (
-                      <img src={profileImageUrl(member.pfp_url)} alt={member.username} className="avatar member-avatar" style={{ objectFit: "cover" }} />
-                    ) : (
-                      <div className="avatar member-avatar">{getInitials(member.username)}</div>
-                    )}
-                    <div>
-                      <strong style={roleColor ? { color: roleColor } : undefined}>{member.username}</strong>
-                      {topRole && <span className="member-role-tag">{topRole.name}</span>}
-                      <span>{member.id === me?.id ? selfStatus : member.status}</span>
+              <h4>Members — {resolvedMemberList.length}</h4>
+              {(() => {
+                const rolesById = new Map((guildState?.roles || []).map((r) => [r.id, r]));
+                const getHighestRole = (member) => {
+                  const memberRoles = (member.roleIds || []).map((id) => rolesById.get(id)).filter(Boolean).sort((a, b) => (b.position ?? 0) - (a.position ?? 0));
+                  return memberRoles[0] || null;
+                };
+                const byHighestRole = new Map();
+                for (const member of resolvedMemberList) {
+                  const top = getHighestRole(member);
+                  const key = top?.id ?? "__none__";
+                  if (!byHighestRole.has(key)) byHighestRole.set(key, { role: top, members: [] });
+                  byHighestRole.get(key).members.push(member);
+                }
+                const noneRole = { id: "__none__", name: "No role", position: -1, color: null };
+                const sections = Array.from(byHighestRole.entries()).map(([key, { role, members }]) => ({ role: role || noneRole, members }));
+                sections.sort((a, b) => (b.role.position ?? 0) - (a.role.position ?? 0));
+                return sections.map(({ role, members }) => {
+                  const roleColor = role.color != null && role.color !== "" ? (typeof role.color === "number" ? `#${Number(role.color).toString(16).padStart(6, "0")}` : role.color) : null;
+                  return (
+                    <div className="members-role-section" key={role.id}>
+                      <div className="members-role-label" style={roleColor ? { color: roleColor } : undefined}>{role.name}</div>
+                      {members.map((member) => {
+                        const topRole = getHighestRole(member);
+                        const color = topRole?.color != null && topRole.color !== "" ? (typeof topRole.color === "number" ? `#${Number(topRole.color).toString(16).padStart(6, "0")}` : topRole.color) : null;
+                        return (
+                          <button className="member-row" key={member.id} title={`View ${member.username}`} onClick={(event) => { event.stopPropagation(); openMemberProfile(member); }}>
+                            {member.pfp_url ? (
+                              <img src={profileImageUrl(member.pfp_url)} alt={member.username} className="avatar member-avatar" style={{ objectFit: "cover" }} />
+                            ) : (
+                              <div className="avatar member-avatar">{getInitials(member.username)}</div>
+                            )}
+                            <div>
+                              <strong style={color ? { color } : undefined}>{member.username}</strong>
+                              <span>{member.id === me?.id ? selfStatus : member.status}</span>
+                            </div>
+                          </button>
+                        );
+                      })}
                     </div>
-                  </button>
-                );
-              })}
+                  );
+                });
+              })()}
               {!resolvedMemberList.length && <p className="hint">No visible members yet.</p>}
             </aside>
           </div>
@@ -2227,6 +2358,17 @@ export function App() {
             <p className="hint">@{memberProfileCard.username} · {memberProfileCard.status || "online"}</p>
             {memberProfileCard.platformTitle && <p className="hint">{memberProfileCard.platformTitle}</p>}
             {formatAccountCreated(memberProfileCard.createdAt) && <p className="hint">Account created: {formatAccountCreated(memberProfileCard.createdAt)}</p>}
+            {(memberProfileCard.roleIds?.length > 0) && guildState?.roles && (
+              <div className="popout-roles">
+                {(guildState.roles || [])
+                  .filter((r) => (memberProfileCard.roleIds || []).includes(r.id) && !r.is_everyone)
+                  .sort((a, b) => (b.position ?? 0) - (a.position ?? 0))
+                  .map((role) => {
+                    const hex = role.color != null && role.color !== "" ? (typeof role.color === "number" ? `#${Number(role.color).toString(16).padStart(6, "0")}` : role.color) : "#99aab5";
+                    return <span key={role.id} className="popout-role-tag" style={{ backgroundColor: hex + "22", color: hex, borderColor: hex }}>{role.name}</span>;
+                  })}
+              </div>
+            )}
             <p>{memberProfileCard.bio || "No bio set."}</p>
             <div className="popout-actions">
               <button className="ghost" onClick={() => openDmFromFriend({ id: memberProfileCard.id, username: memberProfileCard.username })}>Message</button>
@@ -2302,6 +2444,36 @@ export function App() {
                         </select>
                       )}
                       <button onClick={createChannel}>Create Channel</button>
+                    </section>
+                  )}
+
+                  {activeServer && canManageServer && (
+                    <section className="card">
+                      <h4>Channel permissions</h4>
+                      <p className="hint">Choose a channel and set which roles can send messages there. By default everyone can send.</p>
+                      <select value={channelPermsChannelId} onChange={(e) => setChannelPermsChannelId(e.target.value)}>
+                        <option value="">Select channel</option>
+                        {(sortedChannels || []).filter((c) => c.type === "text").map((ch) => (
+                          <option key={ch.id} value={ch.id}>#{ch.name}</option>
+                        ))}
+                      </select>
+                      {channelPermsChannelId && (
+                        <ul className="channel-perms-role-list">
+                          {(guildState?.roles || []).filter((r) => !r.is_everyone).sort((a, b) => (b.position ?? 0) - (a.position ?? 0)).map((role) => (
+                            <li key={role.id}>
+                              <label>
+                                <input
+                                  type="checkbox"
+                                  checked={channelOverwriteAllowsSend(channelPermsChannelId, role.id)}
+                                  onChange={(e) => setChannelRoleSend(channelPermsChannelId, role.id, e.target.checked)}
+                                />
+                                <span className="channel-perms-role-name" style={{ color: role.color != null && role.color !== "" ? (typeof role.color === "number" ? `#${Number(role.color).toString(16).padStart(6, "0")}` : role.color) : "#99aab5" }}>{role.name}</span>
+                                <span className="hint"> can send here</span>
+                              </label>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
                     </section>
                   )}
 

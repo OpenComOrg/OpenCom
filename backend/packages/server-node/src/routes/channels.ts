@@ -206,7 +206,7 @@ export async function channelRoutes(
       { guildId, channelId, userId }
     );
 
-    broadcastGuild(guildId, "VOICE_STATE_UPDATE", { userId, channelId, muted: false, deafened: false });
+    broadcastGuild(guildId, "VOICE_STATE_UPDATE", { guildId, userId, channelId, muted: false, deafened: false });
     return rep.send({ ok: true });
   });
 
@@ -227,7 +227,7 @@ export async function channelRoutes(
       { userId, channelId }
     );
 
-    broadcastGuild(guildId, "VOICE_STATE_REMOVE", { userId, channelId });
+    broadcastGuild(guildId, "VOICE_STATE_REMOVE", { guildId, userId, channelId });
     return rep.send({ ok: true });
   });
 
@@ -261,7 +261,7 @@ export async function channelRoutes(
       { userId, channelId }
     ))[0];
 
-    broadcastGuild(guildId, "VOICE_STATE_UPDATE", { userId, channelId, ...updated });
+    broadcastGuild(guildId, "VOICE_STATE_UPDATE", { guildId, userId, channelId, ...updated });
     return rep.send({ ok: true });
   });
 }

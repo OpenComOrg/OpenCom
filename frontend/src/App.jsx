@@ -84,7 +84,7 @@ function getGatewayWsCandidates() {
 }
 
 
-function getNodeGatewayWsCandidates(serverBaseUrl) {
+function getNodeGatewayWsCandidates(serverBaseUrl, includeDirectNodeWsFallback = false) {
   const candidates = [];
   const push = (value) => {
     if (!value || typeof value !== "string") return;
@@ -110,9 +110,11 @@ function getNodeGatewayWsCandidates(serverBaseUrl) {
   // Core gateway proxies membershipToken sessions to node gateways.
   for (const wsUrl of getGatewayWsCandidates()) push(wsUrl);
 
-  const allowDirectNodeWsFallback = String(import.meta.env.VITE_ENABLE_DIRECT_NODE_WS_FALLBACK || "").trim() === "1";
+  const allowDirectNodeWsFallback = includeDirectNodeWsFallback
+    || String(import.meta.env.VITE_ENABLE_DIRECT_NODE_WS_FALLBACK || "").trim() === "1";
   if (allowDirectNodeWsFallback) {
     // Optional escape hatch for deployments that explicitly want direct node WS fallback.
+    // Also used automatically if core gateway proxy to node is unavailable.
     push(serverBaseUrl);
   }
 
@@ -371,6 +373,7 @@ export function App() {
   const [dmNotification, setDmNotification] = useState(null);
   const [voiceStatesByGuild, setVoiceStatesByGuild] = useState({});
   const [serverVoiceGatewayPrefs, setServerVoiceGatewayPrefs] = useState(getStoredJson(SERVER_VOICE_GATEWAY_PREFS_KEY, {}));
+  const [nodeGatewayUnavailableByServer, setNodeGatewayUnavailableByServer] = useState({});
 
   const messagesRef = useRef(null);
   const gatewayWsRef = useRef(null);
@@ -956,6 +959,19 @@ export function App() {
       return;
     }
 
+    if (nodeGatewayUnavailableByServer[server.id]) {
+      nodeGatewayReadyRef.current = false;
+      if (nodeGatewayHeartbeatRef.current) {
+        clearInterval(nodeGatewayHeartbeatRef.current);
+        nodeGatewayHeartbeatRef.current = null;
+      }
+      if (nodeGatewayWsRef.current) {
+        nodeGatewayWsRef.current.close();
+        nodeGatewayWsRef.current = null;
+      }
+      return;
+    }
+
     const wsCandidates = prioritizeLastSuccessfulGateway(getNodeGatewayWsCandidates(server.baseUrl), LAST_SERVER_GATEWAY_KEY);
     if (!wsCandidates.length) return;
 
@@ -1013,6 +1029,17 @@ export function App() {
             return;
           }
 
+          if (msg.op === "ERROR" && msg.d?.error) {
+            if (typeof msg.d.error === "string" && msg.d.error.startsWith("VOICE_UPSTREAM_UNAVAILABLE") && server?.id) {
+              setNodeGatewayUnavailableByServer((prev) => prev[server.id] ? prev : { ...prev, [server.id]: true });
+              setStatus("Realtime voice gateway unavailable for this server. Falling back to REST voice controls.");
+              try { ws.close(); } catch {}
+              return;
+            }
+            setStatus(`Voice gateway error: ${msg.d.error}`);
+            return;
+          }
+
           if (msg.op === "DISPATCH" && msg.t === "MESSAGE_CREATE" && msg.d?.channelId && msg.d?.message) {
             const channelId = msg.d.channelId;
             if (channelId !== activeChannelIdRef.current) return;
@@ -1036,6 +1063,16 @@ export function App() {
               const byUser = { ...(prev[guildId] || {}) };
               if (!msg.d.channelId) delete byUser[msg.d.userId];
               else byUser[msg.d.userId] = { channelId: msg.d.channelId, muted: !!msg.d.muted, deafened: !!msg.d.deafened };
+              return { ...prev, [guildId]: byUser };
+            });
+            return;
+          }
+
+          if (msg.op === "DISPATCH" && msg.t === "VOICE_STATE_REMOVE" && msg.d?.guildId && msg.d?.userId) {
+            setVoiceStatesByGuild((prev) => {
+              const guildId = msg.d.guildId;
+              const byUser = { ...(prev[guildId] || {}) };
+              delete byUser[msg.d.userId];
               return { ...prev, [guildId]: byUser };
             });
             return;
@@ -1098,7 +1135,7 @@ export function App() {
         nodeGatewayWsRef.current = null;
       }
     };
-  }, [navMode, activeServer?.id, activeServer?.baseUrl, activeServer?.membershipToken]);
+  }, [navMode, activeServer?.id, activeServer?.baseUrl, activeServer?.membershipToken, nodeGatewayUnavailableByServer]);
 
   useEffect(() => {
     if (!activeGuildId || !activeChannelId) return;
@@ -1290,10 +1327,9 @@ export function App() {
   }, [settingsTab, settingsOpen, audioInputDeviceId, audioOutputDeviceId]);
 
   useEffect(() => {
-    if (!me?.id || !mergedVoiceStates.length) return;
+    if (!me?.id) return;
     const selfState = mergedVoiceStates.find((vs) => vs.userId === me.id);
-    if (!selfState?.channelId) return;
-    setVoiceConnectedChannelId((current) => current || selfState.channelId);
+    setVoiceConnectedChannelId(selfState?.channelId || "");
   }, [mergedVoiceStates, me?.id]);
 
 
@@ -2254,25 +2290,40 @@ export function App() {
     ws.send(JSON.stringify({ op: "DISPATCH", t: type, d: data }));
   }
 
-  function joinVoiceChannel(channel) {
-    if (!channel?.id || !activeGuildId) return;
+  async function joinVoiceChannel(channel) {
+    if (!channel?.id || !activeGuildId || !activeServer?.baseUrl || !activeServer?.membershipToken) return;
     try {
       sendNodeVoiceDispatch("VOICE_JOIN", { guildId: activeGuildId, channelId: channel.id });
       setStatus(`Joining ${channel.name}...`);
-    } catch {
-      const message = "Voice connection failed. Could not reach the server voice gateway.";
+      return;
+    } catch {}
+
+    try {
+      await nodeApi(activeServer.baseUrl, `/v1/channels/${channel.id}/voice/join`, activeServer.membershipToken, { method: "POST" });
+      setVoiceConnectedChannelId(channel.id);
+      setStatus(`Joined ${channel.name} (REST fallback).`);
+    } catch (error) {
+      const message = `Voice connection failed: ${error.message || "VOICE_JOIN_FAILED"}`;
       setStatus(message);
       window.alert(message);
     }
   }
 
-  function leaveVoiceChannel() {
-    if (!voiceConnectedChannelId) return;
+  async function leaveVoiceChannel() {
+    if (!voiceConnectedChannelId || !activeServer?.baseUrl || !activeServer?.membershipToken) return;
     try {
       sendNodeVoiceDispatch("VOICE_LEAVE", { channelId: voiceConnectedChannelId });
       setIsScreenSharing(false);
-    } catch {
-      const message = "Voice disconnect failed. Gateway is not connected.";
+      return;
+    } catch {}
+
+    try {
+      await nodeApi(activeServer.baseUrl, `/v1/channels/${voiceConnectedChannelId}/voice/leave`, activeServer.membershipToken, { method: "POST" });
+      setVoiceConnectedChannelId("");
+      setIsScreenSharing(false);
+      setStatus("Disconnected from voice (REST fallback).");
+    } catch (error) {
+      const message = `Voice disconnect failed: ${error.message || "VOICE_LEAVE_FAILED"}`;
       setStatus(message);
       window.alert(message);
     }

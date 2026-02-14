@@ -21,9 +21,11 @@ const GATEWAY_DEVICE_ID_KEY = "opencom_gateway_device_id";
 
 function getGatewayWsUrl() {
   const explicit = import.meta.env.VITE_GATEWAY_WS_URL;
+  const directHost = import.meta.env.VITE_GATEWAY_WS_HOST || "ws.opencom.online";
+  const defaultScheme = "wss";
   const raw = (explicit && typeof explicit === "string" && explicit.trim())
     ? explicit.trim()
-    : "wss://ws.opencom.online:9443";
+    : `${defaultScheme}://${directHost}:9443/gateway`;
 
   try {
     const url = new URL(raw);
@@ -45,6 +47,7 @@ function getGatewayWsCandidates() {
   const explicit = import.meta.env.VITE_GATEWAY_WS_URL;
   const configuredIp = import.meta.env.VITE_GATEWAY_WS_IP;
   const candidates = [];
+  const preferSecure = window.location.protocol === "https:";
 
   const push = (value) => {
     if (!value || typeof value !== "string") return;
@@ -66,21 +69,43 @@ function getGatewayWsCandidates() {
     if (!candidates.includes(normalized)) candidates.push(normalized);
   };
 
+  const pushHost = (host, port = "9443") => {
+    if (!host) return;
+    const h = String(host).trim();
+    if (!h) return;
+    if (preferSecure) {
+      push(`wss://${h}:${port}/gateway`);
+      return;
+    }
+    // In local/dev deployments the gateway commonly runs plain WS on 9443.
+    push(`ws://${h}:${port}/gateway`);
+    push(`wss://${h}:${port}/gateway`);
+  };
+
   if (explicit && typeof explicit === "string" && explicit.trim()) push(explicit);
   push(getGatewayWsUrl());
 
+  // Prefer same-machine and same-origin hosts first in development.
+  pushHost(window.location.hostname, "9443");
+  if (window.location.hostname === "127.0.0.1" || window.location.hostname === "localhost") {
+    pushHost("127.0.0.1", "9443");
+    pushHost("localhost", "9443");
+  }
+
+  // If CORE API points at a host, try that host's gateway as well.
+  try {
+    const core = new URL(CORE_API);
+    pushHost(core.hostname, "9443");
+  } catch {
+    // ignore invalid CORE_API
+  }
+
   if (configuredIp && typeof configuredIp === "string" && configuredIp.trim()) {
-    push(`wss://${configuredIp.trim()}:9443/gateway`);
-    if (window.location.protocol !== "https:") {
-      push(`ws://${configuredIp.trim()}:9443/gateway`);
-    }
+    pushHost(configuredIp.trim(), "9443");
   }
 
   // Direct host fallback for environments where DNS/proxy is not set yet.
-  push("wss://37.114.58.186:9443/gateway");
-  if (window.location.protocol !== "https:") {
-    push("ws://37.114.58.186:9443/gateway");
-  }
+  pushHost("37.114.58.186", "9443");
 
   return candidates;
 }

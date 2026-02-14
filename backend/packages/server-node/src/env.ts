@@ -2,7 +2,7 @@ import { z } from "zod";
 
 const Env = z.object({
   NODE_PORT: z.coerce.number().default(3002),
-  NODE_HOST: z.string().default("127.0.0.1"),
+  NODE_HOST: z.string().default("0.0.0.0"),
   NODE_DATABASE_URL: z.string().min(1),
   NODE_ID: z.string().min(1),
 

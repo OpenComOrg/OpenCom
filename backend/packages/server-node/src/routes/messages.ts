@@ -28,7 +28,7 @@ export async function messageRoutes(
 
     const guildId = ch[0].guild_id;
 
-    try { await requireGuildMember(guildId, userId, req.auth.roles); }
+    try { await requireGuildMember(guildId, userId, req.auth.roles, req.auth.coreServerId); }
     catch { return rep.code(403).send({ error: "NOT_GUILD_MEMBER" }); }
 
     const perms = await resolveChannelPermissions({ guildId, channelId, userId, roles: req.auth.roles });
@@ -103,7 +103,7 @@ export async function messageRoutes(
     if (!ch.length) return rep.code(404).send({ error: "CHANNEL_NOT_FOUND" });
     const guildId = ch[0].guild_id;
 
-    try { await requireGuildMember(guildId, authorId, req.auth.roles); }
+    try { await requireGuildMember(guildId, authorId, req.auth.roles, req.auth.coreServerId); }
     catch { return rep.code(403).send({ error: "NOT_GUILD_MEMBER" }); }
 
     const perms = await resolveChannelPermissions({ guildId, channelId, userId: authorId, roles: req.auth.roles });
@@ -174,7 +174,7 @@ export async function messageRoutes(
     if (!ch.length) return rep.code(404).send({ error: "CHANNEL_NOT_FOUND" });
     const guildId = ch[0].guild_id;
 
-    try { await requireGuildMember(guildId, userId, req.auth.roles); }
+    try { await requireGuildMember(guildId, userId, req.auth.roles, req.auth.coreServerId); }
     catch { return rep.code(403).send({ error: "NOT_GUILD_MEMBER" }); }
 
     const rows = await q<{ id: string; author_id: string }>(

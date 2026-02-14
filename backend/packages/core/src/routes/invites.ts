@@ -99,7 +99,7 @@ export async function inviteRoutes(app: FastifyInstance) {
           ? env.OFFICIAL_NODE_SERVER_ID
           : inv.server_id;
       try {
-        const joinToken = await signMembershipToken(audience, userId, ["member"], platformRole);
+        const joinToken = await signMembershipToken(audience, userId, ["member"], platformRole, inv.server_id);
         const joinRes = await fetch(`${baseUrl}/v1/guilds/${defaultGuildId}/join`, {
           method: "POST",
           headers: {

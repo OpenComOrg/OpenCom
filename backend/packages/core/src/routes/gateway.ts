@@ -193,9 +193,12 @@ export function attachCoreGateway(app: FastifyInstance, redis?: { pub: any; sub:
               if (ws.readyState === WebSocket.OPEN) ws.close();
             });
 
-            upstream.on("error", () => {
+            upstream.on("error", (err: any) => {
               if (ws.readyState === WebSocket.OPEN) {
-                send(ws, { op: "ERROR", d: { error: "VOICE_UPSTREAM_UNAVAILABLE" } });
+                const detail = typeof err?.message === "string" && err.message
+                  ? `VOICE_UPSTREAM_UNAVAILABLE:${err.message}`
+                  : "VOICE_UPSTREAM_UNAVAILABLE";
+                send(ws, { op: "ERROR", d: { error: detail } });
                 ws.close();
               }
             });

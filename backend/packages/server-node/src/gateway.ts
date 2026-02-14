@@ -275,10 +275,65 @@ export function attachNodeGateway(app: FastifyInstance) {
         return;
       }
 
+      if (msg.op === "DISPATCH" && msg.t === "VOICE_WEBRTC_SIGNAL") {
+        try {
+          if (!conn.voice) {
+            sendDispatch(conn, "VOICE_ERROR", { error: "NOT_IN_VOICE_CHANNEL" });
+            return;
+          }
+          const targetUserId = (msg.d as any)?.targetUserId;
+          const payload = (msg.d as any)?.payload;
+          if (typeof targetUserId !== "string" || !payload) {
+            sendDispatch(conn, "VOICE_ERROR", { error: "BAD_VOICE_WEBRTC_SIGNAL" });
+            return;
+          }
+
+          for (const c of conns) {
+            if (c.userId !== targetUserId) continue;
+            if (!c.voice) continue;
+            if (c.voice.guildId !== conn.voice.guildId || c.voice.channelId !== conn.voice.channelId) continue;
+            sendDispatch(c, "VOICE_WEBRTC_SIGNAL", {
+              guildId: conn.voice.guildId,
+              channelId: conn.voice.channelId,
+              fromUserId: conn.userId,
+              payload
+            });
+            break;
+          }
+        } catch {
+          sendDispatch(conn, "VOICE_ERROR", { error: "VOICE_WEBRTC_SIGNAL_FAILED" });
+        }
+        return;
+      }
+
+      if (msg.op === "DISPATCH" && msg.t === "VOICE_SPEAKING") {
+        try {
+          if (!conn.voice) {
+            sendDispatch(conn, "VOICE_ERROR", { error: "NOT_IN_VOICE_CHANNEL" });
+            return;
+          }
+
+          const speaking = !!(msg.d as any)?.speaking;
+          const guildId = conn.voice.guildId;
+          const channelId = conn.voice.channelId;
+
+          broadcastGuild(guildId, "VOICE_SPEAKING", {
+            guildId,
+            channelId,
+            userId: conn.userId,
+            speaking
+          });
+        } catch {
+          sendDispatch(conn, "VOICE_ERROR", { error: "VOICE_SPEAKING_FAILED" });
+        }
+        return;
+      }
+
       if (msg.op === "DISPATCH" && msg.t === "VOICE_CREATE_TRANSPORT") {
         try {
           const guildId = (msg.d as any)?.guildId ?? conn.voice?.guildId;
           const channelId = (msg.d as any)?.channelId ?? conn.voice?.channelId;
+          const direction = (msg.d as any)?.direction;
           if (typeof guildId !== "string" || typeof channelId !== "string") {
             sendDispatch(conn, "VOICE_ERROR", { error: "BAD_VOICE_CONTEXT" });
             return;
@@ -290,7 +345,7 @@ export function attachNodeGateway(app: FastifyInstance) {
           }
 
           const transport = await createWebRtcTransport(guildId, channelId, conn.userId);
-          sendDispatch(conn, "VOICE_TRANSPORT_CREATED", { guildId, channelId, transport });
+          sendDispatch(conn, "VOICE_TRANSPORT_CREATED", { guildId, channelId, direction, transport });
         } catch {
           sendDispatch(conn, "VOICE_ERROR", { error: "VOICE_TRANSPORT_CREATE_FAILED" });
         }

@@ -84,7 +84,7 @@ function getGatewayWsCandidates() {
 }
 
 
-function getNodeGatewayWsCandidates(serverBaseUrl) {
+function getNodeGatewayWsCandidates(serverBaseUrl, includeDirectNodeWsFallback = false) {
   const candidates = [];
   const push = (value) => {
     if (!value || typeof value !== "string") return;
@@ -110,9 +110,11 @@ function getNodeGatewayWsCandidates(serverBaseUrl) {
   // Core gateway proxies membershipToken sessions to node gateways.
   for (const wsUrl of getGatewayWsCandidates()) push(wsUrl);
 
-  const allowDirectNodeWsFallback = String(import.meta.env.VITE_ENABLE_DIRECT_NODE_WS_FALLBACK || "").trim() === "1";
+  const allowDirectNodeWsFallback = includeDirectNodeWsFallback
+    || String(import.meta.env.VITE_ENABLE_DIRECT_NODE_WS_FALLBACK || "").trim() === "1";
   if (allowDirectNodeWsFallback) {
     // Optional escape hatch for deployments that explicitly want direct node WS fallback.
+    // Also used automatically if core gateway proxy to node is unavailable.
     push(serverBaseUrl);
   }
 
@@ -370,7 +372,9 @@ export function App() {
   const [gatewayConnected, setGatewayConnected] = useState(false);
   const [dmNotification, setDmNotification] = useState(null);
   const [voiceStatesByGuild, setVoiceStatesByGuild] = useState({});
+  const [voiceSpeakingByGuild, setVoiceSpeakingByGuild] = useState({});
   const [serverVoiceGatewayPrefs, setServerVoiceGatewayPrefs] = useState(getStoredJson(SERVER_VOICE_GATEWAY_PREFS_KEY, {}));
+  const [nodeGatewayUnavailableByServer, setNodeGatewayUnavailableByServer] = useState({});
 
   const messagesRef = useRef(null);
   const gatewayWsRef = useRef(null);
@@ -378,6 +382,12 @@ export function App() {
   const nodeGatewayWsRef = useRef(null);
   const nodeGatewayHeartbeatRef = useRef(null);
   const nodeGatewayReadyRef = useRef(false);
+  const voiceSpeakingDetectorRef = useRef({ audioCtx: null, stream: null, analyser: null, timer: null, lastSpeaking: false });
+  const voiceRtcRef = useRef({
+    localStream: null,
+    peerConnections: new Map(),
+    remoteAudioByUserId: new Map()
+  });
   const selfStatusRef = useRef(selfStatus);
   selfStatusRef.current = selfStatus;
 
@@ -911,6 +921,7 @@ export function App() {
         }
 
         connected = false;
+        rejectPendingVoiceEvents("VOICE_GATEWAY_CLOSED");
         scheduleReconnect();
 
         if (!hasEverConnected) {
@@ -953,6 +964,21 @@ export function App() {
         nodeGatewayWsRef.current.close();
         nodeGatewayWsRef.current = null;
       }
+      cleanupVoiceRtc().catch(() => {});
+      return;
+    }
+
+    if (nodeGatewayUnavailableByServer[server.id]) {
+      nodeGatewayReadyRef.current = false;
+      if (nodeGatewayHeartbeatRef.current) {
+        clearInterval(nodeGatewayHeartbeatRef.current);
+        nodeGatewayHeartbeatRef.current = null;
+      }
+      if (nodeGatewayWsRef.current) {
+        nodeGatewayWsRef.current.close();
+        nodeGatewayWsRef.current = null;
+      }
+      cleanupVoiceRtc().catch(() => {});
       return;
     }
 
@@ -988,6 +1014,7 @@ export function App() {
       ws.onmessage = (event) => {
         try {
           const msg = JSON.parse(event.data);
+          resolvePendingVoiceEvent(msg);
           if (msg.op === "HELLO" && msg.d?.heartbeat_interval) {
             if (nodeGatewayHeartbeatRef.current) clearInterval(nodeGatewayHeartbeatRef.current);
             nodeGatewayHeartbeatRef.current = setInterval(() => {
@@ -1010,6 +1037,17 @@ export function App() {
             if (activeChannelId) {
               ws.send(JSON.stringify({ op: "DISPATCH", t: "SUBSCRIBE_CHANNEL", d: { channelId: activeChannelId } }));
             }
+            return;
+          }
+
+          if (msg.op === "ERROR" && msg.d?.error) {
+            if (typeof msg.d.error === "string" && msg.d.error.startsWith("VOICE_UPSTREAM_UNAVAILABLE") && server?.id) {
+              setNodeGatewayUnavailableByServer((prev) => prev[server.id] ? prev : { ...prev, [server.id]: true });
+              setStatus("Realtime voice gateway unavailable for this server. Falling back to REST voice controls.");
+              try { ws.close(); } catch {}
+              return;
+            }
+            setStatus(`Voice gateway error: ${msg.d.error}`);
             return;
           }
 
@@ -1041,18 +1079,55 @@ export function App() {
             return;
           }
 
+          if (msg.op === "DISPATCH" && msg.t === "VOICE_STATE_REMOVE" && msg.d?.guildId && msg.d?.userId) {
+            setVoiceStatesByGuild((prev) => {
+              const guildId = msg.d.guildId;
+              const byUser = { ...(prev[guildId] || {}) };
+              delete byUser[msg.d.userId];
+              return { ...prev, [guildId]: byUser };
+            });
+            setVoiceSpeakingByGuild((prev) => {
+              const guildId = msg.d.guildId;
+              const byUser = { ...(prev[guildId] || {}) };
+              delete byUser[msg.d.userId];
+              return { ...prev, [guildId]: byUser };
+            });
+            if (msg.d.userId === me?.id) cleanupVoiceRtc().catch(() => {});
+            return;
+          }
+
+          if (msg.op === "DISPATCH" && msg.t === "VOICE_SPEAKING" && msg.d?.guildId && msg.d?.userId) {
+            setVoiceSpeakingByGuild((prev) => {
+              const guildId = msg.d.guildId;
+              const byUser = { ...(prev[guildId] || {}) };
+              byUser[msg.d.userId] = !!msg.d.speaking;
+              return { ...prev, [guildId]: byUser };
+            });
+            return;
+          }
+
+          if (msg.op === "DISPATCH" && msg.t === "VOICE_WEBRTC_SIGNAL" && msg.d?.fromUserId && msg.d?.payload) {
+            handleIncomingVoiceSignal(msg.d.fromUserId, msg.d.payload).catch(() => {});
+            return;
+          }
+
           if (msg.op === "DISPATCH" && msg.t === "VOICE_JOINED" && msg.d?.channelId) {
             setVoiceConnectedChannelId(msg.d.channelId);
+            ensureLocalVoiceStream().catch(() => {
+              setStatus("Microphone access is required for voice chat.");
+            });
             return;
           }
 
           if (msg.op === "DISPATCH" && msg.t === "VOICE_LEFT") {
             setVoiceConnectedChannelId("");
+            cleanupVoiceRtc().catch(() => {});
             return;
           }
 
           if (msg.op === "DISPATCH" && msg.t === "VOICE_ERROR") {
             const error = msg.d?.error || "VOICE_ERROR";
+            rejectPendingVoiceEvents(error);
             const message = `Voice connection failed: ${error}`;
             setStatus(message);
             window.alert(message);
@@ -1071,6 +1146,7 @@ export function App() {
         nodeGatewayWsRef.current = null;
 
         connected = false;
+        rejectPendingVoiceEvents("VOICE_GATEWAY_CLOSED");
         scheduleReconnect();
 
         if (!hasEverConnected) {
@@ -1097,8 +1173,9 @@ export function App() {
         nodeGatewayWsRef.current.close();
         nodeGatewayWsRef.current = null;
       }
+      cleanupVoiceRtc().catch(() => {});
     };
-  }, [navMode, activeServer?.id, activeServer?.baseUrl, activeServer?.membershipToken]);
+  }, [navMode, activeServer?.id, activeServer?.baseUrl, activeServer?.membershipToken, nodeGatewayUnavailableByServer]);
 
   useEffect(() => {
     if (!activeGuildId || !activeChannelId) return;
@@ -1240,12 +1317,85 @@ export function App() {
   }, [dmNotification]);
 
   useEffect(() => {
-    if (!activeServer || !voiceConnectedChannelId) return;
-    nodeApi(activeServer.baseUrl, `/v1/channels/${voiceConnectedChannelId}/voice/state`, activeServer.membershipToken, {
-      method: "PATCH",
-      body: JSON.stringify({ muted: isMuted, deafened: isDeafened })
-    }).catch(() => {});
-  }, [activeServer, voiceConnectedChannelId, isMuted, isDeafened]);
+    if (!voiceConnectedChannelId || !activeGuildId || isMuted || isDeafened || !navigator.mediaDevices?.getUserMedia) {
+      const detector = voiceSpeakingDetectorRef.current;
+      if (detector.timer) clearInterval(detector.timer);
+      detector.timer = null;
+      if (detector.stream && detector.stream !== voiceRtcRef.current.localStream) detector.stream.getTracks().forEach((t) => t.stop());
+      detector.stream = null;
+      if (detector.audioCtx) detector.audioCtx.close().catch(() => {});
+      detector.audioCtx = null;
+      detector.analyser = null;
+      detector.lastSpeaking = false;
+      if (activeGuildId && me?.id) {
+        setVoiceSpeakingByGuild((prev) => ({ ...prev, [activeGuildId]: { ...(prev[activeGuildId] || {}), [me.id]: false } }));
+      }
+      try { sendNodeVoiceDispatch("VOICE_SPEAKING", { guildId: activeGuildId, channelId: voiceConnectedChannelId, speaking: false }); } catch {}
+      return;
+    }
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const stream = voiceRtcRef.current.localStream || await navigator.mediaDevices.getUserMedia({
+          audio: audioInputDeviceId ? { deviceId: { exact: audioInputDeviceId } } : true
+        });
+        if (cancelled) {
+          stream.getTracks().forEach((t) => t.stop());
+          return;
+        }
+
+        const audioCtx = new window.AudioContext();
+        const source = audioCtx.createMediaStreamSource(stream);
+        const analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 1024;
+        source.connect(analyser);
+
+        const detector = voiceSpeakingDetectorRef.current;
+        detector.stream = stream;
+        detector.audioCtx = audioCtx;
+        detector.analyser = analyser;
+        detector.lastSpeaking = false;
+
+        const data = new Uint8Array(analyser.fftSize);
+        detector.timer = setInterval(() => {
+          analyser.getByteTimeDomainData(data);
+          let sum = 0;
+          for (let i = 0; i < data.length; i += 1) {
+            const n = (data[i] - 128) / 128;
+            sum += n * n;
+          }
+          const rms = Math.sqrt(sum / data.length);
+          const threshold = 0.01 + ((100 - Math.max(0, Math.min(100, micSensitivity))) / 100) * 0.03;
+          const speaking = rms > threshold;
+          if (speaking === detector.lastSpeaking) return;
+          detector.lastSpeaking = speaking;
+
+          if (activeGuildId && me?.id) {
+            setVoiceSpeakingByGuild((prev) => ({ ...prev, [activeGuildId]: { ...(prev[activeGuildId] || {}), [me.id]: speaking } }));
+          }
+          try {
+            sendNodeVoiceDispatch("VOICE_SPEAKING", { guildId: activeGuildId, channelId: voiceConnectedChannelId, speaking });
+          } catch {}
+        }, 150);
+      } catch {
+        setStatus("Mic speaking detection unavailable. Check microphone permissions.");
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      const detector = voiceSpeakingDetectorRef.current;
+      if (detector.timer) clearInterval(detector.timer);
+      detector.timer = null;
+      if (detector.stream && detector.stream !== voiceRtcRef.current.localStream) detector.stream.getTracks().forEach((t) => t.stop());
+      detector.stream = null;
+      if (detector.audioCtx) detector.audioCtx.close().catch(() => {});
+      detector.audioCtx = null;
+      detector.analyser = null;
+      detector.lastSpeaking = false;
+    };
+  }, [voiceConnectedChannelId, activeGuildId, isMuted, isDeafened, micSensitivity, audioInputDeviceId, me?.id]);
 
   useEffect(() => {
     localStorage.setItem(MIC_GAIN_KEY, String(micGain));
@@ -1290,11 +1440,34 @@ export function App() {
   }, [settingsTab, settingsOpen, audioInputDeviceId, audioOutputDeviceId]);
 
   useEffect(() => {
-    if (!me?.id || !mergedVoiceStates.length) return;
+    if (!me?.id) return;
     const selfState = mergedVoiceStates.find((vs) => vs.userId === me.id);
-    if (!selfState?.channelId) return;
-    setVoiceConnectedChannelId((current) => current || selfState.channelId);
+    setVoiceConnectedChannelId(selfState?.channelId || "");
   }, [mergedVoiceStates, me?.id]);
+
+  useEffect(() => {
+    if (!me?.id || !voiceConnectedChannelId) return;
+    const members = (voiceMembersByChannel.get(voiceConnectedChannelId) || []).map((m) => m.userId).filter(Boolean);
+    const peers = members.filter((id) => id !== me.id);
+    const peerSet = new Set(peers);
+
+    for (const [uid, pc] of voiceRtcRef.current.peerConnections.entries()) {
+      if (peerSet.has(uid)) continue;
+      try { pc.close(); } catch {}
+      voiceRtcRef.current.peerConnections.delete(uid);
+      const audio = voiceRtcRef.current.remoteAudioByUserId.get(uid);
+      if (audio) {
+        voiceRtcRef.current.remoteAudioByUserId.delete(uid);
+        try { audio.pause(); audio.srcObject = null; audio.remove(); } catch {}
+      }
+    }
+
+    for (const uid of peers) {
+      if (voiceRtcRef.current.peerConnections.has(uid)) continue;
+      const initiator = String(me.id) < String(uid);
+      ensureVoicePeerConnection(uid, initiator).catch(() => {});
+    }
+  }, [voiceConnectedChannelId, voiceMembersByChannel, me?.id]);
 
 
   useEffect(() => {
@@ -2246,7 +2419,122 @@ export function App() {
     return false;
   }
 
+  function resolvePendingVoiceEvent() {}
+
+  function rejectPendingVoiceEvents() {}
+
+  async function cleanupVoiceRtc() {
+    const rtc = voiceRtcRef.current;
+    for (const pc of rtc.peerConnections.values()) {
+      try { pc.close(); } catch {}
+    }
+    rtc.peerConnections.clear();
+
+    if (rtc.localStream) {
+      rtc.localStream.getTracks().forEach((t) => t.stop());
+      rtc.localStream = null;
+    }
+
+    for (const audio of rtc.remoteAudioByUserId.values()) {
+      try { audio.pause(); audio.srcObject = null; audio.remove(); } catch {}
+    }
+    rtc.remoteAudioByUserId.clear();
+  }
+
+  async function ensureLocalVoiceStream() {
+    if (voiceRtcRef.current.localStream) return voiceRtcRef.current.localStream;
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: audioInputDeviceId ? { deviceId: { exact: audioInputDeviceId } } : true
+    });
+    voiceRtcRef.current.localStream = stream;
+    return stream;
+  }
+
+  function sendVoiceWebRtcSignal(targetUserId, payload) {
+    if (!activeGuildId || !voiceConnectedChannelId || !targetUserId) return;
+    sendNodeVoiceDispatch("VOICE_WEBRTC_SIGNAL", {
+      guildId: activeGuildId,
+      channelId: voiceConnectedChannelId,
+      targetUserId,
+      payload
+    });
+  }
+
+  async function ensureVoicePeerConnection(targetUserId, initiator = false) {
+    const rtc = voiceRtcRef.current;
+    if (rtc.peerConnections.has(targetUserId)) return rtc.peerConnections.get(targetUserId);
+
+    const stream = await ensureLocalVoiceStream();
+    const pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
+    rtc.peerConnections.set(targetUserId, pc);
+
+    stream.getTracks().forEach((track) => pc.addTrack(track, stream));
+
+    pc.onicecandidate = (event) => {
+      if (!event.candidate) return;
+      try { sendVoiceWebRtcSignal(targetUserId, { type: "ice", candidate: event.candidate }); } catch {}
+    };
+
+    pc.ontrack = (event) => {
+      const mediaStream = event.streams?.[0] || new MediaStream([event.track]);
+      let audio = rtc.remoteAudioByUserId.get(targetUserId);
+      if (!audio) {
+        audio = document.createElement("audio");
+        audio.autoplay = true;
+        rtc.remoteAudioByUserId.set(targetUserId, audio);
+      }
+      audio.srcObject = mediaStream;
+      audio.play().catch(() => {});
+    };
+
+    pc.onconnectionstatechange = () => {
+      if (!["failed", "closed", "disconnected"].includes(pc.connectionState)) return;
+      rtc.peerConnections.delete(targetUserId);
+      const audio = rtc.remoteAudioByUserId.get(targetUserId);
+      if (audio) {
+        rtc.remoteAudioByUserId.delete(targetUserId);
+        try { audio.pause(); audio.srcObject = null; audio.remove(); } catch {}
+      }
+    };
+
+    if (initiator) {
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      sendVoiceWebRtcSignal(targetUserId, { type: "offer", sdp: offer.sdp });
+    }
+
+    return pc;
+  }
+
+  async function handleIncomingVoiceSignal(fromUserId, payload) {
+    if (!fromUserId || !payload?.type) return;
+    if (fromUserId === me?.id) return;
+
+    if (payload.type === "offer") {
+      const pc = await ensureVoicePeerConnection(fromUserId, false);
+      await pc.setRemoteDescription({ type: "offer", sdp: payload.sdp });
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      sendVoiceWebRtcSignal(fromUserId, { type: "answer", sdp: answer.sdp });
+      return;
+    }
+
+    if (payload.type === "answer") {
+      const pc = voiceRtcRef.current.peerConnections.get(fromUserId);
+      if (!pc) return;
+      await pc.setRemoteDescription({ type: "answer", sdp: payload.sdp });
+      return;
+    }
+
+    if (payload.type === "ice") {
+      const pc = voiceRtcRef.current.peerConnections.get(fromUserId) || await ensureVoicePeerConnection(fromUserId, false);
+      if (!payload.candidate) return;
+      await pc.addIceCandidate(payload.candidate).catch(() => {});
+    }
+  }
+
   function sendNodeVoiceDispatch(type, data) {
+
     const ws = nodeGatewayWsRef.current;
     if (!ws || ws.readyState !== WebSocket.OPEN || !nodeGatewayReadyRef.current) {
       throw new Error("VOICE_GATEWAY_UNAVAILABLE");
@@ -2254,25 +2542,42 @@ export function App() {
     ws.send(JSON.stringify({ op: "DISPATCH", t: type, d: data }));
   }
 
-  function joinVoiceChannel(channel) {
-    if (!channel?.id || !activeGuildId) return;
+  async function joinVoiceChannel(channel) {
+    if (!channel?.id || !activeGuildId || !activeServer?.baseUrl || !activeServer?.membershipToken) return;
     try {
       sendNodeVoiceDispatch("VOICE_JOIN", { guildId: activeGuildId, channelId: channel.id });
       setStatus(`Joining ${channel.name}...`);
-    } catch {
-      const message = "Voice connection failed. Could not reach the server voice gateway.";
+      return;
+    } catch {}
+
+    try {
+      await nodeApi(activeServer.baseUrl, `/v1/channels/${channel.id}/voice/join`, activeServer.membershipToken, { method: "POST" });
+      setVoiceConnectedChannelId(channel.id);
+      setStatus(`Joined ${channel.name} (REST fallback).`);
+    } catch (error) {
+      const message = `Voice connection failed: ${error.message || "VOICE_JOIN_FAILED"}`;
       setStatus(message);
       window.alert(message);
     }
   }
 
-  function leaveVoiceChannel() {
-    if (!voiceConnectedChannelId) return;
+  async function leaveVoiceChannel() {
+    if (!voiceConnectedChannelId || !activeServer?.baseUrl || !activeServer?.membershipToken) return;
     try {
       sendNodeVoiceDispatch("VOICE_LEAVE", { channelId: voiceConnectedChannelId });
       setIsScreenSharing(false);
-    } catch {
-      const message = "Voice disconnect failed. Gateway is not connected.";
+      cleanupVoiceRtc().catch(() => {});
+      return;
+    } catch {}
+
+    try {
+      await nodeApi(activeServer.baseUrl, `/v1/channels/${voiceConnectedChannelId}/voice/leave`, activeServer.membershipToken, { method: "POST" });
+      setVoiceConnectedChannelId("");
+      setIsScreenSharing(false);
+      cleanupVoiceRtc().catch(() => {});
+      setStatus("Disconnected from voice (REST fallback).");
+    } catch (error) {
+      const message = `Voice disconnect failed: ${error.message || "VOICE_LEAVE_FAILED"}`;
       setStatus(message);
       window.alert(message);
     }
@@ -2625,7 +2930,7 @@ export function App() {
                           {channel.type === "voice" && (voiceMembersByChannel.get(channel.id)?.length || 0) > 0 && (
                             <div className="voice-channel-members">
                               {voiceMembersByChannel.get(channel.id).map((member) => {
-                                const speaking = voiceConnectedChannelId === channel.id && !member.muted && !member.deafened;
+                                const speaking = !!voiceSpeakingByGuild[activeGuildId]?.[member.userId];
                                 return (
                                   <div key={`${channel.id}-${member.userId}`} className="voice-channel-member-row">
                                     <div className={`avatar member-avatar vc-avatar ${speaking ? "speaking" : ""}`}>
@@ -2727,7 +3032,7 @@ export function App() {
               <button className={`icon-btn ${isMuted ? "danger" : "ghost"}`} onClick={() => setIsMuted((value) => !value)}>{isMuted ? "🎙️" : "🎤"}</button>
               <button className={`icon-btn ${isDeafened ? "danger" : "ghost"}`} onClick={() => setIsDeafened((value) => !value)}>{isDeafened ? "🔇" : "🎧"}</button>
               <button className="icon-btn ghost" onClick={() => { setSettingsOpen(true); setSettingsTab("profile"); }}>⚙️</button>
-              <button className="icon-btn danger" onClick={() => { setAccessToken(""); setServers([]); setGuildState(null); setMessages([]); }}>⎋</button>
+              <button className="icon-btn danger" onClick={() => { cleanupVoiceRtc().catch(() => {}); setAccessToken(""); setServers([]); setGuildState(null); setMessages([]); }}>⎋</button>
             </div>
           </div>
         </footer>
@@ -2853,7 +3158,7 @@ export function App() {
                         const color = topRole?.color != null && topRole.color !== "" ? (typeof topRole.color === "number" ? `#${Number(topRole.color).toString(16).padStart(6, "0")}` : topRole.color) : null;
                         const memberVoice = mergedVoiceStates.find((vs) => vs.userId === member.id);
                         const inMyCall = memberVoice?.channelId && memberVoice.channelId === voiceConnectedChannelId;
-                        const speaking = !!inMyCall && !memberVoice?.muted && !memberVoice?.deafened;
+                        const speaking = !!inMyCall && !!voiceSpeakingByGuild[activeGuildId]?.[member.id];
                         return (
                           <button className="member-row" key={member.id} title={`View ${member.username}`} onClick={(event) => { event.stopPropagation(); openMemberProfile(member); }}>
                             {member.pfp_url ? (

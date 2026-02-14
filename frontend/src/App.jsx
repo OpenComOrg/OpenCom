@@ -117,21 +117,6 @@ function getGatewayWsCandidates() {
 }
 
 
-function getNodeGatewayWsUrl(baseUrl) {
-  if (!baseUrl || typeof baseUrl !== "string") return "";
-  try {
-    const url = new URL(baseUrl);
-    url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-    url.pathname = "/gateway";
-    url.search = "";
-    url.hash = "";
-    return url.toString().replace(/\/$/, "");
-  } catch {
-    const normalized = String(baseUrl).replace(/^https?:\/\//, (m) => (m === "https://" ? "wss://" : "ws://")).replace(/\/$/, "");
-    return normalized.endsWith("/gateway") ? normalized : `${normalized}/gateway`;
-  }
-}
-
 function useThemeCss() {
   const [css, setCss] = useState(localStorage.getItem(THEME_STORAGE_KEY) || "");
   const [enabled, setEnabled] = useState(localStorage.getItem(THEME_ENABLED_STORAGE_KEY) !== "0");
@@ -1173,6 +1158,14 @@ export function App() {
     const t = setTimeout(() => setDmNotification(null), 4000);
     return () => clearTimeout(t);
   }, [dmNotification]);
+
+  useEffect(() => {
+    if (!activeServer || !voiceConnectedChannelId) return;
+    nodeApi(activeServer.baseUrl, `/v1/channels/${voiceConnectedChannelId}/voice/state`, activeServer.membershipToken, {
+      method: "PATCH",
+      body: JSON.stringify({ muted: isMuted, deafened: isDeafened })
+    }).catch(() => {});
+  }, [activeServer, voiceConnectedChannelId, isMuted, isDeafened]);
 
   useEffect(() => {
     if (!accessToken || (navMode !== "friends" && navMode !== "dms")) return;
@@ -2390,13 +2383,18 @@ export function App() {
                                 return;
                               }
                               if (channel.type === "voice") {
-                                const ws = nodeGatewayWsRef.current;
-                                if (ws && ws.readyState === WebSocket.OPEN && nodeGatewayReadyRef.current && activeGuildId) {
-                                  ws.send(JSON.stringify({ op: "DISPATCH", t: "SUBSCRIBE_GUILD", d: { guildId: activeGuildId } }));
-                                  ws.send(JSON.stringify({ op: "DISPATCH", t: "VOICE_JOIN", d: { guildId: activeGuildId, channelId: channel.id } }));
-                                } else {
-                                  setStatus("Voice gateway not ready yet. Please wait a second and try again.");
+                                if (!activeServer) {
+                                  setStatus("No active server selected.");
+                                  return;
                                 }
+                                nodeApi(activeServer.baseUrl, `/v1/channels/${channel.id}/voice/join`, activeServer.membershipToken, {
+                                  method: "POST"
+                                })
+                                  .then(() => {
+                                    setVoiceConnectedChannelId(channel.id);
+                                    setStatus("");
+                                  })
+                                  .catch((error) => setStatus(`Voice join failed: ${error.message}`));
                               }
                             }}
                           >
@@ -2473,9 +2471,10 @@ export function App() {
               <div className="voice-actions">
                 <button className="ghost" onClick={() => setIsScreenSharing((value) => !value)}>{isScreenSharing ? "Stop Share" : "Share Screen"}</button>
                 <button className="danger" onClick={() => {
-                  const ws = nodeGatewayWsRef.current;
-                  if (ws && ws.readyState === WebSocket.OPEN && nodeGatewayReadyRef.current) {
-                    ws.send(JSON.stringify({ op: "DISPATCH", t: "VOICE_LEAVE", d: {} }));
+                  if (activeServer && voiceConnectedChannelId) {
+                    nodeApi(activeServer.baseUrl, `/v1/channels/${voiceConnectedChannelId}/voice/leave`, activeServer.membershipToken, {
+                      method: "POST"
+                    }).catch(() => {});
                   }
                   setVoiceConnectedChannelId("");
                   setIsScreenSharing(false);

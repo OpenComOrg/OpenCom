@@ -8,6 +8,7 @@ const Env = z.object({
 
   CORE_BASE_URL: z.string().url(),
   CORE_JWKS_URL: z.string().url(),
+  NODE_SYNC_SECRET: z.string().min(16).optional(),
 
 
   ATTACHMENT_MAX_BYTES: z.coerce.number().default(52428800),

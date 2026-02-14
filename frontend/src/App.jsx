@@ -84,9 +84,39 @@ function getGatewayWsCandidates() {
 }
 
 
-function getNodeGatewayWsCandidates() {
-  // VC should always use the canonical core gateway endpoint.
-  return getGatewayWsCandidates();
+function getNodeGatewayWsCandidates(serverBaseUrl) {
+  const candidates = [];
+  const push = (value) => {
+    if (!value || typeof value !== "string") return;
+    const trimmed = value.trim();
+    if (!trimmed) return;
+    const normalized = (() => {
+      try {
+        const url = new URL(trimmed);
+        if (url.protocol !== "ws:" && url.protocol !== "wss:") {
+          url.protocol = url.protocol === "http:" ? "ws:" : "wss:";
+        }
+        if (!url.pathname || url.pathname === "/") url.pathname = "/gateway";
+        return url.toString().replace(/\/$/, "");
+      } catch {
+        const raw = trimmed.replace(/\/$/, "");
+        return raw.endsWith("/gateway") ? raw : `${raw}/gateway`;
+      }
+    })();
+    if (!candidates.includes(normalized)) candidates.push(normalized);
+  };
+
+  // Prefer the core gateway first so users only need one public WS endpoint.
+  // Core gateway proxies membershipToken sessions to node gateways.
+  for (const wsUrl of getGatewayWsCandidates()) push(wsUrl);
+
+  const allowDirectNodeWsFallback = String(import.meta.env.VITE_ENABLE_DIRECT_NODE_WS_FALLBACK || "").trim() === "1";
+  if (allowDirectNodeWsFallback) {
+    // Optional escape hatch for deployments that explicitly want direct node WS fallback.
+    push(serverBaseUrl);
+  }
+
+  return candidates;
 }
 
 function prioritizeLastSuccessfulGateway(candidates, storageKey) {
@@ -786,14 +816,24 @@ export function App() {
     }
     let disposed = false;
     let connected = false;
+    let hasEverConnected = false;
     let reconnectTimer = null;
     let candidateIndex = 0;
+    let reconnectAttempts = 0;
     const candidates = prioritizeLastSuccessfulGateway(getGatewayWsCandidates(), LAST_CORE_GATEWAY_KEY);
 
-    const connectNext = () => {
-      if (disposed || connected || candidateIndex >= candidates.length) return;
+    const scheduleReconnect = () => {
+      if (disposed) return;
+      const delay = Math.min(5000, 300 * (2 ** Math.min(reconnectAttempts, 4)));
+      reconnectAttempts += 1;
+      reconnectTimer = setTimeout(connectNext, delay);
+    };
 
-      const wsUrl = candidates[candidateIndex++];
+    const connectNext = () => {
+      if (disposed || connected || !candidates.length) return;
+
+      const wsUrl = candidates[candidateIndex % candidates.length];
+      candidateIndex += 1;
       const ws = new WebSocket(wsUrl);
       gatewayWsRef.current = ws;
 
@@ -812,6 +852,8 @@ export function App() {
         }
         if (msg.op === "READY") {
           connected = true;
+          hasEverConnected = true;
+          reconnectAttempts = 0;
           setGatewayConnected(true);
           localStorage.setItem(LAST_CORE_GATEWAY_KEY, wsUrl);
           setStatus("");
@@ -868,11 +910,13 @@ export function App() {
           gatewayHeartbeatRef.current = null;
         }
 
-        // Try the next websocket endpoint if this one failed before READY.
-        if (!connected && candidateIndex < candidates.length) {
-          reconnectTimer = setTimeout(connectNext, 300);
-        } else if (!connected) {
+        connected = false;
+        scheduleReconnect();
+
+        if (!hasEverConnected) {
           setStatus("Gateway websocket unavailable. Check DNS/TLS or set VITE_GATEWAY_WS_URL/VITE_GATEWAY_WS_IP.");
+        } else {
+          setStatus("Gateway disconnected. Reconnecting...");
         }
       };
 
@@ -912,17 +956,27 @@ export function App() {
       return;
     }
 
-    const wsCandidates = prioritizeLastSuccessfulGateway(getNodeGatewayWsCandidates(), LAST_SERVER_GATEWAY_KEY);
+    const wsCandidates = prioritizeLastSuccessfulGateway(getNodeGatewayWsCandidates(server.baseUrl), LAST_SERVER_GATEWAY_KEY);
     if (!wsCandidates.length) return;
 
     let disposed = false;
     let connected = false;
+    let hasEverConnected = false;
     let reconnectTimer = null;
     let candidateIndex = 0;
+    let reconnectAttempts = 0;
+
+    const scheduleReconnect = () => {
+      if (disposed) return;
+      const delay = Math.min(5000, 300 * (2 ** Math.min(reconnectAttempts, 4)));
+      reconnectAttempts += 1;
+      reconnectTimer = setTimeout(connectNext, delay);
+    };
 
     const connectNext = () => {
-      if (disposed || candidateIndex >= wsCandidates.length) return;
-      const wsUrl = wsCandidates[candidateIndex++];
+      if (disposed || !wsCandidates.length) return;
+      const wsUrl = wsCandidates[candidateIndex % wsCandidates.length];
+      candidateIndex += 1;
       const ws = new WebSocket(wsUrl);
       nodeGatewayWsRef.current = ws;
 
@@ -946,6 +1000,8 @@ export function App() {
 
           if (msg.op === "READY") {
             connected = true;
+            hasEverConnected = true;
+            reconnectAttempts = 0;
             nodeGatewayReadyRef.current = true;
             localStorage.setItem(LAST_SERVER_GATEWAY_KEY, wsUrl);
             if (activeGuildId) {
@@ -1014,12 +1070,13 @@ export function App() {
         }
         nodeGatewayWsRef.current = null;
 
-        if (!connected && candidateIndex < wsCandidates.length) {
-          reconnectTimer = setTimeout(connectNext, 250);
-        } else if (!connected) {
-          setStatus("Voice gateway unavailable. Using fallback failed. Check server/core gateway settings.");
+        connected = false;
+        scheduleReconnect();
+
+        if (!hasEverConnected) {
+          setStatus("Voice gateway unavailable. Check core gateway/proxy configuration.");
         } else {
-          setStatus("Server voice gateway disconnected.");
+          setStatus("Server voice gateway disconnected. Reconnecting...");
         }
       };
 
@@ -1107,7 +1164,10 @@ export function App() {
           return;
         }
 
-        setActiveGuildId(nextGuilds[0].id);
+        const hasActiveGuild = nextGuilds.some((guild) => guild.id === activeGuildId);
+        if (!hasActiveGuild) {
+          setActiveGuildId(nextGuilds[0].id);
+        }
       })
       .catch((error) => {
         setGuilds([]);
@@ -1136,7 +1196,7 @@ export function App() {
         setMessages([]);
         setStatus(`Workspace state failed: ${error.message}`);
       });
-  }, [activeServer, activeGuildId, navMode]);
+  }, [activeServer, activeGuildId, navMode, activeChannelId]);
 
   useEffect(() => {
     if (navMode !== "dms" || !activeDmId || !accessToken) return;
@@ -1242,8 +1302,19 @@ export function App() {
     }
 
     nodeApi(activeServer.baseUrl, `/v1/channels/${activeChannelId}/messages`, activeServer.membershipToken)
-      .then((data) => setMessages((data.messages || []).slice().reverse()))
-      .catch((error) => setStatus(`Message fetch failed: ${error.message}`));
+      .then((data) => {
+        setStatus("");
+        setMessages((data.messages || []).slice().reverse());
+      })
+      .catch((error) => {
+        if (error?.message?.startsWith("HTTP 403")) {
+          setMessages([]);
+          setStatus("You no longer have access to that channel.");
+          setActiveChannelId("");
+          return;
+        }
+        setStatus(`Message fetch failed: ${error.message}`);
+      });
   }, [activeServer, activeChannelId, navMode]);
 
   async function handleAuthSubmit(event) {

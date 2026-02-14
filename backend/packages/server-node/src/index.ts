@@ -7,6 +7,7 @@ import { env } from "./env.js";
 import { initMediasoup } from "./voice/mediasoup.js";
 import { attachmentRoutes } from "./routes/attachments.js";
 import { startAttachmentCleanupLoop } from "./jobs/attachmentCleanup.js";
+import { startNodeSyncLoop } from "./jobs/nodeSync.js";
 import { roleRoutes } from "./routes/roles.js";
 import { overwriteRoutes } from "./routes/overwrites.js";
 import { memberRoutes } from "./routes/members.js";
@@ -40,6 +41,7 @@ await discordCompatRoutes(app);
 
 await attachmentRoutes(app);
 startAttachmentCleanupLoop();
+startNodeSyncLoop();
 
 
 app.listen({ port: env.NODE_PORT, host: env.NODE_HOST });

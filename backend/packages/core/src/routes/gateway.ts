@@ -159,15 +159,18 @@ export function attachCoreGateway(app: FastifyInstance, redis?: { pub: any; sub:
             });
 
             const userId = typeof claims.sub === "string" ? claims.sub : "";
-            const serverId = typeof claims.server_id === "string"
+            const nodeServerId = typeof claims.server_id === "string"
               ? claims.server_id
               : (typeof claims.aud === "string" ? claims.aud : "");
+            const coreServerId = typeof claims.core_server_id === "string"
+              ? claims.core_server_id
+              : nodeServerId;
 
-            if (!userId || !serverId) throw new Error("INVALID_MEMBERSHIP");
+            if (!userId || !nodeServerId || !coreServerId) throw new Error("INVALID_MEMBERSHIP");
 
             const rows = await q<{ base_url: string }>(
               `SELECT base_url FROM servers WHERE id=:serverId LIMIT 1`,
-              { serverId }
+              { serverId: coreServerId }
             );
             if (!rows.length || !rows[0].base_url) throw new Error("SERVER_NOT_FOUND");
 

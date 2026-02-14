@@ -17,6 +17,7 @@ import { inviteRoutes } from "./routes/invites.js";
 import { presenceRoutes } from "./routes/presence.js";
 import { adminRoutes } from "./routes/admin.js";
 import { attachCoreGateway } from "./routes/gateway.js";
+import { nodeSyncRoutes } from "./routes/nodeSync.js";
 import { env } from "./env.js";
 import { makeRedis } from "./redis.js";
 import { presenceUpsert } from "./presence.js";
@@ -42,5 +43,6 @@ await presenceRoutes(app);
 await adminRoutes(app);
 await dmRoutes(app, gw.broadcastDM);
 await socialRoutes(app, gw.broadcastCallSignal, gw.broadcastToUser);
+await nodeSyncRoutes(app);
 
 app.listen({ port: env.CORE_PORT, host: env.CORE_HOST });

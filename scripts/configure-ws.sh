@@ -17,6 +17,8 @@ FORCE_CERT_OVERWRITE="0"
 GENERATE_LETSENCRYPT_CERT="0"
 LETSENCRYPT_EMAIL=""
 LETSENCRYPT_STAGING="0"
+LETSENCRYPT_MODE="standalone"
+LETSENCRYPT_WEBROOT_PATH=""
 
 usage() {
   cat <<USAGE
@@ -41,6 +43,8 @@ Options:
   --letsencrypt-email <email>
                            Email for Let's Encrypt registration (required with --generate-letsencrypt-cert)
   --letsencrypt-staging    Use Let's Encrypt staging endpoint (testing only)
+  --letsencrypt-webroot <path>
+                           Use webroot challenge mode (recommended when nginx uses :80)
   --backend-env <path>    Backend env file (default: backend/.env)
   --frontend-env <path>   Frontend env file (default: frontend/.env)
   -h, --help              Show this help
@@ -50,6 +54,7 @@ Examples:
   ./scripts/configure-ws.sh --ip 37.114.58.186 --direct-ip --insecure
   ./scripts/configure-ws.sh --domain ws.opencom.online --ip 37.114.58.186 --generate-self-signed-cert
   ./scripts/configure-ws.sh --domain ws.opencom.online --generate-letsencrypt-cert --letsencrypt-email admin@opencom.online
+  ./scripts/configure-ws.sh --domain ws.opencom.online --generate-letsencrypt-cert --letsencrypt-email admin@opencom.online --letsencrypt-webroot /var/www/certbot
 USAGE
 }
 
@@ -81,6 +86,8 @@ while [[ $# -gt 0 ]]; do
       LETSENCRYPT_EMAIL="${2:-}"; shift 2 ;;
     --letsencrypt-staging)
       LETSENCRYPT_STAGING="1"; shift ;;
+    --letsencrypt-webroot)
+      LETSENCRYPT_MODE="webroot"; LETSENCRYPT_WEBROOT_PATH="${2:-}"; shift 2 ;;
     --backend-env)
       BACKEND_ENV="${2:-}"; shift 2 ;;
     --frontend-env)
@@ -111,6 +118,11 @@ fi
 
 if [[ "$GENERATE_LETSENCRYPT_CERT" == "1" && "$FORCE_INSECURE" == "1" ]]; then
   echo "--generate-letsencrypt-cert cannot be combined with --insecure" >&2
+  exit 1
+fi
+
+if [[ "$GENERATE_LETSENCRYPT_CERT" == "1" && "$LETSENCRYPT_MODE" == "webroot" && -z "$LETSENCRYPT_WEBROOT_PATH" ]]; then
+  echo "--letsencrypt-webroot requires a non-empty path" >&2
   exit 1
 fi
 
@@ -158,13 +170,25 @@ if [[ "$GENERATE_LETSENCRYPT_CERT" == "1" ]]; then
     exit 1
   fi
 
-  CERTBOT_ARGS=(certonly --non-interactive --agree-tos --email "$LETSENCRYPT_EMAIL" --standalone -d "$WS_DOMAIN")
+  CERTBOT_ARGS=(certonly --non-interactive --agree-tos --email "$LETSENCRYPT_EMAIL" -d "$WS_DOMAIN")
+  if [[ "$LETSENCRYPT_MODE" == "webroot" ]]; then
+    mkdir -p "$LETSENCRYPT_WEBROOT_PATH"
+    CERTBOT_ARGS+=(--webroot -w "$LETSENCRYPT_WEBROOT_PATH")
+    echo "[ws-config] Requesting Let's Encrypt certificate for ${WS_DOMAIN} using webroot: ${LETSENCRYPT_WEBROOT_PATH}"
+  else
+    CERTBOT_ARGS+=(--standalone)
+    echo "[ws-config] Requesting Let's Encrypt certificate for ${WS_DOMAIN} using standalone mode"
+  fi
   if [[ "$LETSENCRYPT_STAGING" == "1" ]]; then
     CERTBOT_ARGS+=(--staging)
   fi
 
-  echo "[ws-config] Requesting Let's Encrypt certificate for ${WS_DOMAIN}..."
-  certbot "${CERTBOT_ARGS[@]}"
+  if ! certbot "${CERTBOT_ARGS[@]}"; then
+    if [[ "$LETSENCRYPT_MODE" == "standalone" ]]; then
+      echo "[ws-config] HINT: standalone mode needs a free :80. If nginx/apache already binds 80, re-run with --letsencrypt-webroot <path>." >&2
+    fi
+    exit 1
+  fi
 
   LE_CERT_DIR="/etc/letsencrypt/live/${WS_DOMAIN}"
   LE_CERT_FILE="${LE_CERT_DIR}/fullchain.pem"

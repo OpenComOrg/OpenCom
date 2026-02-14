@@ -1,17 +1,31 @@
 import { createServer } from "node:http";
 import { createServer as createTlsServer } from "node:https";
 import { readFileSync } from "node:fs";
-import { WebSocketServer } from "ws";
+import { WebSocketServer, WebSocket } from "ws";
 import type { FastifyInstance } from "fastify";
 import { GatewayEnvelope, CoreIdentify, PresenceUpdate } from "@ods/shared/events.js";
 import { env } from "../env.js";
+import { q } from "../db.js";
+import { importJWK, jwtVerify } from "jose";
 
 type Conn = {
   ws: any;
   userId: string;
   deviceId?: string;
   seq: number;
+  mode?: "core" | "voice_proxy";
+  upstream?: WebSocket;
+  upstreamReady?: boolean;
 };
+
+function nodeGatewayUrl(baseUrl: string): string {
+  const url = new URL(baseUrl);
+  url.protocol = url.protocol === "http:" ? "ws:" : "wss:";
+  url.pathname = "/gateway";
+  url.search = "";
+  url.hash = "";
+  return url.toString().replace(/\/$/, "");
+}
 
 export function attachCoreGateway(app: FastifyInstance, redis?: { pub: any; sub: any }) {
   const wss = new WebSocketServer({ noServer: true });
@@ -106,29 +120,99 @@ export function attachCoreGateway(app: FastifyInstance, redis?: { pub: any; sub:
       try { msg = JSON.parse(raw.toString("utf8")); } catch { return; }
 
       if (msg.op === "IDENTIFY") {
-        const d = msg.d as CoreIdentify;
-        try {
-          const decoded: any = await (app as any).jwt.verify(d.accessToken);
-          const userId = decoded.sub as string;
-          const deviceId = d.deviceId;
+        const payload = (msg.d || {}) as any;
 
-          conn = { ws, userId, deviceId, seq: 0 };
+        // Core social/presence identify path
+        if (payload.accessToken) {
+          const d = payload as CoreIdentify;
+          try {
+            const decoded: any = await (app as any).jwt.verify(d.accessToken);
+            const userId = decoded.sub as string;
+            const deviceId = d.deviceId;
 
-          if (deviceId) byDevice.set(deviceId, conn);
+            conn = { ws, userId, deviceId, seq: 0, mode: "core" };
 
-          if (!byUser.has(userId)) byUser.set(userId, new Set());
-          byUser.get(userId)!.add(conn);
+            if (deviceId) byDevice.set(deviceId, conn);
 
-          send(ws, { op: "READY", d: { user: { id: userId, username: "unknown" } } });
+            if (!byUser.has(userId)) byUser.set(userId, new Set());
+            byUser.get(userId)!.add(conn);
 
-          // Update presence online
-          const presence: PresenceUpdate = { status: "online", customStatus: null };
-          await app.pgPresenceUpsert(userId, presence);
-          if (redis) await redis.pub.publish(PRES_CH, JSON.stringify({ userId, presence }));
-        } catch {
-          send(ws, { op: "ERROR", d: { error: "INVALID_TOKEN" } });
-          ws.close();
+            send(ws, { op: "READY", d: { user: { id: userId, username: "unknown" } } });
+
+            // Update presence online
+            const presence: PresenceUpdate = { status: "online", customStatus: null };
+            await app.pgPresenceUpsert(userId, presence);
+            if (redis) await redis.pub.publish(PRES_CH, JSON.stringify({ userId, presence }));
+          } catch {
+            send(ws, { op: "ERROR", d: { error: "INVALID_TOKEN" } });
+            ws.close();
+          }
+          return;
         }
+
+        // Voice compatibility path: allow clients to connect to core gateway with membershipToken.
+        if (payload.membershipToken) {
+          try {
+            const pub = await importJWK(JSON.parse(env.CORE_MEMBERSHIP_PUBLIC_JWK), "RS256");
+            const { payload: claims } = await jwtVerify(payload.membershipToken, pub, {
+              issuer: env.CORE_ISSUER
+            });
+
+            const userId = typeof claims.sub === "string" ? claims.sub : "";
+            const serverId = typeof claims.server_id === "string"
+              ? claims.server_id
+              : (typeof claims.aud === "string" ? claims.aud : "");
+
+            if (!userId || !serverId) throw new Error("INVALID_MEMBERSHIP");
+
+            const rows = await q<{ base_url: string }>(
+              `SELECT base_url FROM servers WHERE id=:serverId LIMIT 1`,
+              { serverId }
+            );
+            if (!rows.length || !rows[0].base_url) throw new Error("SERVER_NOT_FOUND");
+
+            const upstreamUrl = nodeGatewayUrl(rows[0].base_url);
+
+            conn = { ws, userId, seq: 0, mode: "voice_proxy", upstreamReady: false };
+            const upstream = new WebSocket(upstreamUrl);
+            conn.upstream = upstream;
+
+            upstream.on("open", () => {
+              conn!.upstreamReady = true;
+              upstream.send(JSON.stringify({ op: "IDENTIFY", d: { membershipToken: payload.membershipToken } }));
+            });
+
+            upstream.on("message", (uRaw: Buffer) => {
+              if (ws.readyState === WebSocket.OPEN) ws.send(uRaw.toString("utf8"));
+            });
+
+            upstream.on("close", () => {
+              if (ws.readyState === WebSocket.OPEN) ws.close();
+            });
+
+            upstream.on("error", () => {
+              if (ws.readyState === WebSocket.OPEN) {
+                send(ws, { op: "ERROR", d: { error: "VOICE_UPSTREAM_UNAVAILABLE" } });
+                ws.close();
+              }
+            });
+          } catch {
+            send(ws, { op: "ERROR", d: { error: "INVALID_MEMBERSHIP" } });
+            ws.close();
+          }
+          return;
+        }
+
+        send(ws, { op: "ERROR", d: { error: "INVALID_IDENTIFY_PAYLOAD" } });
+        ws.close();
+        return;
+      }
+
+      if (conn?.mode === "voice_proxy") {
+        if (conn.upstream && conn.upstream.readyState === WebSocket.OPEN) {
+          conn.upstream.send(raw.toString("utf8"));
+        }
+        return;
       }
 
       if (msg.op === "HEARTBEAT") send(ws, { op: "HEARTBEAT_ACK" });
@@ -142,6 +226,12 @@ export function attachCoreGateway(app: FastifyInstance, redis?: { pub: any; sub:
     });
 
     ws.on("close", async () => {
+      if (conn?.upstream) {
+        try { conn.upstream.close(); } catch {}
+      }
+
+      if (conn?.mode === "voice_proxy") return;
+
       if (conn?.deviceId) byDevice.delete(conn.deviceId);
       if (conn?.userId && byUser.has(conn.userId)) byUser.get(conn.userId)!.delete(conn);
 

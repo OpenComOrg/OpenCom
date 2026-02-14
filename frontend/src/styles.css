@@ -1051,6 +1051,38 @@ button.danger { background: linear-gradient(135deg, #eb5d73, #c84159); }
 .member-row:hover { background: rgba(132, 165, 255, 0.15); transform: translateX(1px);}
 .member-row span { color: var(--text-dim); display: block; font-size: 0.85em;}
 .member-row .member-role-tag { display: inline-block; margin-left: 0.35em; font-size: 0.75em; font-weight: 500; color: var(--text-dim);}
+
+.voice-channel-members {
+  margin: -2px 0 10px 24px;
+  display: grid;
+  gap: 4px;
+}
+
+.voice-channel-member-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-dim);
+  font-size: 0.84em;
+}
+
+.voice-channel-member-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vc-avatar {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+}
+
+.speaking {
+  box-shadow: 0 0 0 2px rgba(53, 214, 130, 0.95), 0 0 10px rgba(53, 214, 130, 0.35);
+}
+
 .member-avatar { width: clamp(20px, 2vw, 34px); height: clamp(20px, 2vw, 34px);}
 .msg-role-tag { margin-left: 0.35em; font-size: 0.8em; font-weight: 500; color: var(--text-dim);}
 .role-edit-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: var(--space-xs);}

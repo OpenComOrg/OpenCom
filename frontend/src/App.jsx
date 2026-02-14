@@ -20,15 +20,19 @@ const ACTIVE_DM_KEY = "opencom_active_dm";
 const GATEWAY_DEVICE_ID_KEY = "opencom_gateway_device_id";
 const MIC_GAIN_KEY = "opencom_mic_gain";
 const MIC_SENSITIVITY_KEY = "opencom_mic_sensitivity";
+const AUDIO_INPUT_DEVICE_KEY = "opencom_audio_input_device";
+const AUDIO_OUTPUT_DEVICE_KEY = "opencom_audio_output_device";
+// Kept for backward compatibility with any persisted/runtime references from older bundles.
+const SERVER_VOICE_GATEWAY_PREFS_KEY = "opencom_server_voice_gateway_prefs";
+const LAST_CORE_GATEWAY_KEY = "opencom_last_core_gateway";
+const LAST_SERVER_GATEWAY_KEY = "opencom_last_server_gateway";
+const CANONICAL_GATEWAY_WS_URL = "wss://ws.opencom.online:9443/gateway";
 
 function getGatewayWsUrl() {
   const explicit = import.meta.env.VITE_GATEWAY_WS_URL;
-  const directHost = import.meta.env.VITE_GATEWAY_WS_HOST || "ws.opencom.online";
-  const forceInsecureWs = import.meta.env.VITE_GATEWAY_WS_INSECURE === "1";
-  const defaultScheme = forceInsecureWs ? "ws" : "wss";
   const raw = (explicit && typeof explicit === "string" && explicit.trim())
     ? explicit.trim()
-    : `${defaultScheme}://${directHost}:9443/gateway`;
+    : CANONICAL_GATEWAY_WS_URL;
 
   try {
     const url = new URL(raw);
@@ -48,10 +52,7 @@ function getGatewayWsUrl() {
 
 function getGatewayWsCandidates() {
   const explicit = import.meta.env.VITE_GATEWAY_WS_URL;
-  const configuredIp = import.meta.env.VITE_GATEWAY_WS_IP;
-  const forceInsecureWs = import.meta.env.VITE_GATEWAY_WS_INSECURE === "1";
   const candidates = [];
-  const preferSecure = window.location.protocol === "https:";
 
   const push = (value) => {
     if (!value || typeof value !== "string") return;
@@ -73,56 +74,27 @@ function getGatewayWsCandidates() {
     if (!candidates.includes(normalized)) candidates.push(normalized);
   };
 
-  const pushHost = (host, port = "9443") => {
-    if (!host) return;
-    const h = String(host).trim();
-    if (!h) return;
-    if (forceInsecureWs) {
-      push(`ws://${h}:${port}/gateway`);
-      return;
-    }
-    if (preferSecure) {
-      push(`wss://${h}:${port}/gateway`);
-      return;
-    }
-    // In local/dev deployments the gateway commonly runs plain WS on 9443.
-    push(`ws://${h}:${port}/gateway`);
-    push(`wss://${h}:${port}/gateway`);
-  };
-
+  // User-configured explicit endpoint first when provided.
   if (explicit && typeof explicit === "string" && explicit.trim()) push(explicit);
+
+  // Canonical platform endpoint.
   push(getGatewayWsUrl());
-
-  // Prefer same-machine and same-origin hosts first in development.
-  pushHost(window.location.hostname, "9443");
-  if (window.location.hostname === "127.0.0.1" || window.location.hostname === "localhost") {
-    pushHost("127.0.0.1", "9443");
-    pushHost("localhost", "9443");
-  }
-
-  // If CORE API points at a host, try that host's gateway as well.
-  try {
-    const core = new URL(CORE_API);
-    pushHost(core.hostname, "9443");
-  } catch {
-    // ignore invalid CORE_API
-  }
-
-  if (configuredIp && typeof configuredIp === "string" && configuredIp.trim()) {
-    pushHost(configuredIp.trim(), "9443");
-  }
-
-  // Direct host fallback for environments where DNS/proxy is not set yet.
-  pushHost("37.114.58.186", "9443");
 
   return candidates;
 }
 
 
-// Backward-compatible shim: older bundles/effects may still reference this helper.
-// We intentionally route server voice via REST right now, so this returns an empty string.
-function getNodeGatewayWsUrl() {
-  return "";
+function getNodeGatewayWsCandidates() {
+  // VC should always use the canonical core gateway endpoint.
+  return getGatewayWsCandidates();
+}
+
+function prioritizeLastSuccessfulGateway(candidates, storageKey) {
+  const last = localStorage.getItem(storageKey);
+  if (!last) return candidates;
+  const idx = candidates.indexOf(last);
+  if (idx <= 0) return candidates;
+  return [candidates[idx], ...candidates.slice(0, idx), ...candidates.slice(idx + 1)];
 }
 
 
@@ -319,6 +291,10 @@ export function App() {
   const [isDeafened, setIsDeafened] = useState(false);
   const [micGain, setMicGain] = useState(Number(localStorage.getItem(MIC_GAIN_KEY) || 100));
   const [micSensitivity, setMicSensitivity] = useState(Number(localStorage.getItem(MIC_SENSITIVITY_KEY) || 50));
+  const [audioInputDeviceId, setAudioInputDeviceId] = useState(localStorage.getItem(AUDIO_INPUT_DEVICE_KEY) || "");
+  const [audioOutputDeviceId, setAudioOutputDeviceId] = useState(localStorage.getItem(AUDIO_OUTPUT_DEVICE_KEY) || "");
+  const [audioInputDevices, setAudioInputDevices] = useState([]);
+  const [audioOutputDevices, setAudioOutputDevices] = useState([]);
   const [selfStatus, setSelfStatus] = useState(localStorage.getItem(SELF_STATUS_KEY) || "online");
   const [showPinned, setShowPinned] = useState(false);
   const [newOfficialServerName, setNewOfficialServerName] = useState("");
@@ -494,21 +470,34 @@ export function App() {
 
   const memberNameById = useMemo(() => new Map(resolvedMemberList.map((member) => [member.id, member.username])), [resolvedMemberList]);
 
+  const mergedVoiceStates = useMemo(() => {
+    const base = guildState?.voiceStates || [];
+    if (!activeGuildId) return base;
+    const live = voiceStatesByGuild[activeGuildId] || {};
+    if (!Object.keys(live).length) return base;
+    const byUser = new Map(base.map((vs) => [vs.userId, vs]));
+    for (const [userId, state] of Object.entries(live)) {
+      if (!state?.channelId) byUser.delete(userId);
+      else byUser.set(userId, { userId, channelId: state.channelId, muted: !!state.muted, deafened: !!state.deafened });
+    }
+    return Array.from(byUser.values());
+  }, [guildState?.voiceStates, voiceStatesByGuild, activeGuildId]);
+
   const voiceMembersByChannel = useMemo(() => {
     const map = new Map();
-    const rows = guildState?.voiceStates || [];
-    for (const vs of rows) {
+    for (const vs of mergedVoiceStates) {
       if (!vs?.channelId || !vs?.userId) continue;
       if (!map.has(vs.channelId)) map.set(vs.channelId, []);
       map.get(vs.channelId).push({
         userId: vs.userId,
         username: memberNameById.get(vs.userId) || vs.userId,
+        pfp_url: resolvedMemberList.find((m) => m.id === vs.userId)?.pfp_url || null,
         muted: !!vs.muted,
         deafened: !!vs.deafened
       });
     }
     return map;
-  }, [guildState?.voiceStates, memberNameById]);
+  }, [mergedVoiceStates, memberNameById, resolvedMemberList]);
 
   const groupedChannelSections = useMemo(() => {
     const categories = categoryChannels.map((category) => ({
@@ -614,14 +603,6 @@ export function App() {
   }, [selfStatus]);
 
   useEffect(() => {
-    localStorage.setItem(MIC_GAIN_KEY, String(micGain));
-  }, [micGain]);
-
-  useEffect(() => {
-    localStorage.setItem(MIC_SENSITIVITY_KEY, String(micSensitivity));
-  }, [micSensitivity]);
-
-  useEffect(() => {
     localStorage.setItem(PINNED_SERVER_KEY, JSON.stringify(pinnedServerMessages));
   }, [pinnedServerMessages]);
 
@@ -632,8 +613,6 @@ export function App() {
   useEffect(() => {
     if (activeDmId) localStorage.setItem(ACTIVE_DM_KEY, activeDmId);
   }, [activeDmId]);
-
-
 
   useEffect(() => {
     if (!draggingProfileCard) return;
@@ -800,7 +779,7 @@ export function App() {
     let connected = false;
     let reconnectTimer = null;
     let candidateIndex = 0;
-    const candidates = getGatewayWsCandidates();
+    const candidates = prioritizeLastSuccessfulGateway(getGatewayWsCandidates(), LAST_CORE_GATEWAY_KEY);
 
     const connectNext = () => {
       if (disposed || connected || candidateIndex >= candidates.length) return;
@@ -825,6 +804,7 @@ export function App() {
         if (msg.op === "READY") {
           connected = true;
           setGatewayConnected(true);
+          localStorage.setItem(LAST_CORE_GATEWAY_KEY, wsUrl);
           setStatus("");
           if (gatewayWsRef.current?.readyState === WebSocket.OPEN) {
             gatewayWsRef.current.send(JSON.stringify({ op: "DISPATCH", t: "SET_PRESENCE", d: { status: selfStatus, customStatus: null } }));
@@ -923,95 +903,125 @@ export function App() {
       return;
     }
 
-    const wsUrl = getNodeGatewayWsUrl(server.baseUrl);
-    if (!wsUrl) return;
+    const wsCandidates = prioritizeLastSuccessfulGateway(getNodeGatewayWsCandidates(), LAST_SERVER_GATEWAY_KEY);
+    if (!wsCandidates.length) return;
 
     let disposed = false;
-    const ws = new WebSocket(wsUrl);
-    nodeGatewayWsRef.current = ws;
+    let connected = false;
+    let reconnectTimer = null;
+    let candidateIndex = 0;
 
-    ws.onopen = () => {
-      ws.send(JSON.stringify({ op: "IDENTIFY", d: { membershipToken: server.membershipToken } }));
-    };
+    const connectNext = () => {
+      if (disposed || candidateIndex >= wsCandidates.length) return;
+      const wsUrl = wsCandidates[candidateIndex++];
+      const ws = new WebSocket(wsUrl);
+      nodeGatewayWsRef.current = ws;
 
-    ws.onmessage = (event) => {
-      try {
-        const msg = JSON.parse(event.data);
-        if (msg.op === "HELLO" && msg.d?.heartbeat_interval) {
-          if (nodeGatewayHeartbeatRef.current) clearInterval(nodeGatewayHeartbeatRef.current);
-          nodeGatewayHeartbeatRef.current = setInterval(() => {
-            if (nodeGatewayWsRef.current?.readyState === WebSocket.OPEN) {
-              nodeGatewayWsRef.current.send(JSON.stringify({ op: "HEARTBEAT" }));
+      ws.onopen = () => {
+        setStatus("");
+        ws.send(JSON.stringify({ op: "IDENTIFY", d: { membershipToken: server.membershipToken } }));
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.op === "HELLO" && msg.d?.heartbeat_interval) {
+            if (nodeGatewayHeartbeatRef.current) clearInterval(nodeGatewayHeartbeatRef.current);
+            nodeGatewayHeartbeatRef.current = setInterval(() => {
+              if (nodeGatewayWsRef.current?.readyState === WebSocket.OPEN) {
+                nodeGatewayWsRef.current.send(JSON.stringify({ op: "HEARTBEAT" }));
+              }
+            }, msg.d.heartbeat_interval);
+            return;
+          }
+
+          if (msg.op === "READY") {
+            connected = true;
+            nodeGatewayReadyRef.current = true;
+            localStorage.setItem(LAST_SERVER_GATEWAY_KEY, wsUrl);
+            if (activeGuildId) {
+              ws.send(JSON.stringify({ op: "DISPATCH", t: "SUBSCRIBE_GUILD", d: { guildId: activeGuildId } }));
             }
-          }, msg.d.heartbeat_interval);
-          return;
-        }
-
-        if (msg.op === "READY") {
-          nodeGatewayReadyRef.current = true;
-          if (activeGuildId) {
-            ws.send(JSON.stringify({ op: "DISPATCH", t: "SUBSCRIBE_GUILD", d: { guildId: activeGuildId } }));
+            if (activeChannelId) {
+              ws.send(JSON.stringify({ op: "DISPATCH", t: "SUBSCRIBE_CHANNEL", d: { channelId: activeChannelId } }));
+            }
+            return;
           }
-          if (activeChannelId) {
-            ws.send(JSON.stringify({ op: "DISPATCH", t: "SUBSCRIBE_CHANNEL", d: { channelId: activeChannelId } }));
+
+          if (msg.op === "DISPATCH" && msg.t === "MESSAGE_CREATE" && msg.d?.channelId && msg.d?.message) {
+            const channelId = msg.d.channelId;
+            if (channelId !== activeChannelIdRef.current) return;
+            const incoming = msg.d.message;
+            setMessages((prev) => {
+              if (prev.some((m) => m.id === incoming.id)) return prev;
+              return [...prev, {
+                id: incoming.id,
+                author_id: incoming.authorId,
+                content: incoming.content,
+                created_at: incoming.createdAt,
+                attachments: incoming.attachments || []
+              }];
+            });
+            return;
           }
-          return;
-        }
 
-        if (msg.op === "DISPATCH" && msg.t === "MESSAGE_CREATE" && msg.d?.channelId && msg.d?.message) {
-          const channelId = msg.d.channelId;
-          if (channelId !== activeChannelIdRef.current) return;
-          const incoming = msg.d.message;
-          setMessages((prev) => {
-            if (prev.some((m) => m.id === incoming.id)) return prev;
-            return [...prev, {
-              id: incoming.id,
-              author_id: incoming.authorId,
-              content: incoming.content,
-              created_at: incoming.createdAt,
-              attachments: incoming.attachments || []
-            }];
-          });
-          return;
-        }
+          if (msg.op === "DISPATCH" && msg.t === "VOICE_STATE_UPDATE" && msg.d?.guildId && msg.d?.userId) {
+            setVoiceStatesByGuild((prev) => {
+              const guildId = msg.d.guildId;
+              const byUser = { ...(prev[guildId] || {}) };
+              if (!msg.d.channelId) delete byUser[msg.d.userId];
+              else byUser[msg.d.userId] = { channelId: msg.d.channelId, muted: !!msg.d.muted, deafened: !!msg.d.deafened };
+              return { ...prev, [guildId]: byUser };
+            });
+            return;
+          }
 
-        if (msg.op === "DISPATCH" && msg.t === "VOICE_STATE_UPDATE" && msg.d?.guildId && msg.d?.userId) {
-          setVoiceStatesByGuild((prev) => {
-            const guildId = msg.d.guildId;
-            const byUser = { ...(prev[guildId] || {}) };
-            if (!msg.d.channelId) delete byUser[msg.d.userId];
-            else byUser[msg.d.userId] = { channelId: msg.d.channelId, muted: !!msg.d.muted, deafened: !!msg.d.deafened };
-            return { ...prev, [guildId]: byUser };
-          });
-          return;
-        }
+          if (msg.op === "DISPATCH" && msg.t === "VOICE_JOINED" && msg.d?.channelId) {
+            setVoiceConnectedChannelId(msg.d.channelId);
+            return;
+          }
 
-        if (msg.op === "DISPATCH" && msg.t === "VOICE_JOINED" && msg.d?.channelId) {
-          setVoiceConnectedChannelId(msg.d.channelId);
-          return;
-        }
+          if (msg.op === "DISPATCH" && msg.t === "VOICE_LEFT") {
+            setVoiceConnectedChannelId("");
+            return;
+          }
 
-        if (msg.op === "DISPATCH" && msg.t === "VOICE_LEFT") {
-          setVoiceConnectedChannelId("");
-          return;
+          if (msg.op === "DISPATCH" && msg.t === "VOICE_ERROR") {
+            const error = msg.d?.error || "VOICE_ERROR";
+            const message = `Voice connection failed: ${error}`;
+            setStatus(message);
+            window.alert(message);
+            return;
+          }
+        } catch (_) {}
+      };
+
+      ws.onclose = () => {
+        if (disposed) return;
+        nodeGatewayReadyRef.current = false;
+        if (nodeGatewayHeartbeatRef.current) {
+          clearInterval(nodeGatewayHeartbeatRef.current);
+          nodeGatewayHeartbeatRef.current = null;
         }
-      } catch (_) {}
+        nodeGatewayWsRef.current = null;
+
+        if (!connected && candidateIndex < wsCandidates.length) {
+          reconnectTimer = setTimeout(connectNext, 250);
+        } else if (!connected) {
+          setStatus("Voice gateway unavailable. Using fallback failed. Check server/core gateway settings.");
+        } else {
+          setStatus("Server voice gateway disconnected.");
+        }
+      };
+
+      ws.onerror = () => {};
     };
 
-    ws.onclose = () => {
-      if (disposed) return;
-      nodeGatewayReadyRef.current = false;
-      if (nodeGatewayHeartbeatRef.current) {
-        clearInterval(nodeGatewayHeartbeatRef.current);
-        nodeGatewayHeartbeatRef.current = null;
-      }
-      nodeGatewayWsRef.current = null;
-    };
-
-    ws.onerror = () => {};
+    connectNext();
 
     return () => {
       disposed = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
       nodeGatewayReadyRef.current = false;
       if (nodeGatewayHeartbeatRef.current) {
         clearInterval(nodeGatewayHeartbeatRef.current);
@@ -1022,7 +1032,7 @@ export function App() {
         nodeGatewayWsRef.current = null;
       }
     };
-  }, [navMode, activeServer?.id, activeServer?.baseUrl, activeServer?.membershipToken, activeGuildId, activeChannelId]);
+  }, [navMode, activeServer?.id, activeServer?.baseUrl, activeServer?.membershipToken]);
 
   useEffect(() => {
     if (!activeGuildId || !activeChannelId) return;
@@ -1143,53 +1153,6 @@ export function App() {
     }
   }, [navMode, dms, activeDmId]);
 
-  // Separate DM message polling - does NOT touch call state
-  useEffect(() => {
-    if (!accessToken || navMode !== "dms") return;
-
-    const timer = window.setInterval(async () => {
-      try {
-        const [dmsData, requestsData] = await Promise.all([
-          api("/v1/social/dms", { headers: { Authorization: `Bearer ${accessToken}` } }),
-          api("/v1/social/requests", { headers: { Authorization: `Bearer ${accessToken}` } })
-        ]);
-
-        setDms((current) => {
-          const prevMap = new Map(current.map((item) => [item.id, item]));
-          // Preserve existing messages and call state - only update DM metadata
-          return (dmsData.dms || []).map((item) => {
-            const existing = prevMap.get(item.id);
-            return { 
-              ...item, 
-              messages: existing?.messages || [],
-              // Preserve any call-related state if it exists
-            };
-          });
-        });
-        setFriendRequests({ incoming: requestsData.incoming || [], outgoing: requestsData.outgoing || [] });
-
-        if (activeDmId) {
-          const messagesData = await api(`/v1/social/dms/${activeDmId}/messages`, { headers: { Authorization: `Bearer ${accessToken}` } });
-          const newestId = messagesData.messages?.[messagesData.messages.length - 1]?.id || "";
-          const isNewMessage = newestId && lastDmMessageIdRef.current && newestId !== lastDmMessageIdRef.current;
-          if (isNewMessage) {
-            const newest = messagesData.messages?.[messagesData.messages.length - 1];
-            if (newest?.authorId !== me?.id) {
-              playNotificationBeep(selfStatusRef.current === "dnd");
-              setDmNotification({ dmId: activeDmId, at: Date.now() });
-            }
-          }
-          if (newestId) lastDmMessageIdRef.current = newestId;
-          setDms((current) => current.map((item) => item.id === activeDmId ? { ...item, messages: messagesData.messages || [] } : item));
-        }
-      } catch {
-        // keep UI stable if polling fails
-      }
-    }, 5000);
-
-    return () => window.clearInterval(timer);
-  }, [accessToken, navMode, activeDmId]);
-
   useEffect(() => {
     if (!dmNotification) return;
     const t = setTimeout(() => setDmNotification(null), 4000);
@@ -1205,15 +1168,60 @@ export function App() {
   }, [activeServer, voiceConnectedChannelId, isMuted, isDeafened]);
 
   useEffect(() => {
+    localStorage.setItem(MIC_GAIN_KEY, String(micGain));
+  }, [micGain]);
+
+  useEffect(() => {
+    localStorage.setItem(MIC_SENSITIVITY_KEY, String(micSensitivity));
+  }, [micSensitivity]);
+
+  useEffect(() => {
+    localStorage.setItem(AUDIO_INPUT_DEVICE_KEY, audioInputDeviceId || "");
+  }, [audioInputDeviceId]);
+
+  useEffect(() => {
+    localStorage.setItem(AUDIO_OUTPUT_DEVICE_KEY, audioOutputDeviceId || "");
+  }, [audioOutputDeviceId]);
+
+  useEffect(() => {
+    if (settingsTab !== "voice" || !settingsOpen || !navigator.mediaDevices?.enumerateDevices) return;
+    let cancelled = false;
+    const loadDevices = async () => {
+      try {
+        try {
+          await navigator.mediaDevices.getUserMedia({ audio: true });
+        } catch {
+          // still attempt enumerateDevices even if permission is denied
+        }
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        if (cancelled) return;
+        const ins = devices.filter((d) => d.kind === "audioinput");
+        const outs = devices.filter((d) => d.kind === "audiooutput");
+        setAudioInputDevices(ins);
+        setAudioOutputDevices(outs);
+        if (!audioInputDeviceId && ins[0]?.deviceId) setAudioInputDeviceId(ins[0].deviceId);
+        if (!audioOutputDeviceId && outs[0]?.deviceId) setAudioOutputDeviceId(outs[0].deviceId);
+      } catch {
+        if (!cancelled) setStatus("Could not load audio devices. Check browser permissions.");
+      }
+    };
+    loadDevices();
+    return () => { cancelled = true; };
+  }, [settingsTab, settingsOpen, audioInputDeviceId, audioOutputDeviceId]);
+
+  useEffect(() => {
+    if (!me?.id || !mergedVoiceStates.length) return;
+    const selfState = mergedVoiceStates.find((vs) => vs.userId === me.id);
+    if (!selfState?.channelId) return;
+    setVoiceConnectedChannelId((current) => current || selfState.channelId);
+  }, [mergedVoiceStates, me?.id]);
+
+
+  useEffect(() => {
     if (!accessToken || (navMode !== "friends" && navMode !== "dms")) return;
-
-    const timer = window.setInterval(() => {
-      refreshSocialData(accessToken).catch(() => {
-        // keep existing state on transient failures
-      });
-    }, 10000);
-
-    return () => window.clearInterval(timer);
+    refreshSocialData(accessToken).catch(() => {
+      // keep existing state on transient failures
+    });
   }, [accessToken, navMode]);
 
   activeChannelIdRef.current = activeChannelId;
@@ -1228,26 +1236,6 @@ export function App() {
       .then((data) => setMessages((data.messages || []).slice().reverse()))
       .catch((error) => setStatus(`Message fetch failed: ${error.message}`));
   }, [activeServer, activeChannelId, navMode]);
-
-  // Server channel message polling keeps server chat live until dedicated node-gateway subscription is wired in the client.
-  useEffect(() => {
-    if (navMode !== "servers" || !activeServer?.baseUrl || !activeChannelId) return;
-
-    const channelId = activeChannelId;
-    const baseUrl = activeServer.baseUrl;
-    const token = activeServer.membershipToken;
-
-    const timer = window.setInterval(() => {
-      nodeApi(baseUrl, `/v1/channels/${channelId}/messages`, token)
-        .then((data) => {
-          if (activeChannelIdRef.current !== channelId) return;
-          setMessages((data.messages || []).slice().reverse());
-        })
-        .catch(() => {});
-    }, 5000);
-
-    return () => window.clearInterval(timer);
-  }, [navMode, activeServer, activeChannelId]);
 
   async function handleAuthSubmit(event) {
     event.preventDefault();
@@ -2119,6 +2107,38 @@ export function App() {
     return false;
   }
 
+  function sendNodeVoiceDispatch(type, data) {
+    const ws = nodeGatewayWsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN || !nodeGatewayReadyRef.current) {
+      throw new Error("VOICE_GATEWAY_UNAVAILABLE");
+    }
+    ws.send(JSON.stringify({ op: "DISPATCH", t: type, d: data }));
+  }
+
+  function joinVoiceChannel(channel) {
+    if (!channel?.id || !activeGuildId) return;
+    try {
+      sendNodeVoiceDispatch("VOICE_JOIN", { guildId: activeGuildId, channelId: channel.id });
+      setStatus(`Joining ${channel.name}...`);
+    } catch {
+      const message = "Voice connection failed. Could not reach the server voice gateway.";
+      setStatus(message);
+      window.alert(message);
+    }
+  }
+
+  function leaveVoiceChannel() {
+    if (!voiceConnectedChannelId) return;
+    try {
+      sendNodeVoiceDispatch("VOICE_LEAVE", { channelId: voiceConnectedChannelId });
+      setIsScreenSharing(false);
+    } catch {
+      const message = "Voice disconnect failed. Gateway is not connected.";
+      setStatus(message);
+      window.alert(message);
+    }
+  }
+
   async function createOfficialServer() {
     const name = newOfficialServerName.trim();
     if (!name || !accessToken) return;
@@ -2432,8 +2452,8 @@ export function App() {
                     {!isCollapsed && (
                       <div className="category-items">
                         {items.map((channel) => (
+                          <div key={channel.id}>
                           <button
-                            key={channel.id}
                             className={`channel-row ${channel.id === activeChannelId ? "active" : ""} ${channelDragId === channel.id ? "channel-dragging" : ""}`}
                             draggable={canManageServer}
                             onDragStart={() => canManageServer && setChannelDragId(channel.id)}
@@ -2450,33 +2470,36 @@ export function App() {
                                 setActiveChannelId(channel.id);
                                 return;
                               }
-                              if (channel.type === "voice") {
-                                if (!activeServer) {
-                                  setStatus("No active server selected.");
-                                  return;
-                                }
-                                nodeApi(activeServer.baseUrl, `/v1/channels/${channel.id}/voice/join`, activeServer.membershipToken, {
-                                  method: "POST",
-                                  body: "{}"
-                                })
-                                  .then(() => {
-                                    setVoiceConnectedChannelId(channel.id);
-                                    setStatus("");
-                                  })
-                                  .catch((error) => setStatus(`Voice join failed: ${error.message}`));
-                              }
+                              if (channel.type === "voice") joinVoiceChannel(channel);
                             }}
                           >
                             <span className="channel-hash">{channel.type === "voice" ? "🔊" : "#"}</span>
                             <span style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", minWidth: 0 }}>
                               <span>{channel.name}</span>
                               {channel.type === "voice" && (voiceMembersByChannel.get(channel.id)?.length || 0) > 0 && (
-                                <span className="hint" style={{ fontSize: "11px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "100%" }}>
-                                  {voiceMembersByChannel.get(channel.id).map((m) => `${m.deafened ? "🔇" : m.muted ? "🎙️" : "🎤"} ${m.username}`).join(", ")}
+                                <span className="hint" style={{ fontSize: "11px" }}>
+                                  {voiceMembersByChannel.get(channel.id).length} connected
                                 </span>
                               )}
                             </span>
                           </button>
+                          {channel.type === "voice" && (voiceMembersByChannel.get(channel.id)?.length || 0) > 0 && (
+                            <div className="voice-channel-members">
+                              {voiceMembersByChannel.get(channel.id).map((member) => {
+                                const speaking = voiceConnectedChannelId === channel.id && !member.muted && !member.deafened;
+                                return (
+                                  <div key={`${channel.id}-${member.userId}`} className="voice-channel-member-row">
+                                    <div className={`avatar member-avatar vc-avatar ${speaking ? "speaking" : ""}`}>
+                                      {member.pfp_url ? <img src={profileImageUrl(member.pfp_url)} alt={member.username} className="avatar-image" /> : getInitials(member.username)}
+                                    </div>
+                                    <span className="voice-channel-member-name">{member.username}</span>
+                                    <span className="voice-channel-member-icons">{member.deafened ? "🔇" : member.muted ? "🎙️" : "🎤"}</span>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                          </div>
                         ))}
                       </div>
                     )}
@@ -2546,27 +2569,9 @@ export function App() {
               <div className="voice-top"><strong>Voice connected</strong><span>{voiceConnectedChannelId}</span></div>
               <div className="voice-actions">
                 <button className="ghost" onClick={() => setIsScreenSharing((value) => !value)}>{isScreenSharing ? "Stop Share" : "Share Screen"}</button>
-                <button className="danger" onClick={() => {
-                  if (activeServer && voiceConnectedChannelId) {
-                    nodeApi(activeServer.baseUrl, `/v1/channels/${voiceConnectedChannelId}/voice/leave`, activeServer.membershipToken, {
-                      method: "POST",
-                      body: "{}"
-                    }).catch(() => {});
-                  }
-                  setVoiceConnectedChannelId("");
-                  setIsScreenSharing(false);
-                }}>Disconnect</button>
+                <button className="danger" onClick={leaveVoiceChannel}>Disconnect</button>
               </div>
-              <div className="voice-settings" style={{ marginTop: 8, display: "grid", gap: 6 }}>
-                <label className="hint" style={{ display: "grid", gap: 4 }}>
-                  Microphone Gain ({micGain}%)
-                  <input type="range" min="0" max="200" step="5" value={micGain} onChange={(e) => setMicGain(Number(e.target.value))} />
-                </label>
-                <label className="hint" style={{ display: "grid", gap: 4 }}>
-                  Mic Sensitivity ({micSensitivity}%)
-                  <input type="range" min="0" max="100" step="5" value={micSensitivity} onChange={(e) => setMicSensitivity(Number(e.target.value))} />
-                </label>
-              </div>
+              <p className="hint">Voice controls moved to Settings → Voice.</p>
             </div>
           )}
 
@@ -2707,16 +2712,19 @@ export function App() {
                       {members.map((member) => {
                         const topRole = getHighestRole(member);
                         const color = topRole?.color != null && topRole.color !== "" ? (typeof topRole.color === "number" ? `#${Number(topRole.color).toString(16).padStart(6, "0")}` : topRole.color) : null;
+                        const memberVoice = mergedVoiceStates.find((vs) => vs.userId === member.id);
+                        const inMyCall = memberVoice?.channelId && memberVoice.channelId === voiceConnectedChannelId;
+                        const speaking = !!inMyCall && !memberVoice?.muted && !memberVoice?.deafened;
                         return (
                           <button className="member-row" key={member.id} title={`View ${member.username}`} onClick={(event) => { event.stopPropagation(); openMemberProfile(member); }}>
                             {member.pfp_url ? (
-                              <img src={profileImageUrl(member.pfp_url)} alt={member.username} className="avatar member-avatar" style={{ objectFit: "cover" }} />
+                              <img src={profileImageUrl(member.pfp_url)} alt={member.username} className={`avatar member-avatar ${speaking ? "speaking" : ""}`} style={{ objectFit: "cover" }} />
                             ) : (
-                              <div className="avatar member-avatar">{getInitials(member.username)}</div>
+                              <div className={`avatar member-avatar ${speaking ? "speaking" : ""}`}>{getInitials(member.username)}</div>
                             )}
                             <div>
                               <strong style={color ? { color } : undefined}>{member.username}</strong>
-                              <span>{presenceLabel(getPresence(member.id))}</span>
+                              <span>{memberVoice ? `${memberVoice.deafened ? "🔇" : memberVoice.muted ? "🎙️" : "🎤"} In voice` : presenceLabel(getPresence(member.id))}</span>
                             </div>
                           </button>
                         );
@@ -2996,6 +3004,7 @@ export function App() {
               <button className={settingsTab === "roles" ? "active" : "ghost"} onClick={() => setSettingsTab("roles")}>Roles</button>
               <button className={settingsTab === "invites" ? "active" : "ghost"} onClick={() => setSettingsTab("invites")}>Invites</button>
               <button className={settingsTab === "appearance" ? "active" : "ghost"} onClick={() => setSettingsTab("appearance")}>Appearance</button>
+              <button className={settingsTab === "voice" ? "active" : "ghost"} onClick={() => setSettingsTab("voice")}>Voice</button>
               {servers.some(s => s.roles.includes("owner")) && (
                 <a href="/server-admin.html" target="_blank" style={{ display: "block", padding: "var(--space-sm) var(--space-md)", background: "rgba(149, 168, 205, 0.12)", border: "1px solid rgba(125, 164, 255, 0.25)", borderRadius: "calc(var(--radius) * 0.9)", color: "var(--text-main)", textDecoration: "none", textAlign: "center", fontWeight: "500", cursor: "pointer", fontSize: "0.95em" }}>🔧 Server Admin Panel</a>
               )}
@@ -3171,6 +3180,35 @@ export function App() {
                   <label><input type="checkbox" checked={themeEnabled} onChange={(event) => setThemeEnabled(event.target.checked)} /> Enable custom CSS</label>
                   <input type="file" accept="text/css,.css" onChange={onUploadTheme} />
                   <textarea value={themeCss} onChange={(event) => setThemeCss(event.target.value)} rows={10} placeholder="Paste custom CSS" />
+                </section>
+              )}
+
+              {settingsTab === "voice" && (
+                <section className="card">
+                  <h4>Voice Settings</h4>
+                  <label>Input Device
+                    <select value={audioInputDeviceId} onChange={(event) => setAudioInputDeviceId(event.target.value)}>
+                      <option value="">System default</option>
+                      {audioInputDevices.map((device) => (
+                        <option key={device.deviceId} value={device.deviceId}>{device.label || `Microphone ${device.deviceId.slice(0, 6)}`}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>Output Device
+                    <select value={audioOutputDeviceId} onChange={(event) => setAudioOutputDeviceId(event.target.value)}>
+                      <option value="">System default</option>
+                      {audioOutputDevices.map((device) => (
+                        <option key={device.deviceId} value={device.deviceId}>{device.label || `Speaker ${device.deviceId.slice(0, 6)}`}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>Microphone Gain ({micGain}%)
+                    <input type="range" min="0" max="200" step="5" value={micGain} onChange={(e) => setMicGain(Number(e.target.value))} />
+                  </label>
+                  <label>Mic Sensitivity ({micSensitivity}%)
+                    <input type="range" min="0" max="100" step="5" value={micSensitivity} onChange={(e) => setMicSensitivity(Number(e.target.value))} />
+                  </label>
+                  <p className="hint">Tip: allow microphone permissions so device names show properly.</p>
                 </section>
               )}
 

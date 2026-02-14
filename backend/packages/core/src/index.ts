@@ -41,6 +41,6 @@ await inviteRoutes(app);
 await presenceRoutes(app);
 await adminRoutes(app);
 await dmRoutes(app, gw.broadcastDM);
-await socialRoutes(app, gw.broadcastCallSignal);
+await socialRoutes(app, gw.broadcastCallSignal, gw.broadcastToUser);
 
 app.listen({ port: env.CORE_PORT, host: env.CORE_HOST });

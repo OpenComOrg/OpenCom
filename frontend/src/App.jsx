@@ -18,11 +18,111 @@ const PINNED_SERVER_KEY = "opencom_pinned_server_messages";
 const PINNED_DM_KEY = "opencom_pinned_dm_messages";
 const ACTIVE_DM_KEY = "opencom_active_dm";
 const GATEWAY_DEVICE_ID_KEY = "opencom_gateway_device_id";
+const MIC_GAIN_KEY = "opencom_mic_gain";
+const MIC_SENSITIVITY_KEY = "opencom_mic_sensitivity";
 
 function getGatewayWsUrl() {
   const explicit = import.meta.env.VITE_GATEWAY_WS_URL;
-  if (explicit && typeof explicit === "string" && explicit.trim()) return explicit.trim().replace(/\/$/, "");
-  return "wss://ws.opencom.online:9443";
+  const directHost = import.meta.env.VITE_GATEWAY_WS_HOST || "ws.opencom.online";
+  const forceInsecureWs = import.meta.env.VITE_GATEWAY_WS_INSECURE === "1";
+  const defaultScheme = forceInsecureWs ? "ws" : "wss";
+  const raw = (explicit && typeof explicit === "string" && explicit.trim())
+    ? explicit.trim()
+    : `${defaultScheme}://${directHost}:9443/gateway`;
+
+  try {
+    const url = new URL(raw);
+    if (url.protocol !== "ws:" && url.protocol !== "wss:") {
+      url.protocol = url.protocol === "http:" ? "ws:" : "wss:";
+    }
+    // Node gateway upgrades on /gateway
+    if (!url.pathname || url.pathname === "/") {
+      url.pathname = "/gateway";
+    }
+    return url.toString().replace(/\/$/, "");
+  } catch {
+    const normalized = raw.replace(/\/$/, "");
+    return normalized.endsWith("/gateway") ? normalized : `${normalized}/gateway`;
+  }
+}
+
+function getGatewayWsCandidates() {
+  const explicit = import.meta.env.VITE_GATEWAY_WS_URL;
+  const configuredIp = import.meta.env.VITE_GATEWAY_WS_IP;
+  const forceInsecureWs = import.meta.env.VITE_GATEWAY_WS_INSECURE === "1";
+  const candidates = [];
+  const preferSecure = window.location.protocol === "https:";
+
+  const push = (value) => {
+    if (!value || typeof value !== "string") return;
+    const trimmed = value.trim();
+    if (!trimmed) return;
+    const normalized = (() => {
+      try {
+        const url = new URL(trimmed);
+        if (url.protocol !== "ws:" && url.protocol !== "wss:") {
+          url.protocol = url.protocol === "http:" ? "ws:" : "wss:";
+        }
+        if (!url.pathname || url.pathname === "/") url.pathname = "/gateway";
+        return url.toString().replace(/\/$/, "");
+      } catch {
+        const raw = trimmed.replace(/\/$/, "");
+        return raw.endsWith("/gateway") ? raw : `${raw}/gateway`;
+      }
+    })();
+    if (!candidates.includes(normalized)) candidates.push(normalized);
+  };
+
+  const pushHost = (host, port = "9443") => {
+    if (!host) return;
+    const h = String(host).trim();
+    if (!h) return;
+    if (forceInsecureWs) {
+      push(`ws://${h}:${port}/gateway`);
+      return;
+    }
+    if (preferSecure) {
+      push(`wss://${h}:${port}/gateway`);
+      return;
+    }
+    // In local/dev deployments the gateway commonly runs plain WS on 9443.
+    push(`ws://${h}:${port}/gateway`);
+    push(`wss://${h}:${port}/gateway`);
+  };
+
+  if (explicit && typeof explicit === "string" && explicit.trim()) push(explicit);
+  push(getGatewayWsUrl());
+
+  // Prefer same-machine and same-origin hosts first in development.
+  pushHost(window.location.hostname, "9443");
+  if (window.location.hostname === "127.0.0.1" || window.location.hostname === "localhost") {
+    pushHost("127.0.0.1", "9443");
+    pushHost("localhost", "9443");
+  }
+
+  // If CORE API points at a host, try that host's gateway as well.
+  try {
+    const core = new URL(CORE_API);
+    pushHost(core.hostname, "9443");
+  } catch {
+    // ignore invalid CORE_API
+  }
+
+  if (configuredIp && typeof configuredIp === "string" && configuredIp.trim()) {
+    pushHost(configuredIp.trim(), "9443");
+  }
+
+  // Direct host fallback for environments where DNS/proxy is not set yet.
+  pushHost("37.114.58.186", "9443");
+
+  return candidates;
+}
+
+
+// Backward-compatible shim: older bundles/effects may still reference this helper.
+// We intentionally route server voice via REST right now, so this returns an empty string.
+function getNodeGatewayWsUrl() {
+  return "";
 }
 
 function useThemeCss() {
@@ -98,9 +198,10 @@ async function api(path, options = {}) {
 }
 
 async function nodeApi(baseUrl, path, token, options = {}) {
+  const hasBody = options.body !== undefined && options.body !== null;
   const response = await fetch(`${baseUrl}${path}`, {
     headers: {
-      "Content-Type": "application/json",
+      ...(hasBody ? { "Content-Type": "application/json" } : {}),
       Authorization: `Bearer ${token}`,
       ...(options.headers || {})
     },
@@ -215,6 +316,8 @@ export function App() {
   const [isScreenSharing, setIsScreenSharing] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
   const [isDeafened, setIsDeafened] = useState(false);
+  const [micGain, setMicGain] = useState(Number(localStorage.getItem(MIC_GAIN_KEY) || 100));
+  const [micSensitivity, setMicSensitivity] = useState(Number(localStorage.getItem(MIC_SENSITIVITY_KEY) || 50));
   const [selfStatus, setSelfStatus] = useState(localStorage.getItem(SELF_STATUS_KEY) || "online");
   const [showPinned, setShowPinned] = useState(false);
   const [newOfficialServerName, setNewOfficialServerName] = useState("");
@@ -253,6 +356,7 @@ export function App() {
   const [show2FASetup, setShow2FASetup] = useState(false);
   const [securitySettings, setSecuritySettings] = useState({ twoFactorEnabled: false });
   const [channelDragId, setChannelDragId] = useState(null);
+  const [categoryDragId, setCategoryDragId] = useState(null);
   const [channelPermsChannelId, setChannelPermsChannelId] = useState("");
   const [presenceByUserId, setPresenceByUserId] = useState({});
   const [showClientFlow, setShowClientFlow] = useState(false);
@@ -385,6 +489,22 @@ export function App() {
 
   const memberNameById = useMemo(() => new Map(resolvedMemberList.map((member) => [member.id, member.username])), [resolvedMemberList]);
 
+  const voiceMembersByChannel = useMemo(() => {
+    const map = new Map();
+    const rows = guildState?.voiceStates || [];
+    for (const vs of rows) {
+      if (!vs?.channelId || !vs?.userId) continue;
+      if (!map.has(vs.channelId)) map.set(vs.channelId, []);
+      map.get(vs.channelId).push({
+        userId: vs.userId,
+        username: memberNameById.get(vs.userId) || vs.userId,
+        muted: !!vs.muted,
+        deafened: !!vs.deafened
+      });
+    }
+    return map;
+  }, [guildState?.voiceStates, memberNameById]);
+
   const groupedChannelSections = useMemo(() => {
     const categories = categoryChannels.map((category) => ({
       category,
@@ -487,6 +607,14 @@ export function App() {
   useEffect(() => {
     localStorage.setItem(SELF_STATUS_KEY, selfStatus);
   }, [selfStatus]);
+
+  useEffect(() => {
+    localStorage.setItem(MIC_GAIN_KEY, String(micGain));
+  }, [micGain]);
+
+  useEffect(() => {
+    localStorage.setItem(MIC_SENSITIVITY_KEY, String(micSensitivity));
+  }, [micSensitivity]);
 
   useEffect(() => {
     localStorage.setItem(PINNED_SERVER_KEY, JSON.stringify(pinnedServerMessages));
@@ -663,13 +791,24 @@ export function App() {
       deviceId = "web-" + Math.random().toString(36).slice(2) + "-" + Date.now();
       localStorage.setItem(GATEWAY_DEVICE_ID_KEY, deviceId);
     }
-    const wsUrl = getGatewayWsUrl();
-    const ws = new WebSocket(wsUrl);
-    gatewayWsRef.current = ws;
-    ws.onopen = () => {
-      ws.send(JSON.stringify({ op: "IDENTIFY", d: { accessToken, deviceId } }));
-    };
-    ws.onmessage = (event) => {
+    let disposed = false;
+    let connected = false;
+    let reconnectTimer = null;
+    let candidateIndex = 0;
+    const candidates = getGatewayWsCandidates();
+
+    const connectNext = () => {
+      if (disposed || connected || candidateIndex >= candidates.length) return;
+
+      const wsUrl = candidates[candidateIndex++];
+      const ws = new WebSocket(wsUrl);
+      gatewayWsRef.current = ws;
+
+      ws.onopen = () => {
+        ws.send(JSON.stringify({ op: "IDENTIFY", d: { accessToken, deviceId } }));
+      };
+
+      ws.onmessage = (event) => {
       try {
         const msg = JSON.parse(event.data);
         if (msg.op === "HELLO" && msg.d?.heartbeat_interval) {
@@ -679,7 +818,9 @@ export function App() {
           }, msg.d.heartbeat_interval);
         }
         if (msg.op === "READY") {
+          connected = true;
           setGatewayConnected(true);
+          setStatus("");
           if (gatewayWsRef.current?.readyState === WebSocket.OPEN) {
             gatewayWsRef.current.send(JSON.stringify({ op: "DISPATCH", t: "SET_PRESENCE", d: { status: selfStatus, customStatus: null } }));
           }
@@ -687,22 +828,72 @@ export function App() {
         if (msg.op === "DISPATCH" && msg.t === "PRESENCE_UPDATE" && msg.d?.userId) {
           setPresenceByUserId((prev) => ({ ...prev, [msg.d.userId]: { status: msg.d.status ?? "offline", customStatus: msg.d.customStatus ?? null } }));
         }
+        if (msg.op === "DISPATCH" && msg.t === "SOCIAL_DM_MESSAGE_CREATE" && msg.d?.threadId && msg.d?.message?.id) {
+          const threadId = msg.d.threadId;
+          const incoming = msg.d.message;
+          setDms((current) => {
+            const next = [...current];
+            const idx = next.findIndex((item) => item.id === threadId);
+            const already = (messages = []) => messages.some((m) => m.id === incoming.id);
+            if (idx >= 0) {
+              const existing = next[idx];
+              if (already(existing.messages || [])) return current;
+              next[idx] = { ...existing, messages: [...(existing.messages || []), incoming] };
+              return next;
+            }
+            return [{
+              id: threadId,
+              participantId: incoming.authorId === me?.id ? "unknown" : incoming.authorId,
+              name: incoming.authorId === me?.id ? "Unknown" : (incoming.author || "Unknown"),
+              messages: [incoming]
+            }, ...next];
+          });
+          if (incoming.authorId && incoming.authorId !== me?.id) {
+            playNotificationBeep(selfStatusRef.current === "dnd");
+            setDmNotification({ dmId: threadId, at: Date.now() });
+          }
+        }
+        if (msg.op === "DISPATCH" && msg.t === "SOCIAL_DM_MESSAGE_DELETE" && msg.d?.threadId && msg.d?.messageId) {
+          const threadId = msg.d.threadId;
+          const messageId = msg.d.messageId;
+          setDms((current) => current.map((item) =>
+            item.id === threadId
+              ? { ...item, messages: (item.messages || []).filter((m) => m.id !== messageId) }
+              : item
+          ));
+        }
       } catch (_) {}
+      };
+
+      ws.onclose = () => {
+        if (disposed) return;
+        setGatewayConnected(false);
+        gatewayWsRef.current = null;
+        if (gatewayHeartbeatRef.current) {
+          clearInterval(gatewayHeartbeatRef.current);
+          gatewayHeartbeatRef.current = null;
+        }
+
+        // Try the next websocket endpoint if this one failed before READY.
+        if (!connected && candidateIndex < candidates.length) {
+          reconnectTimer = setTimeout(connectNext, 300);
+        } else if (!connected) {
+          setStatus("Gateway websocket unavailable. Check DNS/TLS or set VITE_GATEWAY_WS_URL/VITE_GATEWAY_WS_IP.");
+        }
+      };
+
+      ws.onerror = () => {};
     };
-    ws.onclose = () => {
-      setGatewayConnected(false);
-      gatewayWsRef.current = null;
-      if (gatewayHeartbeatRef.current) {
-        clearInterval(gatewayHeartbeatRef.current);
-        gatewayHeartbeatRef.current = null;
-      }
-    };
-    ws.onerror = () => {};
+
+    connectNext();
+
     return () => {
+      disposed = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
       setGatewayConnected(false);
       if (gatewayHeartbeatRef.current) clearInterval(gatewayHeartbeatRef.current);
       gatewayHeartbeatRef.current = null;
-      ws.close();
+      if (gatewayWsRef.current) gatewayWsRef.current.close();
       gatewayWsRef.current = null;
     };
   }, [accessToken, me?.id]);
@@ -877,6 +1068,14 @@ export function App() {
   }, [dmNotification]);
 
   useEffect(() => {
+    if (!activeServer || !voiceConnectedChannelId) return;
+    nodeApi(activeServer.baseUrl, `/v1/channels/${voiceConnectedChannelId}/voice/state`, activeServer.membershipToken, {
+      method: "PATCH",
+      body: JSON.stringify({ muted: isMuted, deafened: isDeafened })
+    }).catch(() => {});
+  }, [activeServer, voiceConnectedChannelId, isMuted, isDeafened]);
+
+  useEffect(() => {
     if (!accessToken || (navMode !== "friends" && navMode !== "dms")) return;
 
     const timer = window.setInterval(() => {
@@ -901,9 +1100,9 @@ export function App() {
       .catch((error) => setStatus(`Message fetch failed: ${error.message}`));
   }, [activeServer, activeChannelId, navMode]);
 
-  // Server channel message polling - only when gateway not connected; when connected we skip to avoid hammering the node
+  // Server channel message polling keeps server chat live until dedicated node-gateway subscription is wired in the client.
   useEffect(() => {
-    if (navMode !== "servers" || !activeServer?.baseUrl || !activeChannelId || gatewayConnected) return;
+    if (navMode !== "servers" || !activeServer?.baseUrl || !activeChannelId) return;
 
     const channelId = activeChannelId;
     const baseUrl = activeServer.baseUrl;
@@ -919,7 +1118,7 @@ export function App() {
     }, 5000);
 
     return () => window.clearInterval(timer);
-  }, [navMode, activeServer, activeChannelId, gatewayConnected]);
+  }, [navMode, activeServer, activeChannelId]);
 
   async function handleAuthSubmit(event) {
     event.preventDefault();
@@ -1533,6 +1732,22 @@ export function App() {
     setChannelDragId(null);
   }
 
+  async function handleCategoryDrop(draggedId, targetId) {
+    const categories = [...(categoryChannels || [])];
+    const fromIndex = categories.findIndex((c) => c.id === draggedId);
+    const toIndex = categories.findIndex((c) => c.id === targetId);
+    if (fromIndex === -1 || toIndex === -1 || fromIndex === toIndex) return;
+    const reordered = [...categories];
+    const [removed] = reordered.splice(fromIndex, 1);
+    reordered.splice(toIndex, 0, removed);
+    try {
+      await Promise.all(reordered.map((cat, idx) => updateChannelPosition(cat.id, idx * 100)));
+      setCategoryDragId(null);
+    } catch (e) {
+      setStatus(`Move category failed: ${e.message}`);
+    }
+  }
+
   const SEND_MESSAGES_BIT = 2;
   const VIEW_CHANNEL_BIT = 1;
 
@@ -2067,7 +2282,22 @@ export function App() {
                 const isCollapsed = collapsedCategories[category.id];
                 return (
                   <div className="category-block" key={category.id}>
-                    <button className="category-header" onClick={() => toggleCategory(category.id)}>
+                    <button
+                      className={`category-header ${categoryDragId === category.id ? "channel-dragging" : ""}`}
+                      draggable={canManageServer && category.id !== "uncategorized"}
+                      onDragStart={() => canManageServer && category.id !== "uncategorized" && setCategoryDragId(category.id)}
+                      onDragOver={(e) => { e.preventDefault(); if (category.id !== "uncategorized") e.currentTarget.classList.add("channel-drop-target"); }}
+                      onDragLeave={(e) => e.currentTarget.classList.remove("channel-drop-target")}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        e.currentTarget.classList.remove("channel-drop-target");
+                        if (canManageServer && categoryDragId && category.id !== "uncategorized" && categoryDragId !== category.id) {
+                          handleCategoryDrop(categoryDragId, category.id);
+                        }
+                      }}
+                      onDragEnd={() => setCategoryDragId(null)}
+                      onClick={() => toggleCategory(category.id)}
+                    >
                       <span className="chevron">{isCollapsed ? "▸" : "▾"}</span>{category.name}
                     </button>
                     {!isCollapsed && (
@@ -2087,12 +2317,36 @@ export function App() {
                             }}
                             onDragEnd={() => setChannelDragId(null)}
                             onClick={() => {
-                              if (channel.type === "text") setActiveChannelId(channel.id);
-                              if (channel.type === "voice") setVoiceConnectedChannelId(channel.id);
+                              if (channel.type === "text") {
+                                setActiveChannelId(channel.id);
+                                return;
+                              }
+                              if (channel.type === "voice") {
+                                if (!activeServer) {
+                                  setStatus("No active server selected.");
+                                  return;
+                                }
+                                nodeApi(activeServer.baseUrl, `/v1/channels/${channel.id}/voice/join`, activeServer.membershipToken, {
+                                  method: "POST",
+                                  body: "{}"
+                                })
+                                  .then(() => {
+                                    setVoiceConnectedChannelId(channel.id);
+                                    setStatus("");
+                                  })
+                                  .catch((error) => setStatus(`Voice join failed: ${error.message}`));
+                              }
                             }}
                           >
                             <span className="channel-hash">{channel.type === "voice" ? "🔊" : "#"}</span>
-                            {channel.name}
+                            <span style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", minWidth: 0 }}>
+                              <span>{channel.name}</span>
+                              {channel.type === "voice" && (voiceMembersByChannel.get(channel.id)?.length || 0) > 0 && (
+                                <span className="hint" style={{ fontSize: "11px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "100%" }}>
+                                  {voiceMembersByChannel.get(channel.id).map((m) => `${m.deafened ? "🔇" : m.muted ? "🎙️" : "🎤"} ${m.username}`).join(", ")}
+                                </span>
+                              )}
+                            </span>
                           </button>
                         ))}
                       </div>
@@ -2163,7 +2417,26 @@ export function App() {
               <div className="voice-top"><strong>Voice connected</strong><span>{voiceConnectedChannelId}</span></div>
               <div className="voice-actions">
                 <button className="ghost" onClick={() => setIsScreenSharing((value) => !value)}>{isScreenSharing ? "Stop Share" : "Share Screen"}</button>
-                <button className="danger" onClick={() => { setVoiceConnectedChannelId(""); setIsScreenSharing(false); }}>Disconnect</button>
+                <button className="danger" onClick={() => {
+                  if (activeServer && voiceConnectedChannelId) {
+                    nodeApi(activeServer.baseUrl, `/v1/channels/${voiceConnectedChannelId}/voice/leave`, activeServer.membershipToken, {
+                      method: "POST",
+                      body: "{}"
+                    }).catch(() => {});
+                  }
+                  setVoiceConnectedChannelId("");
+                  setIsScreenSharing(false);
+                }}>Disconnect</button>
+              </div>
+              <div className="voice-settings" style={{ marginTop: 8, display: "grid", gap: 6 }}>
+                <label className="hint" style={{ display: "grid", gap: 4 }}>
+                  Microphone Gain ({micGain}%)
+                  <input type="range" min="0" max="200" step="5" value={micGain} onChange={(e) => setMicGain(Number(e.target.value))} />
+                </label>
+                <label className="hint" style={{ display: "grid", gap: 4 }}>
+                  Mic Sensitivity ({micSensitivity}%)
+                  <input type="range" min="0" max="100" step="5" value={micSensitivity} onChange={(e) => setMicSensitivity(Number(e.target.value))} />
+                </label>
               </div>
             </div>
           )}

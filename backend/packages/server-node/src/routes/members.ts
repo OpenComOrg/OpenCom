@@ -17,7 +17,7 @@ export async function memberRoutes(
 
     const userId = req.auth.userId as string;
 
-    try { await requireGuildMember(guildId, userId, req.auth.roles); } catch { return rep.code(403).send({ error: "NOT_GUILD_MEMBER" }); }
+    try { await requireGuildMember(guildId, userId, req.auth.roles, req.auth.coreServerId); } catch { return rep.code(403).send({ error: "NOT_GUILD_MEMBER" }); }
 
     const anyChannel = await q<{ id: string }>(`SELECT id FROM channels WHERE guild_id=:guildId ORDER BY created_at ASC LIMIT 1`, { guildId });
     if (!anyChannel.length) return rep.code(400).send({ error: "GUILD_HAS_NO_CHANNELS" });
@@ -60,7 +60,7 @@ export async function memberRoutes(
 
     const userId = req.auth.userId as string;
 
-    try { await requireGuildMember(guildId, userId, req.auth.roles); } catch { return rep.code(403).send({ error: "NOT_GUILD_MEMBER" }); }
+    try { await requireGuildMember(guildId, userId, req.auth.roles, req.auth.coreServerId); } catch { return rep.code(403).send({ error: "NOT_GUILD_MEMBER" }); }
 
     const anyChannel = await q<{ id: string }>(`SELECT id FROM channels WHERE guild_id=:guildId ORDER BY created_at ASC LIMIT 1`, { guildId });
     if (!anyChannel.length) return rep.code(400).send({ error: "GUILD_HAS_NO_CHANNELS" });

@@ -8,6 +8,7 @@ declare module "fastify" {
     auth: {
       userId: string;
       serverId: string;
+      coreServerId: string;
       roles: string[];
       isPlatformStaff: boolean;
       token: string;

@@ -9,7 +9,7 @@ export async function guildStateRoutes(app: FastifyInstance) {
     const userId = req.auth.userId as string;
 
     try {
-      await requireGuildMember(guildId, userId, req.auth.roles);
+      await requireGuildMember(guildId, userId, req.auth.roles, req.auth.coreServerId);
     } catch {
       return rep.code(403).send({ error: "NOT_GUILD_MEMBER" });
     }
@@ -55,6 +55,13 @@ export async function guildStateRoutes(app: FastifyInstance) {
       `SELECT user_id, role_id FROM member_roles WHERE guild_id=:guildId`,
       { guildId }
     );
+
+    const voiceStates = await q<{ user_id: string; channel_id: string; muted: number; deafened: number; updated_at: string }>(
+      `SELECT user_id,channel_id,muted,deafened,updated_at
+       FROM voice_states
+       WHERE guild_id=:guildId`,
+      { guildId }
+    );
     const roleIdsByUser = new Map<string, string[]>();
     for (const row of memberRoleRows) {
       if (!roleIdsByUser.has(row.user_id)) roleIdsByUser.set(row.user_id, []);
@@ -73,7 +80,14 @@ export async function guildStateRoutes(app: FastifyInstance) {
         status: "online",
         roleIds: roleIdsByUser.get(member.user_id) || []
       })),
-      me: { userId, roleIds: myRoleIds.map(r => r.role_id) }
+      me: { userId, roleIds: myRoleIds.map(r => r.role_id) },
+      voiceStates: voiceStates.map((vs) => ({
+        userId: vs.user_id,
+        channelId: vs.channel_id,
+        muted: !!vs.muted,
+        deafened: !!vs.deafened,
+        updatedAt: vs.updated_at
+      }))
     });
   });
 }

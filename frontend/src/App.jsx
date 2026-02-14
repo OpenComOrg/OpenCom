@@ -93,9 +93,6 @@ function getGatewayWsCandidates() {
     push(`wss://${h}:${port}/gateway`);
   };
 
-  if (explicit && typeof explicit === "string" && explicit.trim()) push(explicit);
-  push(getGatewayWsUrl());
-
   // Prefer same-machine and same-origin hosts first in development.
   pushHost(window.location.hostname, "9443");
   if (window.location.hostname === "127.0.0.1" || window.location.hostname === "localhost") {
@@ -111,9 +108,15 @@ function getGatewayWsCandidates() {
     // ignore invalid CORE_API
   }
 
+  // User-configured values come before platform defaults.
+  if (explicit && typeof explicit === "string" && explicit.trim()) push(explicit);
+
   if (configuredIp && typeof configuredIp === "string" && configuredIp.trim()) {
     pushHost(configuredIp.trim(), "9443");
   }
+
+  // Platform default hosted gateway fallback (kept late to avoid noisy failures in self-host/local setups).
+  push(getGatewayWsUrl());
 
   // Direct host fallback for environments where DNS/proxy is not set yet.
   pushHost("37.114.58.186", "9443");

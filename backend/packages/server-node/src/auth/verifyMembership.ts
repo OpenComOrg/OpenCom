@@ -8,6 +8,7 @@ export type MembershipClaims = {
   iss: string;
   server_id: string;
   roles: string[];
+  core_server_id?: string;
 };
 
 export async function verifyMembershipToken(token: string): Promise<MembershipClaims> {
@@ -20,5 +21,10 @@ export async function verifyMembershipToken(token: string): Promise<MembershipCl
   if (typeof serverId !== "string") throw new Error("BAD_AUD");
   if (payload.server_id !== serverId) throw new Error("SERVER_ID_MISMATCH");
 
-  return payload as any;
+  const claims = payload as any;
+  if (typeof claims.core_server_id !== "string" || !claims.core_server_id) {
+    claims.core_server_id = claims.server_id;
+  }
+
+  return claims as MembershipClaims;
 }

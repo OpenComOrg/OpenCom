@@ -24,6 +24,7 @@ export async function registerRestAuth(app: FastifyInstance) {
       req.auth = {
         userId: claims.sub,
         serverId: claims.server_id,
+        coreServerId: claims.core_server_id || claims.server_id,
         roles,
         isPlatformStaff,
         token

@@ -21,6 +21,7 @@ type Conn = {
   ws: any;
   userId: string;
   serverId: string;
+  coreServerId: string;
   seq: number;
   channels: Set<string>;
   guilds: Set<string>;
@@ -114,6 +115,7 @@ export function attachNodeGateway(app: FastifyInstance) {
             ws,
             userId: claims.sub,
             serverId: claims.server_id,
+            coreServerId: claims.core_server_id || claims.server_id,
             seq: 0,
             channels: new Set(),
             guilds: new Set(),
@@ -121,9 +123,30 @@ export function attachNodeGateway(app: FastifyInstance) {
           };
           conns.add(conn);
 
+          await q(
+            `UPDATE guilds
+             SET server_id = :coreServerId
+             WHERE owner_user_id = :userId AND (server_id = '' OR server_id IS NULL)`,
+            { userId: conn.userId, coreServerId: conn.coreServerId }
+          );
+
+          // Legacy compatibility: ensure owned guilds always have a guild_members row,
+          // so READY/subscriptions behave consistently for websocket clients.
+          await q(
+            `INSERT INTO guild_members (guild_id,user_id)
+             SELECT g.id, :userId
+             FROM guilds g
+             WHERE g.owner_user_id = :userId AND g.server_id = :coreServerId
+             ON DUPLICATE KEY UPDATE guild_id=guild_id`,
+            { userId: conn.userId, coreServerId: conn.coreServerId }
+          );
+
           const guildRows = await q<{ guild_id: string }>(
-            `SELECT guild_id FROM guild_members WHERE user_id=:userId`,
-            { userId: conn.userId }
+            `SELECT gm.guild_id
+             FROM guild_members gm
+             JOIN guilds g ON g.id = gm.guild_id
+             WHERE gm.user_id=:userId AND g.server_id=:coreServerId`,
+            { userId: conn.userId, coreServerId: conn.coreServerId }
           );
 
           send(ws, {
@@ -149,13 +172,44 @@ export function attachNodeGateway(app: FastifyInstance) {
 
       if (msg.op === "DISPATCH" && msg.t === "SUBSCRIBE_GUILD") {
         const guildId = (msg.d as any)?.guildId;
-        if (typeof guildId === "string") conn.guilds.add(guildId);
+        if (typeof guildId === "string") {
+          try {
+            const allowedGuild = await q<{ id: string }>(
+              `SELECT g.id
+               FROM guilds g
+               LEFT JOIN guild_members gm ON gm.guild_id=g.id AND gm.user_id=:userId
+               WHERE g.id=:guildId AND g.server_id=:coreServerId
+                 AND (g.owner_user_id=:userId OR gm.user_id=:userId)
+               LIMIT 1`,
+              { guildId, userId: conn.userId, coreServerId: conn.coreServerId }
+            );
+            if (allowedGuild.length) conn.guilds.add(guildId);
+          } catch {
+            sendDispatch(conn, "ERROR", { error: "SUBSCRIBE_GUILD_FAILED" });
+          }
+        }
         return;
       }
 
       if (msg.op === "DISPATCH" && msg.t === "SUBSCRIBE_CHANNEL") {
         const channelId = (msg.d as any)?.channelId;
-        if (typeof channelId === "string") conn.channels.add(channelId);
+        if (typeof channelId === "string") {
+          try {
+            const allowedChannel = await q<{ id: string }>(
+              `SELECT c.id
+               FROM channels c
+               JOIN guilds g ON g.id=c.guild_id
+               LEFT JOIN guild_members gm ON gm.guild_id=g.id AND gm.user_id=:userId
+               WHERE c.id=:channelId AND g.server_id=:coreServerId
+                 AND (g.owner_user_id=:userId OR gm.user_id=:userId)
+               LIMIT 1`,
+              { channelId, userId: conn.userId, coreServerId: conn.coreServerId }
+            );
+            if (allowedChannel.length) conn.channels.add(channelId);
+          } catch {
+            sendDispatch(conn, "ERROR", { error: "SUBSCRIBE_CHANNEL_FAILED" });
+          }
+        }
         return;
       }
 
@@ -168,7 +222,7 @@ export function attachNodeGateway(app: FastifyInstance) {
         }
 
         try {
-          await requireGuildMember(guildId, conn.userId);
+          await requireGuildMember(guildId, conn.userId, conn.roles, conn.coreServerId);
 
           const ch = await q<{ id: string; type: string }>(
             `SELECT id,type FROM channels WHERE id=:channelId AND guild_id=:guildId`,
@@ -179,7 +233,7 @@ export function attachNodeGateway(app: FastifyInstance) {
             return;
           }
 
-          const perms = await resolveChannelPermissions({ guildId, channelId, userId: conn.userId });
+          const perms = await resolveChannelPermissions({ guildId, channelId, userId: conn.userId, roles: conn.roles });
           if (!has(perms, Perm.VIEW_CHANNEL) || !has(perms, Perm.CONNECT)) {
             sendDispatch(conn, "VOICE_ERROR", { error: "MISSING_CONNECT_PERMS" });
             return;
@@ -275,7 +329,7 @@ export function attachNodeGateway(app: FastifyInstance) {
           const guildId = conn.voice.guildId;
           const channelId = conn.voice.channelId;
 
-          const perms = await resolveChannelPermissions({ guildId, channelId, userId: conn.userId });
+          const perms = await resolveChannelPermissions({ guildId, channelId, userId: conn.userId, roles: conn.roles });
           if (!has(perms, Perm.SPEAK)) {
             sendDispatch(conn, "VOICE_ERROR", { error: "MISSING_SPEAK_PERMS" });
             return;

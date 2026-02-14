@@ -19,7 +19,7 @@ export async function roleRoutes(
       permissions: z.string().regex(/^\d+$/).optional()
     }).parse(req.body);
 
-    try { await requireGuildMember(guildId, userId, req.auth.roles); } catch { return rep.code(403).send({ error: "NOT_GUILD_MEMBER" }); }
+    try { await requireGuildMember(guildId, userId, req.auth.roles, req.auth.coreServerId); } catch { return rep.code(403).send({ error: "NOT_GUILD_MEMBER" }); }
 
     const anyChannel = await q<{ id: string }>(
       `SELECT id FROM channels WHERE guild_id=:guildId ORDER BY created_at ASC LIMIT 1`,
@@ -72,7 +72,7 @@ export async function roleRoutes(
     try { meta = await rolePosition(roleId); } catch { return rep.code(404).send({ error: "ROLE_NOT_FOUND" }); }
     if (meta.isEveryone) return rep.code(400).send({ error: "CANNOT_EDIT_EVERYONE" });
 
-    try { await requireGuildMember(meta.guildId, userId, req.auth.roles); } catch { return rep.code(403).send({ error: "NOT_GUILD_MEMBER" }); }
+    try { await requireGuildMember(meta.guildId, userId, req.auth.roles, req.auth.coreServerId); } catch { return rep.code(403).send({ error: "NOT_GUILD_MEMBER" }); }
 
     const can = await canEditRole(meta.guildId, userId, meta.position);
     if (!can) return rep.code(403).send({ error: "ROLE_HIERARCHY" });
@@ -108,7 +108,7 @@ export async function roleRoutes(
     try { meta = await rolePosition(roleId); } catch { return rep.code(404).send({ error: "ROLE_NOT_FOUND" }); }
     if (meta.isEveryone) return rep.code(400).send({ error: "CANNOT_DELETE_EVERYONE" });
 
-    try { await requireGuildMember(meta.guildId, userId, req.auth.roles); } catch { return rep.code(403).send({ error: "NOT_GUILD_MEMBER" }); }
+    try { await requireGuildMember(meta.guildId, userId, req.auth.roles, req.auth.coreServerId); } catch { return rep.code(403).send({ error: "NOT_GUILD_MEMBER" }); }
 
     const can = await canEditRole(meta.guildId, userId, meta.position);
     if (!can) return rep.code(403).send({ error: "ROLE_HIERARCHY" });

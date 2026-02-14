@@ -106,16 +106,87 @@ export function attachNodeGateway(app: FastifyInstance) {
         return;
       }
 
-      // -------- Voice signaling (optional) ----------
-      // If you haven't added mediasoup, we return VOICE_DISABLED.
-      if (msg.op === "DISPATCH" && msg.t?.startsWith("VOICE_")) {
-        conn.seq += 1;
-        send(ws, { op: "DISPATCH", t: "VOICE_DISABLED", s: conn.seq, d: { error: "VOICE_NOT_CONFIGURED" } });
+      // -------- Voice signaling ----------
+      if (msg.op === "DISPATCH" && msg.t === "VOICE_JOIN") {
+        try {
+          const guildId = (msg.d as any)?.guildId;
+          const channelId = (msg.d as any)?.channelId;
+          if (typeof guildId !== "string" || typeof channelId !== "string") throw new Error("INVALID_VOICE_JOIN");
+
+          const channels = await q<{ guild_id: string; type: string }>(
+            `SELECT guild_id, type FROM channels WHERE id=:channelId`,
+            { channelId }
+          );
+          if (!channels.length) throw new Error("CHANNEL_NOT_FOUND");
+          if (channels[0].guild_id !== guildId) throw new Error("CHANNEL_GUILD_MISMATCH");
+          if (channels[0].type !== "voice") throw new Error("NOT_VOICE_CHANNEL");
+
+          const memberRows = await q<{ guild_id: string }>(
+            `SELECT guild_id FROM guild_members WHERE guild_id=:guildId AND user_id=:userId LIMIT 1`,
+            { guildId, userId: conn.userId }
+          );
+          if (!memberRows.length) throw new Error("NOT_GUILD_MEMBER");
+
+          await q(
+            `DELETE FROM voice_states WHERE user_id=:userId AND guild_id=:guildId`,
+            { userId: conn.userId, guildId }
+          );
+
+          await q(
+            `INSERT INTO voice_states (guild_id, channel_id, user_id) VALUES (:guildId,:channelId,:userId)
+             ON DUPLICATE KEY UPDATE channel_id=:channelId, updated_at=NOW()`,
+            { guildId, channelId, userId: conn.userId }
+          );
+
+          conn.voice = { guildId, channelId };
+          conn.seq += 1;
+          send(ws, { op: "DISPATCH", t: "VOICE_JOINED", s: conn.seq, d: { guildId, channelId, userId: conn.userId } });
+          broadcastGuild(guildId, "VOICE_STATE_UPDATE", { guildId, channelId, userId: conn.userId, muted: false, deafened: false });
+        } catch (error: any) {
+          conn.seq += 1;
+          send(ws, { op: "DISPATCH", t: "VOICE_ERROR", s: conn.seq, d: { error: error?.message || "VOICE_JOIN_FAILED" } });
+        }
+        return;
+      }
+
+      if (msg.op === "DISPATCH" && msg.t === "VOICE_LEAVE") {
+        try {
+          const channelId = (msg.d as any)?.channelId;
+          if (typeof channelId !== "string") throw new Error("INVALID_VOICE_LEAVE");
+
+          const states = await q<{ guild_id: string }>(
+            `SELECT guild_id FROM voice_states WHERE user_id=:userId AND channel_id=:channelId LIMIT 1`,
+            { userId: conn.userId, channelId }
+          );
+          if (!states.length) throw new Error("NOT_IN_VOICE");
+          const guildId = states[0].guild_id;
+
+          await q(
+            `DELETE FROM voice_states WHERE user_id=:userId AND channel_id=:channelId`,
+            { userId: conn.userId, channelId }
+          );
+
+          if (conn.voice?.channelId === channelId) conn.voice = undefined;
+          conn.seq += 1;
+          send(ws, { op: "DISPATCH", t: "VOICE_LEFT", s: conn.seq, d: { guildId, channelId, userId: conn.userId } });
+          broadcastGuild(guildId, "VOICE_STATE_REMOVE", { guildId, channelId, userId: conn.userId });
+        } catch (error: any) {
+          conn.seq += 1;
+          send(ws, { op: "DISPATCH", t: "VOICE_ERROR", s: conn.seq, d: { error: error?.message || "VOICE_LEAVE_FAILED" } });
+        }
         return;
       }
     });
 
-    ws.on("close", () => {
+    ws.on("close", async () => {
+      if (conn?.voice) {
+        const { guildId, channelId } = conn.voice;
+        await q(
+          `DELETE FROM voice_states WHERE user_id=:userId AND guild_id=:guildId`,
+          { userId: conn.userId, guildId }
+        ).catch(() => {});
+        broadcastGuild(guildId, "VOICE_STATE_REMOVE", { guildId, channelId, userId: conn.userId });
+      }
       if (conn) conns.delete(conn);
     });
   });

@@ -275,6 +275,29 @@ export function attachNodeGateway(app: FastifyInstance) {
         return;
       }
 
+      if (msg.op === "DISPATCH" && msg.t === "VOICE_SPEAKING") {
+        try {
+          if (!conn.voice) {
+            sendDispatch(conn, "VOICE_ERROR", { error: "NOT_IN_VOICE_CHANNEL" });
+            return;
+          }
+
+          const speaking = !!(msg.d as any)?.speaking;
+          const guildId = conn.voice.guildId;
+          const channelId = conn.voice.channelId;
+
+          broadcastGuild(guildId, "VOICE_SPEAKING", {
+            guildId,
+            channelId,
+            userId: conn.userId,
+            speaking
+          });
+        } catch {
+          sendDispatch(conn, "VOICE_ERROR", { error: "VOICE_SPEAKING_FAILED" });
+        }
+        return;
+      }
+
       if (msg.op === "DISPATCH" && msg.t === "VOICE_CREATE_TRANSPORT") {
         try {
           const guildId = (msg.d as any)?.guildId ?? conn.voice?.guildId;

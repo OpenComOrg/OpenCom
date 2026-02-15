@@ -16,8 +16,43 @@ export function createSfuVoiceClient({ selfUserId, getSelfUserId, sendDispatch, 
     producerOwnerByProducerId: new Map(),
     isMuted: false,
     isDeafened: false,
-    audioOutputDeviceId: ""
+    audioOutputDeviceId: "",
+    pendingAudioStartByProducerId: new Map()
   };
+
+  function removePendingAudioStart(producerId) {
+    const pending = state.pendingAudioStartByProducerId.get(producerId);
+    if (!pending) return;
+    pending.cleanup();
+    state.pendingAudioStartByProducerId.delete(producerId);
+  }
+
+  function scheduleAudioStartRetry(audio, producerId) {
+    if (!audio || !producerId || state.pendingAudioStartByProducerId.has(producerId)) return;
+
+    const retryStart = () => {
+      if (audio.paused) {
+        audio.play()
+          .then(() => {
+            removePendingAudioStart(producerId);
+          })
+          .catch(() => {});
+      } else {
+        removePendingAudioStart(producerId);
+      }
+    };
+
+    const events = ["pointerdown", "touchstart", "keydown", "click"];
+    events.forEach((eventName) => window.addEventListener(eventName, retryStart, { passive: true }));
+    const timer = window.setInterval(retryStart, 1500);
+
+    state.pendingAudioStartByProducerId.set(producerId, {
+      cleanup: () => {
+        window.clearInterval(timer);
+        events.forEach((eventName) => window.removeEventListener(eventName, retryStart));
+      }
+    });
+  }
 
   function isActive(token) {
     return token === state.sessionToken && !!state.channelId;
@@ -91,12 +126,25 @@ export function createSfuVoiceClient({ selfUserId, getSelfUserId, sendDispatch, 
     const audio = document.createElement("audio");
     audio.autoplay = true;
     audio.playsInline = true;
+    audio.preload = "auto";
+    audio.muted = false;
     audio.srcObject = stream;
+    audio.style.display = "none";
+    document.body.appendChild(audio);
+    audio.addEventListener("loadedmetadata", () => {
+      if (audio.paused) {
+        audio.play().catch(() => {
+          scheduleAudioStartRetry(audio, producerId);
+        });
+      }
+    });
     if (typeof audio.setSinkId === "function" && state.audioOutputDeviceId) {
       await audio.setSinkId(state.audioOutputDeviceId).catch(() => {});
     }
     audio.volume = state.isDeafened ? 0 : 1;
-    await audio.play().catch(() => {});
+    await audio.play().catch(() => {
+      scheduleAudioStartRetry(audio, producerId);
+    });
 
     state.consumersByProducerId.set(producerId, { consumer, audio, userId: userId || "" });
     if (userId) state.producerOwnerByProducerId.set(producerId, userId);
@@ -221,6 +269,7 @@ export function createSfuVoiceClient({ selfUserId, getSelfUserId, sendDispatch, 
     if (!entry) return;
     state.consumersByProducerId.delete(producerId);
     state.producerOwnerByProducerId.delete(producerId);
+    removePendingAudioStart(producerId);
     try { entry.consumer.close(); } catch {}
     try { entry.audio.pause(); entry.audio.srcObject = null; entry.audio.remove(); } catch {}
     onRemoteAudioRemoved?.({ producerId, userId: entry.userId || "" });
@@ -228,6 +277,9 @@ export function createSfuVoiceClient({ selfUserId, getSelfUserId, sendDispatch, 
 
   async function cleanup() {
     state.sessionToken += 1;
+    for (const producerId of [...state.pendingAudioStartByProducerId.keys()]) {
+      removePendingAudioStart(producerId);
+    }
     for (const producerId of [...state.consumersByProducerId.keys()]) {
       await cleanupConsumer(producerId);
     }

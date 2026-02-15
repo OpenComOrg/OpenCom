@@ -31,7 +31,7 @@
   /* For scalable server rails, etc. */
   --sidebar-width: clamp(60px, 7vw, 80px);
   --channel-sidebar-width: clamp(180px, 18vw, 300px);
-  --channel-sidebar-width-voice: clamp(220px, 24vw, 360px);
+  --channel-sidebar-width-voice: clamp(240px, 28vw, 440px);
 }
 
 html {

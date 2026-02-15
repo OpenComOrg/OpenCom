@@ -457,6 +457,11 @@ export function App() {
   const voiceConnectedGuildId = voiceSession.guildId;
   const isInVoiceChannel = !!voiceConnectedChannelId;
   const channels = guildState?.channels || [];
+  const voiceConnectedChannelName = useMemo(() => {
+    if (!voiceConnectedChannelId) return "";
+    const connectedChannel = channels.find((channel) => channel.id === voiceConnectedChannelId);
+    return connectedChannel?.name || voiceConnectedChannelId;
+  }, [channels, voiceConnectedChannelId]);
   const activeChannel = useMemo(() => channels.find((channel) => channel.id === activeChannelId) || null, [channels, activeChannelId]);
   const activeDm = useMemo(() => dms.find((dm) => dm.id === activeDmId) || null, [dms, activeDmId]);
 
@@ -2625,29 +2630,44 @@ export function App() {
   }
 
   async function leaveVoiceChannel() {
-    const connectedServer = servers.find((server) => server.defaultGuildId === voiceConnectedGuildId) || activeServer;
-    if (!isInVoiceChannel || !connectedServer?.baseUrl || !connectedServer?.membershipToken) return;
-    const clearLocalVoiceState = async () => {
+    const targetGuildId = voiceConnectedGuildId;
+    const targetChannelId = voiceConnectedChannelId;
+    const connectedServer = servers.find((server) => server.defaultGuildId === targetGuildId) || activeServer || null;
+
+    const forceLocalDisconnect = async () => {
       setVoiceSession({ guildId: "", channelId: "" });
       setIsScreenSharing(false);
+      setIsMuted(false);
+      setIsDeafened(false);
+      if (targetGuildId && me?.id) {
+        setVoiceStatesByGuild((prev) => {
+          if (!prev[targetGuildId]?.[me.id]) return prev;
+          const nextGuild = { ...prev[targetGuildId] };
+          delete nextGuild[me.id];
+          return { ...prev, [targetGuildId]: nextGuild };
+        });
+      }
       await cleanupVoiceRtc();
     };
 
+    await forceLocalDisconnect();
+    setStatus("Disconnected from voice.");
+
+    if (!targetGuildId || !targetChannelId) return;
+
     try {
-      await sendNodeVoiceDispatch("VOICE_LEAVE", { guildId: voiceConnectedGuildId, channelId: voiceConnectedChannelId });
-      await clearLocalVoiceState();
-      setStatus("Disconnected from voice.");
+      await sendNodeVoiceDispatch("VOICE_LEAVE", { guildId: targetGuildId, channelId: targetChannelId });
       return;
     } catch {}
 
+    if (!connectedServer?.baseUrl || !connectedServer?.membershipToken) return;
+
     try {
-      await nodeApi(connectedServer.baseUrl, `/v1/channels/${voiceConnectedChannelId}/voice/leave`, connectedServer.membershipToken, { method: "POST" });
-      await clearLocalVoiceState();
-      setStatus("Disconnected from voice (REST fallback).");
+      await nodeApi(connectedServer.baseUrl, `/v1/channels/${targetChannelId}/voice/leave`, connectedServer.membershipToken, { method: "POST" });
     } catch (error) {
-      const message = `Voice disconnect failed: ${error.message || "VOICE_LEAVE_FAILED"}`;
+      const message = `Disconnected locally. Server voice leave failed: ${error.message || "VOICE_LEAVE_FAILED"}`;
       setStatus(message);
-      window.alert(message);
+      console.warn(message);
     }
   }
 
@@ -3078,7 +3098,7 @@ export function App() {
         <footer className="self-card">
           {isInVoiceChannel && (
             <div className="voice-widget">
-              <div className="voice-top"><strong>Voice connected</strong><span>{voiceConnectedChannelId}</span></div>
+              <div className="voice-top"><strong>Voice connected</strong><span title={voiceConnectedChannelName}>{voiceConnectedChannelName}</span></div>
               <div className="voice-actions">
                 <button className="ghost" onClick={() => setIsScreenSharing((value) => !value)}>{isScreenSharing ? "Stop Share" : "Share Screen"}</button>
                 <button className="danger" onClick={leaveVoiceChannel}>Disconnect</button>

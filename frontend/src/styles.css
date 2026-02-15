@@ -791,9 +791,10 @@ button.danger { background: linear-gradient(135deg, #eb5d73, #c84159); }
 }
 .chat-main {
   display: grid;
-  grid-template-rows: clamp(40px, 5vh, 52px) auto minmax(0, 1fr) auto clamp(44px, 5.5vh, 56px);
+  grid-template-rows: clamp(40px, 5vh, 52px) auto minmax(0, 1fr) auto auto;
   min-width: 0;
   min-height: 0;
+  overflow: hidden;
 }
 
 .chat-main > .chat-header { grid-row: 1; }
@@ -1045,10 +1046,9 @@ button.danger { background: linear-gradient(135deg, #eb5d73, #c84159); }
 .empty { text-align: center; color: var(--text-dim); margin-top: 2vw;}
 
 .composer {
-  height: 100%;
-  min-height: 0;
+  min-height: clamp(52px, 6.2vh, 72px);
   margin: 0 var(--space-md);
-  padding: 0 var(--space-xs);
+  padding: 0 var(--space-sm) max(env(safe-area-inset-bottom), 8px);
   border-top: 1px solid var(--border-subtle);
   border-radius: 0;
   background: rgba(22, 36, 62, 0.92);
@@ -1059,6 +1059,8 @@ button.danger { background: linear-gradient(135deg, #eb5d73, #c84159); }
   z-index: 3;
   min-width: 0;
   flex-shrink: 0;
+  position: sticky;
+  bottom: 0;
 }
 
 .composer input {
@@ -1067,7 +1069,7 @@ button.danger { background: linear-gradient(135deg, #eb5d73, #c84159); }
   height: 100%;
   min-height: 0;
   font-size: clamp(0.85rem, 1.2vw, 1rem);
-  padding: 0;
+  padding: 0.15em 0;
 }
 .composer-input-wrap {
   position: relative;
@@ -1076,6 +1078,10 @@ button.danger { background: linear-gradient(135deg, #eb5d73, #c84159); }
 .composer-icon { min-width: clamp(20px, 1.8vw, 36px); }
 .server-composer { grid-template-columns: auto 1fr auto auto; }
 .dm-composer { grid-template-columns: 1fr auto; }
+.chat-main > .messages,
+.chat-main > .reply-banner {
+  min-height: 0;
+}
 .mention-suggestions {
   position: absolute;
   left: 0;

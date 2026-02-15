@@ -47,6 +47,14 @@ async function getOrCreateRoom(guildId: string, channelId: string) {
       mimeType: "audio/opus",
       clockRate: 48000,
       channels: 2
+    },
+    {
+      kind: "video",
+      mimeType: "video/VP8",
+      clockRate: 90000,
+      parameters: {
+        "x-google-start-bitrate": 1000
+      }
     }
   ];
 
@@ -102,15 +110,23 @@ export async function connectTransport(guildId: string, channelId: string, userI
   await transport.connect({ dtlsParameters });
 }
 
-export async function produce(guildId: string, channelId: string, userId: string, transportId: string, kind: "audio" | "video", rtpParameters: any) {
+export async function produce(
+  guildId: string,
+  channelId: string,
+  userId: string,
+  transportId: string,
+  kind: "audio" | "video",
+  rtpParameters: any,
+  appData: any = {}
+) {
   const peer = await ensurePeer(guildId, channelId, userId);
   const transport = peer.transports.get(transportId);
   if (!transport) throw new Error("TRANSPORT_NOT_FOUND");
 
-  const producer = await transport.produce({ kind, rtpParameters });
+  const producer = await transport.produce({ kind, rtpParameters, appData });
   peer.producers.set(producer.id, producer);
 
-  return { producerId: producer.id };
+  return { producerId: producer.id, kind: producer.kind, appData: producer.appData || {} };
 }
 
 export async function consume(
@@ -149,9 +165,16 @@ export async function consume(
 export function listProducers(guildId: string, channelId: string) {
   const room = rooms.get(key(guildId, channelId));
   if (!room) return [];
-  const producers: { producerId: string; userId: string }[] = [];
+  const producers: { producerId: string; userId: string; kind: "audio" | "video"; appData: any }[] = [];
   for (const [uid, peer] of room.peers) {
-    for (const pid of peer.producers.keys()) producers.push({ producerId: pid, userId: uid });
+    for (const producer of peer.producers.values()) {
+      producers.push({
+        producerId: producer.id,
+        userId: uid,
+        kind: producer.kind,
+        appData: producer.appData || {}
+      });
+    }
   }
   return producers;
 }

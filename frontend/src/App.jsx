@@ -347,6 +347,7 @@ export function App() {
   const [voiceSession, setVoiceSession] = useState({ guildId: "", channelId: "" });
   const [isDisconnectingVoice, setIsDisconnectingVoice] = useState(false);
   const [isScreenSharing, setIsScreenSharing] = useState(false);
+  const [remoteScreenShares, setRemoteScreenShares] = useState([]);
   const [isMuted, setIsMuted] = useState(false);
   const [isDeafened, setIsDeafened] = useState(false);
   const [micGain, setMicGain] = useState(Number(localStorage.getItem(MIC_GAIN_KEY) || 100));
@@ -424,6 +425,16 @@ export function App() {
       getSelfUserId: () => selfUserIdRef.current,
       sendDispatch: (type, data) => sendNodeVoiceDispatch(type, data),
       waitForEvent: waitForVoiceEvent,
+      onRemoteMediaAdded: ({ producerId, userId, stream, kind, source }) => {
+        if (kind !== "video" || source !== "screen") return;
+        setRemoteScreenShares((prev) => {
+          if (prev.some((entry) => entry.producerId === producerId)) return prev;
+          return [...prev, { producerId, userId, stream }];
+        });
+      },
+      onRemoteMediaRemoved: ({ producerId }) => {
+        setRemoteScreenShares((prev) => prev.filter((entry) => entry.producerId !== producerId));
+      },
       debugLog: voiceDebug
     });
   }
@@ -1033,7 +1044,8 @@ export function App() {
 
   useEffect(() => {
     const server = activeServer;
-    if (navMode !== "servers" || !server?.baseUrl || !server?.membershipToken) {
+    const shouldKeepVoiceGatewayAlive = navMode === "servers" || !!voiceSession.channelId;
+    if (!shouldKeepVoiceGatewayAlive || !server?.baseUrl || !server?.membershipToken) {
       voiceGatewayCandidatesRef.current = [];
       nodeGatewayReadyRef.current = false;
       if (nodeGatewayHeartbeatRef.current) {
@@ -1287,9 +1299,14 @@ export function App() {
         nodeGatewayWsRef.current.close();
         nodeGatewayWsRef.current = null;
       }
-      cleanupVoiceRtc().catch(() => {});
     };
-  }, [navMode, activeServer?.id, activeServer?.baseUrl, activeServer?.membershipToken, nodeGatewayUnavailableByServer]);
+  }, [navMode, activeServer?.id, activeServer?.baseUrl, activeServer?.membershipToken, nodeGatewayUnavailableByServer, voiceSession.channelId]);
+
+  useEffect(() => {
+    if (isInVoiceChannel) return;
+    setIsScreenSharing(false);
+    setRemoteScreenShares([]);
+  }, [isInVoiceChannel]);
 
   useEffect(() => {
     if (!activeGuildId || !activeChannelId) return;
@@ -2818,6 +2835,22 @@ export function App() {
     }
   }
 
+  async function toggleScreenShare() {
+    if (!isInVoiceChannel) return;
+    try {
+      if (isScreenSharing) {
+        await voiceSfuRef.current?.stopScreenShare();
+        setIsScreenSharing(false);
+      } else {
+        await voiceSfuRef.current?.startScreenShare();
+        setIsScreenSharing(true);
+      }
+    } catch (error) {
+      setIsScreenSharing(false);
+      setStatus(`Screen sharing failed: ${error.message}`);
+    }
+  }
+
   async function leaveVoiceChannel() {
     if (isDisconnectingVoice) return;
 
@@ -3393,7 +3426,7 @@ export function App() {
             <div className="voice-widget">
               <div className="voice-top"><strong>Voice connected</strong><span title={voiceConnectedChannelName}>{voiceConnectedChannelName}</span></div>
               <div className="voice-actions">
-                <button className="ghost" onClick={() => setIsScreenSharing((value) => !value)}>{isScreenSharing ? "Stop Share" : "Share Screen"}</button>
+                <button className="ghost" onClick={toggleScreenShare}>{isScreenSharing ? "Stop Share" : "Share Screen"}</button>
                 <button className="danger" onClick={leaveVoiceChannel} disabled={isDisconnectingVoice}>{isDisconnectingVoice ? "Disconnecting..." : "Disconnect"}</button>
               </div>
               <p className="hint">Voice controls moved to Settings → Voice.</p>
@@ -3455,6 +3488,33 @@ export function App() {
                     <div key={item.id} className="pinned-item"><strong>{item.author}</strong><span>{item.content}</span></div>
                   ))}
                 </div>
+              )}
+
+
+              {remoteScreenShares.length > 0 && (
+                <section className="social-panel" style={{ marginBottom: "12px" }}>
+                  <h4 style={{ marginTop: 0 }}>Live Screen Shares</h4>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "10px" }}>
+                    {remoteScreenShares.map((share) => {
+                      const sharer = userCache[share.userId]?.username || "User";
+                      return (
+                        <article key={share.producerId} style={{ background: "var(--panel-alt)", borderRadius: "10px", padding: "8px" }}>
+                          <strong style={{ display: "block", marginBottom: "6px" }}>{sharer} is sharing</strong>
+                          <video
+                            autoPlay
+                            playsInline
+                            controls
+                            ref={(node) => {
+                              if (!node || node.srcObject === share.stream) return;
+                              node.srcObject = share.stream;
+                            }}
+                            style={{ width: "100%", borderRadius: "8px", background: "#000" }}
+                          />
+                        </article>
+                      );
+                    })}
+                  </div>
+                </section>
               )}
 
               <div className="messages" ref={messagesRef}>

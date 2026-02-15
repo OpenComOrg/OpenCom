@@ -2,7 +2,14 @@ import * as mediasoupClient from "mediasoup-client";
 
 const DEFAULT_TIMEOUT_MS = 10000;
 
-export function createSfuVoiceClient({ selfUserId, getSelfUserId, sendDispatch, waitForEvent, onRemoteAudioAdded, onRemoteAudioRemoved }) {
+export function createSfuVoiceClient({
+  selfUserId,
+  getSelfUserId,
+  sendDispatch,
+  waitForEvent,
+  onRemoteMediaAdded,
+  onRemoteMediaRemoved
+}) {
   const state = {
     sessionToken: 0,
     guildId: "",
@@ -11,7 +18,9 @@ export function createSfuVoiceClient({ selfUserId, getSelfUserId, sendDispatch, 
     sendTransport: null,
     recvTransport: null,
     localProducer: null,
+    localScreenProducer: null,
     localStream: null,
+    localScreenStream: null,
     consumersByProducerId: new Map(),
     producerOwnerByProducerId: new Map(),
     isMuted: false,
@@ -104,7 +113,12 @@ export function createSfuVoiceClient({ selfUserId, getSelfUserId, sendDispatch, 
       : state.device.createRecvTransport(created.transport);
   }
 
-  async function consumeProducer(producerId, userId, token) {
+  async function produceTrack(track, source = "microphone") {
+    if (!state.sendTransport || !track) throw new Error("VOICE_SEND_TRANSPORT_NOT_READY");
+    return state.sendTransport.produce({ track, appData: { source } });
+  }
+
+  async function consumeProducer(producerId, userId, token, producerMeta = {}) {
     if (!producerId || !state.recvTransport || !state.device || !isActive(token)) return;
     if (state.consumersByProducerId.has(producerId)) return;
 
@@ -123,32 +137,44 @@ export function createSfuVoiceClient({ selfUserId, getSelfUserId, sendDispatch, 
 
     const consumer = await state.recvTransport.consume(consumerOptions);
     const stream = new MediaStream([consumer.track]);
-    const audio = document.createElement("audio");
-    audio.autoplay = true;
-    audio.playsInline = true;
-    audio.preload = "auto";
-    audio.muted = false;
-    audio.srcObject = stream;
-    audio.style.display = "none";
-    document.body.appendChild(audio);
-    audio.addEventListener("loadedmetadata", () => {
-      if (audio.paused) {
-        audio.play().catch(() => {
-          scheduleAudioStartRetry(audio, producerId);
-        });
-      }
-    });
-    if (typeof audio.setSinkId === "function" && state.audioOutputDeviceId) {
-      await audio.setSinkId(state.audioOutputDeviceId).catch(() => {});
-    }
-    audio.volume = state.isDeafened ? 0 : 1;
-    await audio.play().catch(() => {
-      scheduleAudioStartRetry(audio, producerId);
-    });
+    const mediaKind = consumerOptions.kind || producerMeta.kind || "audio";
+    const isVideo = mediaKind === "video";
+    const mediaElement = document.createElement(isVideo ? "video" : "audio");
+    mediaElement.autoplay = true;
+    mediaElement.playsInline = true;
+    mediaElement.preload = "auto";
+    mediaElement.muted = false;
+    mediaElement.srcObject = stream;
+    mediaElement.style.display = "none";
+    document.body.appendChild(mediaElement);
 
-    state.consumersByProducerId.set(producerId, { consumer, audio, userId: userId || "" });
+    if (!isVideo) {
+      mediaElement.addEventListener("loadedmetadata", () => {
+        if (mediaElement.paused) {
+          mediaElement.play().catch(() => {
+            scheduleAudioStartRetry(mediaElement, producerId);
+          });
+        }
+      });
+      if (typeof mediaElement.setSinkId === "function" && state.audioOutputDeviceId) {
+        await mediaElement.setSinkId(state.audioOutputDeviceId).catch(() => {});
+      }
+      mediaElement.volume = state.isDeafened ? 0 : 1;
+      await mediaElement.play().catch(() => {
+        scheduleAudioStartRetry(mediaElement, producerId);
+      });
+    }
+
+    const source = producerMeta?.appData?.source || (isVideo ? "screen" : "microphone");
+    state.consumersByProducerId.set(producerId, {
+      consumer,
+      mediaElement,
+      userId: userId || "",
+      kind: mediaKind,
+      source
+    });
     if (userId) state.producerOwnerByProducerId.set(producerId, userId);
-    onRemoteAudioAdded?.({ producerId, userId, audio });
+    onRemoteMediaAdded?.({ producerId, userId, mediaElement, kind: mediaKind, source, stream });
   }
 
   async function join({ guildId, channelId, audioInputDeviceId, isMuted = false, isDeafened = false, audioOutputDeviceId = "" }) {
@@ -178,13 +204,6 @@ export function createSfuVoiceClient({ selfUserId, getSelfUserId, sendDispatch, 
     state.sendTransport = await createTransport("send", token);
     state.sendTransport.on("connect", async ({ dtlsParameters }, callback, errback) => {
       try {
-        if (import.meta.env.DEV) {
-          console.debug("[voice] sending VOICE_CONNECT_TRANSPORT", {
-            transportId: state.sendTransport.id,
-            guildId: state.guildId,
-            channelId: state.channelId
-          });
-        }
         await sendDispatch("VOICE_CONNECT_TRANSPORT", {
           guildId: state.guildId,
           channelId: state.channelId,
@@ -197,14 +216,15 @@ export function createSfuVoiceClient({ selfUserId, getSelfUserId, sendDispatch, 
         errback(error);
       }
     });
-    state.sendTransport.on("produce", async ({ kind, rtpParameters }, callback, errback) => {
+    state.sendTransport.on("produce", async ({ kind, rtpParameters, appData }, callback, errback) => {
       try {
         await sendDispatch("VOICE_PRODUCE", {
           guildId: state.guildId,
           channelId: state.channelId,
           transportId: state.sendTransport.id,
           kind,
-          rtpParameters
+          rtpParameters,
+          appData
         });
         const produced = await waitForVoiceResponse(
           () => waitDispatch(
@@ -212,7 +232,9 @@ export function createSfuVoiceClient({ selfUserId, getSelfUserId, sendDispatch, 
             (d) =>
               d?.guildId === state.guildId &&
               d?.channelId === state.channelId &&
-              d?.userId === resolveSelfUserId()
+              d?.userId === resolveSelfUserId() &&
+              d?.kind === kind &&
+              (d?.appData?.source || "microphone") === (appData?.source || "microphone")
           )
         );
         callback({ id: produced.producerId });
@@ -230,7 +252,7 @@ export function createSfuVoiceClient({ selfUserId, getSelfUserId, sendDispatch, 
     state.localStream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints });
     const localTrack = state.localStream.getAudioTracks()[0];
     if (!localTrack) throw new Error("MIC_TRACK_NOT_FOUND");
-    state.localProducer = await state.sendTransport.produce({ track: localTrack });
+    state.localProducer = await produceTrack(localTrack, "microphone");
     if (state.isMuted) {
       state.localProducer.pause();
       localTrack.enabled = false;
@@ -239,13 +261,6 @@ export function createSfuVoiceClient({ selfUserId, getSelfUserId, sendDispatch, 
     state.recvTransport = await createTransport("recv", token);
     state.recvTransport.on("connect", async ({ dtlsParameters }, callback, errback) => {
       try {
-        if (import.meta.env.DEV) {
-          console.debug("[voice] sending VOICE_CONNECT_TRANSPORT", {
-            transportId: state.recvTransport.id,
-            guildId: state.guildId,
-            channelId: state.channelId
-          });
-        }
         await sendDispatch("VOICE_CONNECT_TRANSPORT", {
           guildId: state.guildId,
           channelId: state.channelId,
@@ -260,7 +275,7 @@ export function createSfuVoiceClient({ selfUserId, getSelfUserId, sendDispatch, 
     });
 
     for (const producer of joined.producers || []) {
-      await consumeProducer(producer.producerId, producer.userId, token);
+      await consumeProducer(producer.producerId, producer.userId, token, producer);
     }
   }
 
@@ -271,12 +286,41 @@ export function createSfuVoiceClient({ selfUserId, getSelfUserId, sendDispatch, 
     state.producerOwnerByProducerId.delete(producerId);
     removePendingAudioStart(producerId);
     try { entry.consumer.close(); } catch {}
-    try { entry.audio.pause(); entry.audio.srcObject = null; entry.audio.remove(); } catch {}
-    onRemoteAudioRemoved?.({ producerId, userId: entry.userId || "" });
+    try { entry.mediaElement.pause(); entry.mediaElement.srcObject = null; entry.mediaElement.remove(); } catch {}
+    onRemoteMediaRemoved?.({ producerId, userId: entry.userId || "", kind: entry.kind, source: entry.source });
+  }
+
+  async function stopScreenShare() {
+    try { state.localScreenProducer?.close(); } catch {}
+    state.localScreenProducer = null;
+    if (state.localScreenStream) {
+      state.localScreenStream.getTracks().forEach((track) => track.stop());
+      state.localScreenStream = null;
+    }
+  }
+
+  async function startScreenShare() {
+    if (!state.sendTransport || !state.channelId) throw new Error("VOICE_NOT_CONNECTED");
+    if (state.localScreenProducer) return;
+
+    const screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+    const videoTrack = screenStream.getVideoTracks()[0];
+    if (!videoTrack) {
+      screenStream.getTracks().forEach((track) => track.stop());
+      throw new Error("SCREEN_TRACK_NOT_FOUND");
+    }
+
+    videoTrack.addEventListener("ended", () => {
+      stopScreenShare().catch(() => {});
+    });
+
+    state.localScreenStream = screenStream;
+    state.localScreenProducer = await produceTrack(videoTrack, "screen");
   }
 
   async function cleanup() {
     state.sessionToken += 1;
+    await stopScreenShare();
     for (const producerId of [...state.pendingAudioStartByProducerId.keys()]) {
       removePendingAudioStart(producerId);
     }
@@ -303,14 +347,13 @@ export function createSfuVoiceClient({ selfUserId, getSelfUserId, sendDispatch, 
     if (data?.guildId && data.guildId !== state.guildId) return;
     if (data?.channelId && data.channelId !== state.channelId) return;
     if (state.localProducer && data.producerId === state.localProducer.id) return;
-
+    if (state.localScreenProducer && data.producerId === state.localScreenProducer.id) return;
 
     if (type === "VOICE_NEW_PRODUCER" && data?.producerId) {
-      if (data.userId && data.userId === resolveSelfUserId()) return; // ignore self
-        await consumeProducer(data.producerId, data.userId, state.sessionToken).catch(() => {});
-        return;
-      }
-      
+      if (data.userId && data.userId === resolveSelfUserId()) return;
+      await consumeProducer(data.producerId, data.userId, state.sessionToken, data).catch(() => {});
+      return;
+    }
 
     if (type === "VOICE_PRODUCER_CLOSED" && data?.producerId) {
       await cleanupConsumer(data.producerId);
@@ -344,16 +387,18 @@ export function createSfuVoiceClient({ selfUserId, getSelfUserId, sendDispatch, 
 
   function setDeafened(nextDeafened) {
     state.isDeafened = !!nextDeafened;
-    for (const { audio } of state.consumersByProducerId.values()) {
-      audio.volume = state.isDeafened ? 0 : 1;
+    for (const { mediaElement, kind } of state.consumersByProducerId.values()) {
+      if (kind === "audio") {
+        mediaElement.volume = state.isDeafened ? 0 : 1;
+      }
     }
   }
 
   function setAudioOutputDevice(deviceId) {
     state.audioOutputDeviceId = deviceId || "";
-    for (const { audio } of state.consumersByProducerId.values()) {
-      if (typeof audio.setSinkId === "function" && state.audioOutputDeviceId) {
-        audio.setSinkId(state.audioOutputDeviceId).catch(() => {});
+    for (const { mediaElement, kind } of state.consumersByProducerId.values()) {
+      if (kind === "audio" && typeof mediaElement.setSinkId === "function" && state.audioOutputDeviceId) {
+        mediaElement.setSinkId(state.audioOutputDeviceId).catch(() => {});
       }
     }
   }
@@ -375,6 +420,8 @@ export function createSfuVoiceClient({ selfUserId, getSelfUserId, sendDispatch, 
     setDeafened,
     setAudioOutputDevice,
     getLocalStream,
-    getContext
+    getContext,
+    startScreenShare,
+    stopScreenShare
   };
 }

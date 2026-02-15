@@ -53,7 +53,7 @@ function DownloadButton() {
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
-
+}
 function normalizeGatewayWsUrl(value) {
   if (!value || typeof value !== "string") return "";
   const trimmed = value.trim();

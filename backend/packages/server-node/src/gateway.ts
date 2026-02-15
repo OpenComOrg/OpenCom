@@ -421,8 +421,9 @@ export function attachNodeGateway(app: FastifyInstance) {
             return;
           }
 
-          await connectTransport(conn.voice.guildId, conn.voice.channelId, conn.userId, transportId, dtlsParameters);
-          sendDispatch(conn, "VOICE_TRANSPORT_CONNECTED", { transportId });
+          const { guildId, channelId } = conn.voice;
+          await connectTransport(guildId, channelId, conn.userId, transportId, dtlsParameters);
+          sendDispatch(conn, "VOICE_TRANSPORT_CONNECTED", { transportId, guildId, channelId });
         } catch {
           sendDispatch(conn, "VOICE_ERROR", { error: "VOICE_TRANSPORT_CONNECT_FAILED" });
         }

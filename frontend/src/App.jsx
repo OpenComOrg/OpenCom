@@ -2400,7 +2400,15 @@ export function App() {
     return false;
   }
 
-  function waitForVoiceEvent({ type, match = null, timeoutMs = 10000, guildId = null, channelId = null, sessionToken = null }) {
+  function waitForVoiceEvent({
+    type,
+    match = null,
+    timeoutMs = 10000,
+    guildId = null,
+    channelId = null,
+    sessionToken = null,
+    transportId = null
+  }) {
     return new Promise((resolve, reject) => {
       const key = type;
       const bucket = pendingVoiceEventsRef.current.get(key) || [];
@@ -2409,6 +2417,7 @@ export function App() {
         guildId,
         channelId,
         sessionToken,
+        transportId,
         resolve,
         reject,
         timeout: setTimeout(() => {
@@ -2427,12 +2436,23 @@ export function App() {
     const bucket = pendingVoiceEventsRef.current.get(msg.t);
     if (!bucket?.length) return;
     const data = msg.d || {};
+    const isTransportConnected = msg.t === "VOICE_TRANSPORT_CONNECTED";
+    if (import.meta.env.DEV && isTransportConnected) {
+      console.debug("[voice] VOICE_TRANSPORT_CONNECTED received", data);
+    }
     const remaining = [];
     for (const pending of bucket) {
-      const guildMatches = !pending.guildId || data.guildId === pending.guildId;
-      const channelMatches = !pending.channelId || data.channelId === pending.channelId;
+      const guildMatches = isTransportConnected
+        ? !pending.guildId || data.guildId == null || data.guildId === pending.guildId
+        : !pending.guildId || data.guildId === pending.guildId;
+      const channelMatches = isTransportConnected
+        ? !pending.channelId || data.channelId == null || data.channelId === pending.channelId
+        : !pending.channelId || data.channelId === pending.channelId;
+      const transportMatches = !isTransportConnected
+        || !pending.transportId
+        || data.transportId === pending.transportId;
       const matchOk = !pending.match || pending.match(data, msg);
-      if (guildMatches && channelMatches && matchOk) {
+      if (guildMatches && channelMatches && transportMatches && matchOk) {
         clearTimeout(pending.timeout);
         pending.resolve(data);
         continue;

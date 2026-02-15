@@ -27,6 +27,17 @@ export function createSfuVoiceClient({selfUserId, sendDispatch, waitForEvent, on
     return waitForEvent({ type, match, timeoutMs, guildId: state.guildId, channelId: state.channelId, sessionToken: state.sessionToken });
   }
 
+  async function waitForTransportConnected(transportId, timeoutMs = DEFAULT_TIMEOUT_MS) {
+    return waitForEvent({
+      type: "VOICE_TRANSPORT_CONNECTED",
+      timeoutMs,
+      guildId: state.guildId,
+      channelId: state.channelId,
+      sessionToken: state.sessionToken,
+      transportId
+    });
+  }
+
   async function createTransport(direction, token) {
     await sendDispatch("VOICE_CREATE_TRANSPORT", { guildId: state.guildId, channelId: state.channelId, direction });
     const created = await waitDispatch("VOICE_TRANSPORT_CREATED", (d) => d?.direction === direction);
@@ -95,13 +106,20 @@ export function createSfuVoiceClient({selfUserId, sendDispatch, waitForEvent, on
     state.sendTransport = await createTransport("send", token);
     state.sendTransport.on("connect", async ({ dtlsParameters }, callback, errback) => {
       try {
+        if (import.meta.env.DEV) {
+          console.debug("[voice] sending VOICE_CONNECT_TRANSPORT", {
+            transportId: state.sendTransport.id,
+            guildId: state.guildId,
+            channelId: state.channelId
+          });
+        }
         await sendDispatch("VOICE_CONNECT_TRANSPORT", {
           guildId: state.guildId,
           channelId: state.channelId,
           transportId: state.sendTransport.id,
           dtlsParameters
         });
-        await waitDispatch("VOICE_TRANSPORT_CONNECTED", (d) => d?.transportId === state.sendTransport.id);
+        await waitForTransportConnected(state.sendTransport.id);
         callback();
       } catch (error) {
         errback(error);
@@ -147,13 +165,20 @@ export function createSfuVoiceClient({selfUserId, sendDispatch, waitForEvent, on
     state.recvTransport = await createTransport("recv", token);
     state.recvTransport.on("connect", async ({ dtlsParameters }, callback, errback) => {
       try {
+        if (import.meta.env.DEV) {
+          console.debug("[voice] sending VOICE_CONNECT_TRANSPORT", {
+            transportId: state.recvTransport.id,
+            guildId: state.guildId,
+            channelId: state.channelId
+          });
+        }
         await sendDispatch("VOICE_CONNECT_TRANSPORT", {
           guildId: state.guildId,
           channelId: state.channelId,
           transportId: state.recvTransport.id,
           dtlsParameters
         });
-        await waitDispatch("VOICE_TRANSPORT_CONNECTED", (d) => d?.transportId === state.recvTransport.id);
+        await waitForTransportConnected(state.recvTransport.id);
         callback();
       } catch (error) {
         errback(error);

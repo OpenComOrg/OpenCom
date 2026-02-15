@@ -300,6 +300,7 @@ export function App() {
 
   const [collapsedCategories, setCollapsedCategories] = useState({});
   const [voiceSession, setVoiceSession] = useState({ guildId: "", channelId: "" });
+  const [isDisconnectingVoice, setIsDisconnectingVoice] = useState(false);
   const [isScreenSharing, setIsScreenSharing] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
   const [isDeafened, setIsDeafened] = useState(false);
@@ -2630,8 +2631,30 @@ export function App() {
   }
 
   async function leaveVoiceChannel() {
-    const targetGuildId = voiceConnectedGuildId;
-    const targetChannelId = voiceConnectedChannelId;
+    if (isDisconnectingVoice) return;
+
+    let targetGuildId = voiceConnectedGuildId;
+    let targetChannelId = voiceConnectedChannelId;
+
+    if (!targetGuildId || !targetChannelId) {
+      for (const [guildId, byUser] of Object.entries(voiceStatesByGuild || {})) {
+        const selfState = byUser?.[me?.id];
+        if (selfState?.channelId) {
+          targetGuildId = guildId;
+          targetChannelId = selfState.channelId;
+          break;
+        }
+      }
+    }
+
+    if (!targetChannelId) {
+      const selfState = mergedVoiceStates.find((state) => state.userId === me?.id);
+      if (selfState?.channelId) {
+        targetGuildId = targetGuildId || activeGuildId || "";
+        targetChannelId = selfState.channelId;
+      }
+    }
+
     const connectedServer = servers.find((server) => server.defaultGuildId === targetGuildId) || activeServer || null;
 
     const forceLocalDisconnect = async () => {
@@ -2639,35 +2662,46 @@ export function App() {
       setIsScreenSharing(false);
       setIsMuted(false);
       setIsDeafened(false);
-      if (targetGuildId && me?.id) {
+      if (me?.id) {
         setVoiceStatesByGuild((prev) => {
-          if (!prev[targetGuildId]?.[me.id]) return prev;
-          const nextGuild = { ...prev[targetGuildId] };
-          delete nextGuild[me.id];
-          return { ...prev, [targetGuildId]: nextGuild };
+          let changed = false;
+          const next = { ...prev };
+          for (const guildId of Object.keys(next)) {
+            if (!next[guildId]?.[me.id]) continue;
+            const nextGuild = { ...next[guildId] };
+            delete nextGuild[me.id];
+            next[guildId] = nextGuild;
+            changed = true;
+          }
+          return changed ? next : prev;
         });
       }
       await cleanupVoiceRtc();
     };
 
-    await forceLocalDisconnect();
-    setStatus("Disconnected from voice.");
-
-    if (!targetGuildId || !targetChannelId) return;
-
+    setIsDisconnectingVoice(true);
     try {
-      await sendNodeVoiceDispatch("VOICE_LEAVE", { guildId: targetGuildId, channelId: targetChannelId });
-      return;
-    } catch {}
+      await forceLocalDisconnect();
+      setStatus("Disconnected from voice.");
 
-    if (!connectedServer?.baseUrl || !connectedServer?.membershipToken) return;
+      if (!targetGuildId || !targetChannelId) return;
 
-    try {
-      await nodeApi(connectedServer.baseUrl, `/v1/channels/${targetChannelId}/voice/leave`, connectedServer.membershipToken, { method: "POST" });
-    } catch (error) {
-      const message = `Disconnected locally. Server voice leave failed: ${error.message || "VOICE_LEAVE_FAILED"}`;
-      setStatus(message);
-      console.warn(message);
+      try {
+        await sendNodeVoiceDispatch("VOICE_LEAVE", { guildId: targetGuildId, channelId: targetChannelId });
+        return;
+      } catch {}
+
+      if (!connectedServer?.baseUrl || !connectedServer?.membershipToken) return;
+
+      try {
+        await nodeApi(connectedServer.baseUrl, `/v1/channels/${targetChannelId}/voice/leave`, connectedServer.membershipToken, { method: "POST" });
+      } catch (error) {
+        const message = `Disconnected locally. Server voice leave failed: ${error.message || "VOICE_LEAVE_FAILED"}`;
+        setStatus(message);
+        console.warn(message);
+      }
+    } finally {
+      setIsDisconnectingVoice(false);
     }
   }
 
@@ -3101,7 +3135,7 @@ export function App() {
               <div className="voice-top"><strong>Voice connected</strong><span title={voiceConnectedChannelName}>{voiceConnectedChannelName}</span></div>
               <div className="voice-actions">
                 <button className="ghost" onClick={() => setIsScreenSharing((value) => !value)}>{isScreenSharing ? "Stop Share" : "Share Screen"}</button>
-                <button className="danger" onClick={leaveVoiceChannel}>Disconnect</button>
+                <button className="danger" onClick={leaveVoiceChannel} disabled={isDisconnectingVoice}>{isDisconnectingVoice ? "Disconnecting..." : "Disconnect"}</button>
               </div>
               <p className="hint">Voice controls moved to Settings → Voice.</p>
             </div>

@@ -31,7 +31,7 @@ await guildJoinRoutes(app);
 await guildStateRoutes(app);
 
 await channelRoutes(app, gw.broadcastGuild);
-await messageRoutes(app, gw.broadcastToChannel);
+await messageRoutes(app, gw.broadcastToChannel, gw.broadcastMention);
 
 await roleRoutes(app, gw.broadcastGuild);
 await overwriteRoutes(app, gw.broadcastGuild);

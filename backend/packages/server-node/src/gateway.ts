@@ -518,5 +518,14 @@ export function attachNodeGateway(app: FastifyInstance) {
     }
   }
 
-  return { broadcastToChannel, broadcastGuild };
+  function broadcastMention(userIds: string[], payload: any) {
+    if (!Array.isArray(userIds) || userIds.length === 0) return;
+    const target = new Set(userIds);
+    for (const c of conns) {
+      if (!target.has(c.userId)) continue;
+      sendDispatch(c, "MESSAGE_MENTION", payload);
+    }
+  }
+
+  return { broadcastToChannel, broadcastGuild, broadcastMention };
 }

@@ -418,6 +418,23 @@ button.danger { background: linear-gradient(135deg, #eb5d73, #c84159); }
 
 .server-pill { background: rgba(153, 176, 225, 0.12); border: 1px solid transparent; color: var(--text-soft);}
 .server-pill.active { background: linear-gradient(145deg, #7789ff, #8b8aff); color: #fff; box-shadow: 0 0.63vw 1.38vw rgba(101, 118, 236, 0.42);}
+.server-pill { position: relative; }
+.server-pill-ping-badge {
+  position: absolute;
+  right: -0.2em;
+  bottom: -0.2em;
+  min-width: 1.2em;
+  height: 1.2em;
+  border-radius: 999px;
+  background: #ef4444;
+  color: #fff;
+  font-size: 0.7em;
+  display: grid;
+  place-items: center;
+  padding: 0 0.3em;
+  font-weight: 700;
+  border: 1px solid rgba(8, 14, 27, 0.95);
+}
 .nav-pill { font-size: 1.23em; }
 
 /* Channel Sidebar & buttons */
@@ -998,6 +1015,22 @@ button.danger { background: linear-gradient(135deg, #eb5d73, #c84159); }
 .msg-time { color: var(--text-dim); font-size: 0.85em; margin-left: 0.5em;}
 .msg-body {min-width: 0;}
 .msg p { margin: 4px 0 0; overflow-wrap: anywhere; word-break: break-word;}
+.message-mention {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 0.3em;
+  border-radius: 0.35em;
+  background: rgba(125, 164, 255, 0.2);
+  color: #b9cfff;
+}
+.mention-click {
+  border: none;
+  cursor: pointer;
+  font: inherit;
+}
+.mention-click:hover {
+  background: rgba(125, 164, 255, 0.32);
+}
 
 .empty { text-align: center; color: var(--text-dim); margin-top: 2vw;}
 
@@ -1026,9 +1059,36 @@ button.danger { background: linear-gradient(135deg, #eb5d73, #c84159); }
   font-size: clamp(0.85rem, 1.2vw, 1rem);
   padding: 0;
 }
+.composer-input-wrap {
+  position: relative;
+  height: 100%;
+}
 .composer-icon { min-width: clamp(20px, 1.8vw, 36px); }
 .server-composer { grid-template-columns: auto 1fr auto auto; }
 .dm-composer { grid-template-columns: 1fr auto; }
+.mention-suggestions {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 0.35em);
+  background: rgba(13, 23, 41, 0.98);
+  border: 1px solid var(--border-subtle);
+  border-radius: calc(var(--radius) * 0.8);
+  padding: 0.2em;
+  display: grid;
+  gap: 0.2em;
+}
+.mention-suggestion {
+  text-align: left;
+  background: transparent;
+  border: none;
+  color: var(--text-soft);
+  padding: 0.35em 0.5em;
+  border-radius: calc(var(--radius) * 0.6);
+}
+.mention-suggestion:hover {
+  background: rgba(125, 164, 255, 0.2);
+}
 .send-btn { padding: 0.35em 0.8em; min-width: 4.5em; font-size: clamp(0.8rem, 1.1vw, 0.95rem); }
 .name-btn {
   padding: 0;

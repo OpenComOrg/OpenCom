@@ -6,9 +6,60 @@ import { requireGuildMember } from "../auth/requireGuildMember.js";
 import { resolveChannelPermissions } from "../permissions/resolve.js";
 import { Perm, has } from "../permissions/bits.js";
 
+type Mention = { userId: string; display: string };
+
+type MentionMeta = { mentionEveryone: boolean; mentions: Mention[] };
+
+function normalizeMentionToken(value: string) {
+  return value.trim().toLowerCase();
+}
+
+async function loadGuildMentionDirectory(guildId: string) {
+  const rows = await q<{ user_id: string; nick: string | null }>(
+    `SELECT user_id,nick FROM guild_members WHERE guild_id=:guildId`,
+    { guildId }
+  );
+
+  const byToken = new Map<string, { userId: string; display: string }>();
+  for (const row of rows) {
+    const userId = row.user_id;
+    const nick = (row.nick || "").trim();
+    byToken.set(normalizeMentionToken(userId), { userId, display: nick || userId });
+    if (nick) byToken.set(normalizeMentionToken(nick), { userId, display: nick });
+  }
+
+  return byToken;
+}
+
+function resolveMessageMentions(content: string, directory: Map<string, { userId: string; display: string }>): MentionMeta {
+  const mentionEveryone = /@everyone\b/i.test(content);
+  const mentions = new Map<string, Mention>();
+
+  const braceRegex = /@\{([^}\n]{1,64})\}/g;
+  for (const match of content.matchAll(braceRegex)) {
+    const raw = (match[1] || "").trim();
+    if (!raw) continue;
+    const resolved = directory.get(normalizeMentionToken(raw));
+    if (!resolved) continue;
+    mentions.set(resolved.userId, { userId: resolved.userId, display: resolved.display });
+  }
+
+  const plainRegex = /(?:^|\s)@([a-zA-Z0-9_.-]{2,64})/g;
+  for (const match of content.matchAll(plainRegex)) {
+    const raw = (match[1] || "").trim();
+    if (!raw || raw.toLowerCase() === "everyone") continue;
+    const resolved = directory.get(normalizeMentionToken(raw));
+    if (!resolved) continue;
+    mentions.set(resolved.userId, { userId: resolved.userId, display: resolved.display });
+  }
+
+  return { mentionEveryone, mentions: Array.from(mentions.values()) };
+}
+
 export async function messageRoutes(
   app: FastifyInstance,
-  broadcastToChannel: (channelId: string, event: any) => void
+  broadcastToChannel: (channelId: string, event: any) => void,
+  broadcastMention: (userIds: string[], payload: any) => void
 ) {
   // Fetch messages (requires VIEW_CHANNEL)
   app.get("/v1/channels/:channelId/messages", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
@@ -34,6 +85,8 @@ export async function messageRoutes(
     const perms = await resolveChannelPermissions({ guildId, channelId, userId, roles: req.auth.roles });
     if (!has(perms, Perm.VIEW_CHANNEL)) return rep.code(403).send({ error: "MISSING_PERMS" });
 
+    const mentionDirectory = await loadGuildMentionDirectory(guildId);
+
     let rows: any[];
     if (qs.before) {
       rows = await q<any>(
@@ -54,7 +107,10 @@ export async function messageRoutes(
         { channelId, limit: qs.limit }
       );
     }
-    rows = rows.map((r: any) => ({ ...r, username: r.author_id, pfp_url: null }));
+    rows = rows.map((r: any) => {
+      const mentionMeta = resolveMessageMentions(r.content || "", mentionDirectory);
+      return { ...r, username: r.author_id, pfp_url: null, ...mentionMeta };
+    });
 
     // Attachments for returned messages
     if (rows.length) {
@@ -136,6 +192,8 @@ export async function messageRoutes(
 
     const id = ulidLike();
     const createdAt = new Date().toISOString();
+    const mentionDirectory = await loadGuildMentionDirectory(guildId);
+    const mentionMeta = resolveMessageMentions(body.content || "", mentionDirectory);
 
     await q(
       `INSERT INTO messages (id,channel_id,author_id,content,created_at)
@@ -159,12 +217,35 @@ export async function messageRoutes(
         authorId,
         content: body.content,
         createdAt,
-        attachments: attachmentIds.map(aid => ({ id: aid, url: `/v1/attachments/${aid}` }))
+        attachments: attachmentIds.map(aid => ({ id: aid, url: `/v1/attachments/${aid}` })),
+        mentionEveryone: mentionMeta.mentionEveryone,
+        mentions: mentionMeta.mentions
       }
     };
 
     broadcastToChannel(channelId, payload);
-    return rep.send({ messageId: id, createdAt });
+
+    const mentionedUserIds = mentionMeta.mentions.map((m) => m.userId).filter((uid) => uid !== authorId);
+    if (mentionMeta.mentionEveryone) {
+      const allMemberIds = Array.from(mentionDirectory.values()).map((item) => item.userId);
+      for (const userId of allMemberIds) {
+        if (userId === authorId || mentionedUserIds.includes(userId)) continue;
+        mentionedUserIds.push(userId);
+      }
+    }
+
+    if (mentionedUserIds.length) {
+      broadcastMention(mentionedUserIds, {
+        guildId,
+        channelId,
+        messageId: id,
+        authorId,
+        mentionEveryone: mentionMeta.mentionEveryone,
+        mentions: mentionMeta.mentions
+      });
+    }
+
+    return rep.send({ messageId: id, createdAt, mentionEveryone: mentionMeta.mentionEveryone, mentions: mentionMeta.mentions });
   });
   app.delete("/v1/channels/:channelId/messages/:messageId", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
     const { channelId, messageId } = z.object({ channelId: z.string().min(3), messageId: z.string().min(3) }).parse(req.params);

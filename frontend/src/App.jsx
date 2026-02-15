@@ -1315,20 +1315,17 @@ export function App() {
       if (detector.audioCtx) detector.audioCtx.close().catch(() => {});
       detector.audioCtx = null;
       detector.analyser = null;
-      if (voiceConnectedChannelId && activeGuildId) {
-          void sendNodeVoiceDispatch("VOICE_SPEAKING", {
-            guildId: activeGuildId,
-            channelId: voiceConnectedChannelId,
-            speaking: false
-          }).catch(() => {});
-        }
-        return;
-      }
       detector.lastSpeaking = false;
       if (activeGuildId && me?.id) {
         setVoiceSpeakingByGuild((prev) => ({ ...prev, [activeGuildId]: { ...(prev[activeGuildId] || {}), [me.id]: false } }));
       }
-      void sendNodeVoiceDispatch("VOICE_SPEAKING", { guildId: activeGuildId, channelId: voiceConnectedChannelId, speaking: false }).catch(() => {});
+      if (voiceConnectedChannelId && activeGuildId) {
+        void sendNodeVoiceDispatch("VOICE_SPEAKING", {
+          guildId: activeGuildId,
+          channelId: voiceConnectedChannelId,
+          speaking: false,
+        }).catch(() => {});
+      }
       return;
     }
 

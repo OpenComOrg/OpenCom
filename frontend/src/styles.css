@@ -31,6 +31,7 @@
   /* For scalable server rails, etc. */
   --sidebar-width: clamp(60px, 7vw, 80px);
   --channel-sidebar-width: clamp(180px, 18vw, 300px);
+  --channel-sidebar-width-voice: clamp(220px, 24vw, 360px);
 }
 
 html {
@@ -427,6 +428,7 @@ button.danger { background: linear-gradient(135deg, #eb5d73, #c84159); }
   grid-template-rows: auto 1fr auto;
   min-width: var(--channel-sidebar-width);
   max-width: var(--channel-sidebar-width);
+  transition: min-width 0.2s ease, max-width 0.2s ease;
   min-height: 0;
   box-sizing: border-box;
 }
@@ -624,8 +626,28 @@ button.danger { background: linear-gradient(135deg, #eb5d73, #c84159); }
   gap: 0.48em;
 }
 
+.channel-sidebar.voice-connected {
+  min-width: var(--channel-sidebar-width-voice);
+  max-width: var(--channel-sidebar-width-voice);
+}
+
+.voice-top {
+  display: grid;
+  gap: 0.18em;
+  min-width: 0;
+}
+
+.voice-top strong,
+.voice-top span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .voice-top span { color: var(--green); font-size: 0.85em; }
-.voice-actions { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-xs);}
+.voice-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-xs);}
+.voice-actions button { width: 100%; min-width: 0; }
 .user-row { 
   display: grid; 
   grid-template-columns: auto 1fr; 

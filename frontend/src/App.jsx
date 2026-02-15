@@ -2627,18 +2627,22 @@ export function App() {
   async function leaveVoiceChannel() {
     const connectedServer = servers.find((server) => server.defaultGuildId === voiceConnectedGuildId) || activeServer;
     if (!isInVoiceChannel || !connectedServer?.baseUrl || !connectedServer?.membershipToken) return;
-    try {
-      await sendNodeVoiceDispatch("VOICE_LEAVE", { guildId: voiceConnectedGuildId, channelId: voiceConnectedChannelId });
+    const clearLocalVoiceState = async () => {
+      setVoiceSession({ guildId: "", channelId: "" });
       setIsScreenSharing(false);
       await cleanupVoiceRtc();
+    };
+
+    try {
+      await sendNodeVoiceDispatch("VOICE_LEAVE", { guildId: voiceConnectedGuildId, channelId: voiceConnectedChannelId });
+      await clearLocalVoiceState();
+      setStatus("Disconnected from voice.");
       return;
     } catch {}
 
     try {
       await nodeApi(connectedServer.baseUrl, `/v1/channels/${voiceConnectedChannelId}/voice/leave`, connectedServer.membershipToken, { method: "POST" });
-      setVoiceSession({ guildId: "", channelId: "" });
-      setIsScreenSharing(false);
-      await cleanupVoiceRtc();
+      await clearLocalVoiceState();
       setStatus("Disconnected from voice (REST fallback).");
     } catch (error) {
       const message = `Voice disconnect failed: ${error.message || "VOICE_LEAVE_FAILED"}`;
@@ -2926,7 +2930,7 @@ export function App() {
         </div>
       </aside>
 
-      <aside className="channel-sidebar">
+      <aside className={`channel-sidebar ${isInVoiceChannel ? "voice-connected" : ""}`}>
         <header className="sidebar-header">
           <h2>{navMode === "servers" ? (activeServer?.name || "No server") : navMode.toUpperCase()}</h2>
           <small>{navMode === "servers" ? (activeGuild?.name || "Choose a channel") : "Unified communication hub"}</small>

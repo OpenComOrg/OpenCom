@@ -1612,9 +1612,15 @@ export function App() {
       })
       .catch((error) => {
         if (cancelled) return;
-        if (error?.message?.startsWith("HTTP 403")) {
+        if (error?.message?.startsWith("HTTP_403")) {
           setMessages([]);
           setStatus("You no longer have access to that channel.");
+          setActiveChannelId("");
+          return;
+        }
+        if (error?.message?.startsWith("HTTP_404")) {
+          setMessages([]);
+          setStatus("That channel no longer exists. Switching to an available channel.");
           setActiveChannelId("");
           return;
         }

@@ -36,6 +36,11 @@ function isVoiceDebugEnabled() {
   return envEnabled || storageEnabled;
 }
 
+function getLastSuccessfulGateway(candidates, storageKey) {
+  return prioritizeLastSuccessfulGateway(candidates, storageKey);
+}
+
+
 function normalizeGatewayWsUrl(value) {
   if (!value || typeof value !== "string") return "";
   const trimmed = value.trim();

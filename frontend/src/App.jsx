@@ -299,7 +299,7 @@ export function App() {
   const [allowFriendRequests, setAllowFriendRequests] = useState(true);
 
   const [collapsedCategories, setCollapsedCategories] = useState({});
-  const [voiceConnectedChannelId, setVoiceConnectedChannelId] = useState("");
+  const [voiceSession, setVoiceSession] = useState({ guildId: "", channelId: "" });
   const [isScreenSharing, setIsScreenSharing] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
   const [isDeafened, setIsDeafened] = useState(false);
@@ -453,6 +453,9 @@ export function App() {
 
   const activeServer = useMemo(() => servers.find((server) => server.id === activeServerId) || null, [servers, activeServerId]);
   const activeGuild = useMemo(() => guilds.find((guild) => guild.id === activeGuildId) || null, [guilds, activeGuildId]);
+  const voiceConnectedChannelId = voiceSession.channelId;
+  const voiceConnectedGuildId = voiceSession.guildId;
+  const isInVoiceChannel = !!voiceConnectedChannelId;
   const channels = guildState?.channels || [];
   const activeChannel = useMemo(() => channels.find((channel) => channel.id === activeChannelId) || null, [channels, activeChannelId]);
   const activeDm = useMemo(() => dms.find((dm) => dm.id === activeDmId) || null, [dms, activeDmId]);
@@ -1068,6 +1071,9 @@ export function App() {
               else byUser[msg.d.userId] = { channelId: msg.d.channelId, muted: !!msg.d.muted, deafened: !!msg.d.deafened };
               return { ...prev, [guildId]: byUser };
             });
+            if (msg.d.userId === me?.id) {
+              setVoiceSession(msg.d.channelId ? { guildId: msg.d.guildId, channelId: msg.d.channelId } : { guildId: "", channelId: "" });
+            }
             return;
           }
 
@@ -1086,7 +1092,7 @@ export function App() {
             });
             voiceSfuRef.current?.closeConsumersForUser(msg.d.userId);
             if (msg.d.userId === me?.id) {
-              setVoiceConnectedChannelId("");
+              setVoiceSession({ guildId: "", channelId: "" });
               cleanupVoiceRtc().catch(() => {});
             }
             return;
@@ -1103,12 +1109,12 @@ export function App() {
           }
 
           if (msg.op === "DISPATCH" && msg.t === "VOICE_JOINED" && msg.d?.channelId) {
-            setVoiceConnectedChannelId(msg.d.channelId);
+            setVoiceSession({ guildId: msg.d?.guildId || activeGuildId || "", channelId: msg.d.channelId });
             return;
           }
 
           if (msg.op === "DISPATCH" && msg.t === "VOICE_LEFT") {
-            setVoiceConnectedChannelId("");
+            setVoiceSession({ guildId: "", channelId: "" });
             cleanupVoiceRtc().catch(() => {});
             return;
           }
@@ -1314,12 +1320,12 @@ export function App() {
   }, [dmNotification]);
 
   useEffect(() => {
-    const canSendVoiceSpeaking = !!voiceConnectedChannelId
-      && !!activeGuildId
+    const canSendVoiceSpeaking = isInVoiceChannel
+      && !!voiceConnectedGuildId
       && !!nodeGatewayReadyRef.current
       && nodeGatewayWsRef.current?.readyState === WebSocket.OPEN;
 
-    if (!voiceConnectedChannelId || !activeGuildId || isMuted || isDeafened || !navigator.mediaDevices?.getUserMedia || !canSendVoiceSpeaking) {
+    if (!isInVoiceChannel || !voiceConnectedGuildId || isMuted || isDeafened || !navigator.mediaDevices?.getUserMedia || !canSendVoiceSpeaking) {
       const detector = voiceSpeakingDetectorRef.current;
       if (detector.timer) clearInterval(detector.timer);
       detector.timer = null;
@@ -1329,12 +1335,12 @@ export function App() {
       detector.audioCtx = null;
       detector.analyser = null;
       detector.lastSpeaking = false;
-      if (activeGuildId && me?.id) {
-        setVoiceSpeakingByGuild((prev) => ({ ...prev, [activeGuildId]: { ...(prev[activeGuildId] || {}), [me.id]: false } }));
+      if (voiceConnectedGuildId && me?.id) {
+        setVoiceSpeakingByGuild((prev) => ({ ...prev, [voiceConnectedGuildId]: { ...(prev[voiceConnectedGuildId] || {}), [me.id]: false } }));
       }
-      if (voiceConnectedChannelId && activeGuildId && canSendVoiceSpeaking) {
+      if (isInVoiceChannel && voiceConnectedGuildId && canSendVoiceSpeaking) {
         void sendNodeVoiceDispatch("VOICE_SPEAKING", {
-          guildId: activeGuildId,
+          guildId: voiceConnectedGuildId,
           channelId: voiceConnectedChannelId,
           speaking: false,
         }).catch(() => {});
@@ -1379,11 +1385,11 @@ export function App() {
           if (speaking === detector.lastSpeaking) return;
           detector.lastSpeaking = speaking;
 
-          if (activeGuildId && me?.id) {
-            setVoiceSpeakingByGuild((prev) => ({ ...prev, [activeGuildId]: { ...(prev[activeGuildId] || {}), [me.id]: speaking } }));
+          if (voiceConnectedGuildId && me?.id) {
+            setVoiceSpeakingByGuild((prev) => ({ ...prev, [voiceConnectedGuildId]: { ...(prev[voiceConnectedGuildId] || {}), [me.id]: speaking } }));
           }
-          if (voiceConnectedChannelId && activeGuildId && nodeGatewayReadyRef.current && nodeGatewayWsRef.current?.readyState === WebSocket.OPEN) {
-            void sendNodeVoiceDispatch("VOICE_SPEAKING", { guildId: activeGuildId, channelId: voiceConnectedChannelId, speaking }).catch(() => {});
+          if (isInVoiceChannel && voiceConnectedGuildId && nodeGatewayReadyRef.current && nodeGatewayWsRef.current?.readyState === WebSocket.OPEN) {
+            void sendNodeVoiceDispatch("VOICE_SPEAKING", { guildId: voiceConnectedGuildId, channelId: voiceConnectedChannelId, speaking }).catch(() => {});
           }
         }, 150);
       } catch {
@@ -1403,7 +1409,7 @@ export function App() {
       detector.analyser = null;
       detector.lastSpeaking = false;
     };
-  }, [voiceConnectedChannelId, activeGuildId, isMuted, isDeafened, micSensitivity, audioInputDeviceId, me?.id]);
+  }, [isInVoiceChannel, voiceConnectedGuildId, voiceConnectedChannelId, isMuted, isDeafened, micSensitivity, audioInputDeviceId, me?.id]);
 
   useEffect(() => {
     localStorage.setItem(MIC_GAIN_KEY, String(micGain));
@@ -1462,9 +1468,37 @@ export function App() {
 
   useEffect(() => {
     if (!me?.id) return;
-    const selfState = mergedVoiceStates.find((vs) => vs.userId === me.id);
-    setVoiceConnectedChannelId(selfState?.channelId || "");
-  }, [mergedVoiceStates, me?.id]);
+
+    let detectedGuildId = "";
+    let detectedChannelId = "";
+
+    for (const [guildId, byUser] of Object.entries(voiceStatesByGuild || {})) {
+      const selfState = byUser?.[me.id];
+      if (selfState?.channelId) {
+        detectedGuildId = guildId;
+        detectedChannelId = selfState.channelId;
+        break;
+      }
+    }
+
+    if (!detectedChannelId) {
+      const selfState = mergedVoiceStates.find((vs) => vs.userId === me.id);
+      if (selfState?.channelId) {
+        detectedGuildId = activeGuildId || voiceConnectedGuildId || "";
+        detectedChannelId = selfState.channelId;
+      }
+    }
+
+    setVoiceSession((prev) => {
+      if (detectedChannelId) {
+        if (prev.guildId === detectedGuildId && prev.channelId === detectedChannelId) return prev;
+        return { guildId: detectedGuildId, channelId: detectedChannelId };
+      }
+      if (prev.guildId && prev.guildId !== activeGuildId) return prev;
+      if (!prev.guildId && !prev.channelId) return prev;
+      return { guildId: "", channelId: "" };
+    });
+  }, [mergedVoiceStates, voiceStatesByGuild, me?.id, activeGuildId, voiceConnectedGuildId]);
 
   useEffect(() => {
     if (!accessToken || (navMode !== "friends" && navMode !== "dms")) return;
@@ -2552,7 +2586,7 @@ export function App() {
         isDeafened,
         audioOutputDeviceId
       });
-      setVoiceConnectedChannelId(channel.id);
+      setVoiceSession({ guildId: activeGuildId, channelId: channel.id });
       setStatus(`Joined ${channel.name}.`);
       return;
     } catch (error) {
@@ -2563,7 +2597,7 @@ export function App() {
 
     try {
       await nodeApi(activeServer.baseUrl, `/v1/channels/${channel.id}/voice/join`, activeServer.membershipToken, { method: "POST" });
-      setVoiceConnectedChannelId(channel.id);
+      setVoiceSession({ guildId: activeGuildId, channelId: channel.id });
       setStatus(`Joined ${channel.name} (REST fallback).`);
     } catch (error) {
       const message = `Voice connection failed: ${error.message || "VOICE_JOIN_FAILED"}`;
@@ -2573,17 +2607,18 @@ export function App() {
   }
 
   async function leaveVoiceChannel() {
-    if (!voiceConnectedChannelId || !activeServer?.baseUrl || !activeServer?.membershipToken) return;
+    const connectedServer = servers.find((server) => server.defaultGuildId === voiceConnectedGuildId) || activeServer;
+    if (!isInVoiceChannel || !connectedServer?.baseUrl || !connectedServer?.membershipToken) return;
     try {
-      await sendNodeVoiceDispatch("VOICE_LEAVE", { channelId: voiceConnectedChannelId });
+      await sendNodeVoiceDispatch("VOICE_LEAVE", { guildId: voiceConnectedGuildId, channelId: voiceConnectedChannelId });
       setIsScreenSharing(false);
       await cleanupVoiceRtc();
       return;
     } catch {}
 
     try {
-      await nodeApi(activeServer.baseUrl, `/v1/channels/${voiceConnectedChannelId}/voice/leave`, activeServer.membershipToken, { method: "POST" });
-      setVoiceConnectedChannelId("");
+      await nodeApi(connectedServer.baseUrl, `/v1/channels/${voiceConnectedChannelId}/voice/leave`, connectedServer.membershipToken, { method: "POST" });
+      setVoiceSession({ guildId: "", channelId: "" });
       setIsScreenSharing(false);
       await cleanupVoiceRtc();
       setStatus("Disconnected from voice (REST fallback).");
@@ -3019,7 +3054,7 @@ export function App() {
         )}
 
         <footer className="self-card">
-          {voiceConnectedChannelId && (
+          {isInVoiceChannel && (
             <div className="voice-widget">
               <div className="voice-top"><strong>Voice connected</strong><span>{voiceConnectedChannelId}</span></div>
               <div className="voice-actions">

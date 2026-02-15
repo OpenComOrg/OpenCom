@@ -30,8 +30,8 @@
 
   /* For scalable server rails, etc. */
   --sidebar-width: clamp(60px, 7vw, 80px);
-  --channel-sidebar-width: clamp(210px, 19vw, 320px);
-  --channel-sidebar-width-voice: clamp(250px, 24vw, 360px);
+  --channel-sidebar-width: clamp(200px, 17vw, 280px);
+  --channel-sidebar-width-voice: clamp(230px, 21vw, 320px);
 }
 
 html {
@@ -452,8 +452,8 @@ button.danger { background: linear-gradient(135deg, #eb5d73, #c84159); }
 }
 
 .sidebar-header { padding: var(--space-md); border-bottom: 1px solid var(--border-subtle);}
-.sidebar-header h2 { margin: 0; font-size: 1.52em; letter-spacing: 0.02em;}
-.sidebar-header small { color: var(--text-dim);}
+.sidebar-header h2 { margin: 0; font-size: 1.52em; letter-spacing: 0.02em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;}
+.sidebar-header small { color: var(--text-dim); display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;}
 .sidebar-block { padding: var(--space-sm); display: grid; gap: var(--space-xs);}
 .sidebar-footer {
   padding: var(--space-sm);
@@ -1553,19 +1553,21 @@ textarea { resize: vertical; min-height: clamp(80px, 13vw, 120px); font-size: 1e
   .active-now { display: none;}
   :root {
     --sidebar-width: clamp(50px, 7vw, 76px);
-    --channel-sidebar-width: clamp(120px, 17vw, 200px);
+    --channel-sidebar-width: clamp(180px, 22vw, 250px);
+    --channel-sidebar-width-voice: clamp(210px, 26vw, 290px);
     --panel-max: min(96vw, 1240px);
   }
 }
 @media (max-width: 1024px) {
   :root {
     --sidebar-width: clamp(46px, 8vw, 64px);
-    --channel-sidebar-width: clamp(80px, 27vw, 175px);
+    --channel-sidebar-width: clamp(170px, 24vw, 220px);
+    --channel-sidebar-width-voice: clamp(190px, 30vw, 250px);
     --panel-max: min(98vw, 1024px);
   }
 }
 @media (max-width: 960px) {
-  .opencom-shell { grid-template-columns: var(--sidebar-width) clamp(110px, 22vw, 250px) minmax(0, 1fr);}
+  .opencom-shell { grid-template-columns: var(--sidebar-width) var(--channel-sidebar-width) minmax(0, 1fr);}
   .chat-actions .search-input { display: none;}
   .settings-panel { grid-template-columns: 1fr; height: min(90vh, 900px);}
   .settings-nav { grid-template-columns: repeat(auto-fit, minmax(100px, 1fr)); gap: var(--space-xs); border-right: none; border-bottom: 1px solid rgba(125, 164, 255, 0.15); padding: var(--space-md);}
@@ -1573,7 +1575,8 @@ textarea { resize: vertical; min-height: clamp(80px, 13vw, 120px); font-size: 1e
   .settings-nav button { padding: var(--space-xs) var(--space-sm); font-size: 0.9em;}
   :root {
     --sidebar-width: clamp(38px, 8vw, 52px);
-    --channel-sidebar-width: clamp(54px, 18vw, 120px);
+    --channel-sidebar-width: clamp(150px, 30vw, 190px);
+    --channel-sidebar-width-voice: clamp(170px, 35vw, 220px);
     --panel-max: min(100vw, 760px);
   }
 }

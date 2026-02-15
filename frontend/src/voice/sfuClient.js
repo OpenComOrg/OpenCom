@@ -2,7 +2,7 @@ import * as mediasoupClient from "mediasoup-client";
 
 const DEFAULT_TIMEOUT_MS = 10000;
 
-export function createSfuVoiceClient({ selfUserId, getSelfUserId, sendDispatch, waitForEvent, onRemoteAudioAdded, onRemoteAudioRemoved }) {
+export function createSfuVoiceClient({ selfUserId, getSelfUserId, sendDispatch, waitForEvent, onRemoteAudioAdded, onRemoteAudioRemoved, debugLog }) {
   const state = {
     sessionToken: 0,
     guildId: "",
@@ -20,6 +20,10 @@ export function createSfuVoiceClient({ selfUserId, getSelfUserId, sendDispatch, 
     pendingAudioStartByProducerId: new Map()
   };
 
+  function log(message, context = {}) {
+    debugLog?.(message, { guildId: state.guildId, channelId: state.channelId, ...context });
+  }
+
   function removePendingAudioStart(producerId) {
     const pending = state.pendingAudioStartByProducerId.get(producerId);
     if (!pending) return;
@@ -34,9 +38,12 @@ export function createSfuVoiceClient({ selfUserId, getSelfUserId, sendDispatch, 
       if (audio.paused) {
         audio.play()
           .then(() => {
+            log("audio.play() retry resolved", { producerId });
             removePendingAudioStart(producerId);
           })
-          .catch(() => {});
+          .catch((error) => {
+            log("audio.play() retry blocked", { producerId, error: error?.message || "PLAY_BLOCKED" });
+          });
       } else {
         removePendingAudioStart(producerId);
       }
@@ -90,7 +97,8 @@ export function createSfuVoiceClient({ selfUserId, getSelfUserId, sendDispatch, 
   async function waitForVoiceResponse(waitForSuccess, timeoutMs = DEFAULT_TIMEOUT_MS) {
     const successPromise = waitForSuccess();
     const errorPromise = waitForVoiceError(timeoutMs).then((errorData) => {
-      throw new Error(`VOICE_ERROR: ${errorData?.error || "UNKNOWN"}`);
+      const details = errorData?.details ? `:${errorData.details}` : "";
+      throw new Error(`VOICE_ERROR:${errorData?.error || "UNKNOWN"}${details}`);
     });
     return Promise.race([successPromise, errorPromise]);
   }
@@ -99,9 +107,13 @@ export function createSfuVoiceClient({ selfUserId, getSelfUserId, sendDispatch, 
     await sendDispatch("VOICE_CREATE_TRANSPORT", { guildId: state.guildId, channelId: state.channelId, direction });
     const created = await waitDispatch("VOICE_TRANSPORT_CREATED", (d) => d?.direction === direction);
     if (!isActive(token)) throw new Error("VOICE_SESSION_CANCELLED");
-    return direction === "send"
+    const transport = direction === "send"
       ? state.device.createSendTransport(created.transport)
       : state.device.createRecvTransport(created.transport);
+    transport.on("connectionstatechange", (connectionState) => {
+      log("transport connectionstatechange", { direction, transportId: transport.id, connectionState });
+    });
+    return transport;
   }
 
   async function consumeProducer(producerId, userId, token) {
@@ -122,6 +134,14 @@ export function createSfuVoiceClient({ selfUserId, getSelfUserId, sendDispatch, 
     if (!isActive(token)) return;
 
     const consumer = await state.recvTransport.consume(consumerOptions);
+    log("consumer track received", {
+      producerId,
+      consumerId: consumer.id,
+      trackReadyState: consumer.track?.readyState,
+      trackMuted: consumer.track?.muted,
+      trackEnabled: consumer.track?.enabled
+    });
+
     const stream = new MediaStream([consumer.track]);
     const audio = document.createElement("audio");
     audio.autoplay = true;
@@ -131,18 +151,33 @@ export function createSfuVoiceClient({ selfUserId, getSelfUserId, sendDispatch, 
     audio.srcObject = stream;
     audio.style.display = "none";
     document.body.appendChild(audio);
+
     audio.addEventListener("loadedmetadata", () => {
+      log("audio loadedmetadata", {
+        producerId,
+        paused: audio.paused,
+        muted: audio.muted,
+        volume: audio.volume
+      });
       if (audio.paused) {
-        audio.play().catch(() => {
+        audio.play().catch((error) => {
+          log("audio.play() blocked after loadedmetadata", { producerId, error: error?.message || "PLAY_BLOCKED" });
           scheduleAudioStartRetry(audio, producerId);
         });
       }
     });
+
     if (typeof audio.setSinkId === "function" && state.audioOutputDeviceId) {
-      await audio.setSinkId(state.audioOutputDeviceId).catch(() => {});
+      await audio.setSinkId(state.audioOutputDeviceId).catch((error) => {
+        log("audio.setSinkId failed", { producerId, deviceId: state.audioOutputDeviceId, error: error?.message || "SET_SINK_ID_FAILED" });
+      });
     }
+
     audio.volume = state.isDeafened ? 0 : 1;
-    await audio.play().catch(() => {
+    await audio.play().then(() => {
+      log("audio.play() resolved", { producerId, paused: audio.paused });
+    }).catch((error) => {
+      log("audio.play() blocked", { producerId, error: error?.message || "PLAY_BLOCKED" });
       scheduleAudioStartRetry(audio, producerId);
     });
 
@@ -178,13 +213,7 @@ export function createSfuVoiceClient({ selfUserId, getSelfUserId, sendDispatch, 
     state.sendTransport = await createTransport("send", token);
     state.sendTransport.on("connect", async ({ dtlsParameters }, callback, errback) => {
       try {
-        if (import.meta.env.DEV) {
-          console.debug("[voice] sending VOICE_CONNECT_TRANSPORT", {
-            transportId: state.sendTransport.id,
-            guildId: state.guildId,
-            channelId: state.channelId
-          });
-        }
+        log("VOICE_CONNECT_TRANSPORT send", { transportId: state.sendTransport.id });
         await sendDispatch("VOICE_CONNECT_TRANSPORT", {
           guildId: state.guildId,
           channelId: state.channelId,
@@ -209,10 +238,7 @@ export function createSfuVoiceClient({ selfUserId, getSelfUserId, sendDispatch, 
         const produced = await waitForVoiceResponse(
           () => waitDispatch(
             "VOICE_PRODUCED",
-            (d) =>
-              d?.guildId === state.guildId &&
-              d?.channelId === state.channelId &&
-              d?.userId === resolveSelfUserId()
+            (d) => d?.guildId === state.guildId && d?.channelId === state.channelId && d?.userId === resolveSelfUserId()
           )
         );
         callback({ id: produced.producerId });
@@ -239,13 +265,7 @@ export function createSfuVoiceClient({ selfUserId, getSelfUserId, sendDispatch, 
     state.recvTransport = await createTransport("recv", token);
     state.recvTransport.on("connect", async ({ dtlsParameters }, callback, errback) => {
       try {
-        if (import.meta.env.DEV) {
-          console.debug("[voice] sending VOICE_CONNECT_TRANSPORT", {
-            transportId: state.recvTransport.id,
-            guildId: state.guildId,
-            channelId: state.channelId
-          });
-        }
+        log("VOICE_CONNECT_TRANSPORT recv", { transportId: state.recvTransport.id });
         await sendDispatch("VOICE_CONNECT_TRANSPORT", {
           guildId: state.guildId,
           channelId: state.channelId,
@@ -304,13 +324,13 @@ export function createSfuVoiceClient({ selfUserId, getSelfUserId, sendDispatch, 
     if (data?.channelId && data.channelId !== state.channelId) return;
     if (state.localProducer && data.producerId === state.localProducer.id) return;
 
-
     if (type === "VOICE_NEW_PRODUCER" && data?.producerId) {
-      if (data.userId && data.userId === resolveSelfUserId()) return; // ignore self
-        await consumeProducer(data.producerId, data.userId, state.sessionToken).catch(() => {});
-        return;
-      }
-      
+      if (data.userId && data.userId === resolveSelfUserId()) return;
+      await consumeProducer(data.producerId, data.userId, state.sessionToken).catch((error) => {
+        log("consumeProducer failed", { producerId: data.producerId, error: error?.message || "CONSUME_FAILED" });
+      });
+      return;
+    }
 
     if (type === "VOICE_PRODUCER_CLOSED" && data?.producerId) {
       await cleanupConsumer(data.producerId);

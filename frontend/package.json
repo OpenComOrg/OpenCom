@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "dev:voice-debug": "VITE_DEBUG_VOICE=1 VITE_ENABLE_REST_VOICE_FALLBACK=0 vite"
   },
   "dependencies": {
     "react": "^18.3.1",

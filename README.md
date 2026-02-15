@@ -64,6 +64,20 @@ npm run dev
 
 See `frontend/README.md` for full documentation, custom CSS theming, and API integration details.
 
+## Voice diagnostics
+Use the dedicated debugging guide for SFU/mediasoup troubleshooting and log flags:
+
+- `docs/VOICE_DEBUGGING.md`
+
+Quick commands:
+```bash
+cd backend
+npm run dev:voice-debug
+
+cd ../frontend
+npm run dev:voice-debug
+```
+
 ## Run services
 From repository root:
 ```bash

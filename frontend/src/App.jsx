@@ -28,6 +28,13 @@ const SERVER_VOICE_GATEWAY_PREFS_KEY = "opencom_server_voice_gateway_prefs";
 const LAST_CORE_GATEWAY_KEY = "opencom_last_core_gateway";
 const LAST_SERVER_GATEWAY_KEY = "opencom_last_server_gateway";
 const FALLBACK_CORE_GATEWAY_WS_URL = "wss://ws.opencom.online/gateway";
+const DEBUG_VOICE_STORAGE_KEY = "opencom_debug_voice";
+
+function isVoiceDebugEnabled() {
+  const envEnabled = String(import.meta.env.VITE_DEBUG_VOICE || "").trim() === "1";
+  const storageEnabled = typeof window !== "undefined" && localStorage.getItem(DEBUG_VOICE_STORAGE_KEY) === "1";
+  return envEnabled || storageEnabled;
+}
 
 function normalizeGatewayWsUrl(value) {
   if (!value || typeof value !== "string") return "";
@@ -281,6 +288,11 @@ function playNotificationBeep(mute = false) {
 }
 
 export function App() {
+  const voiceDebugEnabled = isVoiceDebugEnabled();
+  const voiceDebug = (message, context = {}) => {
+    if (!voiceDebugEnabled) return;
+    console.debug(`[voice-debug] ${message}`, context);
+  };
   const storedActiveDmId = localStorage.getItem(ACTIVE_DM_KEY) || "";
   const [accessToken, setAccessToken] = useState(localStorage.getItem("opencom_access_token") || "");
   const [authMode, setAuthMode] = useState("login");
@@ -406,7 +418,8 @@ export function App() {
     voiceSfuRef.current = createSfuVoiceClient({
       getSelfUserId: () => selfUserIdRef.current,
       sendDispatch: (type, data) => sendNodeVoiceDispatch(type, data),
-      waitForEvent: waitForVoiceEvent
+      waitForEvent: waitForVoiceEvent,
+      debugLog: voiceDebug
     });
   }
   const selfStatusRef = useRef(selfStatus);
@@ -1203,7 +1216,9 @@ export function App() {
 
           if (msg.op === "DISPATCH" && msg.t === "VOICE_ERROR") {
             const error = msg.d?.error || "VOICE_ERROR";
+            const details = msg.d?.details ? ` (${msg.d.details})` : "";
             const activeVoiceContext = voiceSfuRef.current?.getContext?.() || {};
+            voiceDebug("VOICE_ERROR received", { error, details: msg.d?.details, code: msg.d?.code, context: activeVoiceContext });
             rejectPendingVoiceEventsByScope({
               guildId: msg.d?.guildId ?? activeVoiceContext.guildId ?? null,
               channelId: msg.d?.channelId ?? activeVoiceContext.channelId ?? null,
@@ -1215,7 +1230,7 @@ export function App() {
               cleanupVoiceRtc().catch(() => {});
               return;
             }
-            const message = `Voice connection failed: ${error}`;
+            const message = `Voice connection failed: ${error}${details}`;
             setStatus(message);
             window.alert(message);
             return;
@@ -2726,7 +2741,27 @@ export function App() {
 
   function canUseRealtimeVoiceGateway() {
     const ws = nodeGatewayWsRef.current;
-    return !!(ws && ws.readyState === WebSocket.OPEN && nodeGatewayReadyRef.current);
+    const usable = !!(ws && ws.readyState === WebSocket.OPEN && nodeGatewayReadyRef.current);
+    if (voiceDebugEnabled) {
+      const wsState = ws?.readyState;
+      const wsStateName = wsState === WebSocket.CONNECTING
+        ? "CONNECTING"
+        : wsState === WebSocket.OPEN
+          ? "OPEN"
+          : wsState === WebSocket.CLOSING
+            ? "CLOSING"
+            : wsState === WebSocket.CLOSED
+              ? "CLOSED"
+              : "MISSING";
+      voiceDebug("canUseRealtimeVoiceGateway", {
+        usable,
+        readyState: wsStateName,
+        gatewayReady: nodeGatewayReadyRef.current,
+        activeGuildId,
+        activeChannelId
+      });
+    }
+    return usable;
   }
 
   async function joinVoiceChannel(channel) {
@@ -2751,11 +2786,20 @@ export function App() {
       sfuError = error;
     }
 
+    const allowRestFallback = String(import.meta.env.VITE_ENABLE_REST_VOICE_FALLBACK || "").trim() === "1";
+    if (!allowRestFallback) {
+      const reason = sfuError?.message || "VOICE_GATEWAY_UNAVAILABLE";
+      const message = `Voice connection failed: ${reason}. Realtime voice gateway is required; set VITE_ENABLE_REST_VOICE_FALLBACK=1 only for diagnostics.`;
+      setStatus(message);
+      window.alert(message);
+      return;
+    }
+
     try {
       await nodeApi(activeServer.baseUrl, `/v1/channels/${channel.id}/voice/join`, activeServer.membershipToken, { method: "POST" });
       setVoiceSession({ guildId: activeGuildId, channelId: channel.id });
       const fallbackReason = sfuError?.message ? ` (gateway fallback: ${sfuError.message})` : "";
-      setStatus(`Joined ${channel.name} (REST voice mode).${fallbackReason}`);
+      setStatus(`Joined ${channel.name} (REST voice mode, no SFU playback).${fallbackReason}`);
     } catch (error) {
       const message = `Voice connection failed: ${error.message || "VOICE_JOIN_FAILED"}`;
       setStatus(message);

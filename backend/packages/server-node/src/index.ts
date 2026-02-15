@@ -18,16 +18,30 @@ import { meRoutes } from "./routes/me.js";
 import { discordCompatRoutes } from "./routes/discordCompat.js";
 import { extensionRoutes } from "./routes/extensions.js";
 import { restorePersistedExtensions } from "./extensions/host.js";
+import { createLogger } from "./logger.js";
 
+const logger = createLogger("server");
+
+logger.info("Starting node server", {
+  nodeEnv: env.NODE_ENV,
+  logLevel: env.LOG_LEVEL,
+  debugHttp: env.DEBUG_HTTP,
+  debugVoice: env.DEBUG_VOICE,
+  mediasoupAnnouncedIp: env.MEDIASOUP_ANNOUNCED_IP || "(unset)",
+  rtcMinPort: env.MEDIASOUP_RTC_MIN_PORT,
+  rtcMaxPort: env.MEDIASOUP_RTC_MAX_PORT
+});
+
+if (!env.MEDIASOUP_ANNOUNCED_IP) {
+  logger.warn("MEDIASOUP_ANNOUNCED_IP is unset. External clients may fail unless server is directly reachable.");
+}
 
 await initMediasoup();
-// ...
 const app = buildHttp();
 await registerRestAuth(app);
 
 const gw = attachNodeGateway(app);
 
-// routes
 await guildRoutes(app);
 await guildJoinRoutes(app);
 await guildStateRoutes(app);
@@ -38,7 +52,7 @@ await messageRoutes(app, gw.broadcastToChannel, gw.broadcastMention);
 await roleRoutes(app, gw.broadcastGuild);
 await overwriteRoutes(app, gw.broadcastGuild);
 await memberRoutes(app, gw.broadcastGuild);
-await meRoutes(app)
+await meRoutes(app);
 await discordCompatRoutes(app);
 await extensionRoutes(app);
 
@@ -47,4 +61,5 @@ startAttachmentCleanupLoop();
 startNodeSyncLoop();
 await restorePersistedExtensions();
 
-app.listen({ port: env.NODE_PORT, host: env.NODE_HOST });
+await app.listen({ port: env.NODE_PORT, host: env.NODE_HOST });
+logger.info("Node server listening", { host: env.NODE_HOST, port: env.NODE_PORT });

@@ -11,6 +11,7 @@
     "dev:core": "npm -w @ods/core run dev",
     "dev:node": "npm -w @ods/server-node run dev",
     "migrate:core": "npm -w @ods/core run migrate",
-    "migrate:node": "npm -w @ods/server-node run migrate"
+    "migrate:node": "npm -w @ods/server-node run migrate",
+    "dev:voice-debug": "DEBUG_HTTP=1 DEBUG_VOICE=1 LOG_LEVEL=debug npm -w @ods/server-node run dev"
   }
 }

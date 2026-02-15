@@ -30,8 +30,8 @@
 
   /* For scalable server rails, etc. */
   --sidebar-width: clamp(60px, 7vw, 80px);
-  --channel-sidebar-width: clamp(180px, 18vw, 300px);
-  --channel-sidebar-width-voice: clamp(240px, 28vw, 440px);
+  --channel-sidebar-width: clamp(210px, 19vw, 320px);
+  --channel-sidebar-width-voice: clamp(250px, 24vw, 360px);
 }
 
 html {
@@ -331,6 +331,7 @@ button.danger { background: linear-gradient(135deg, #eb5d73, #c84159); }
   grid-template-columns: var(--sidebar-width) var(--channel-sidebar-width) minmax(0, 1fr);
   overflow: hidden;
   min-width: 0;
+  max-width: 100vw;
 }
 
 /* Server Rail & Pills */
@@ -493,6 +494,7 @@ button.danger { background: linear-gradient(135deg, #eb5d73, #c84159); }
   gap: var(--space-xs);
   transition: background-color 0.15s ease, color 0.15s ease, transform 0.15s ease;
   font-size: 1em;
+  min-width: 0;
 }
 .channel-btn:hover,
 .channel-row:hover { 
@@ -510,6 +512,14 @@ button.danger { background: linear-gradient(135deg, #eb5d73, #c84159); }
   display: inline-block;
   min-width: 16px;
   text-align: center;
+}
+
+.channel-row > span:last-child,
+.channel-row > div:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .dm-sidebar-row {
@@ -1135,18 +1145,23 @@ button.danger { background: linear-gradient(135deg, #eb5d73, #c84159); }
 .member-row .member-role-tag { display: inline-block; margin-left: 0.35em; font-size: 0.75em; font-weight: 500; color: var(--text-dim);}
 
 .voice-channel-members {
-  margin: -2px 0 10px 24px;
+  margin: -2px 0 10px 22px;
   display: grid;
-  gap: 4px;
+  gap: 6px;
+  min-width: 0;
 }
 
 .voice-channel-member-row {
   display: grid;
-  grid-template-columns: auto 1fr auto;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 6px;
   color: var(--text-dim);
-  font-size: 0.84em;
+  font-size: 0.82em;
+  background: rgba(132, 165, 255, 0.05);
+  border: 1px solid rgba(125, 164, 255, 0.12);
+  border-radius: calc(var(--radius) * 0.55);
+  padding: 4px 6px;
 }
 
 .voice-channel-member-name {
@@ -1156,9 +1171,13 @@ button.danger { background: linear-gradient(135deg, #eb5d73, #c84159); }
 }
 
 .vc-avatar {
-  width: 20px;
-  height: 20px;
+  width: 18px;
+  height: 18px;
   border-radius: 50%;
+}
+
+.voice-channel-member-icons {
+  letter-spacing: -0.02em;
 }
 
 .speaking {

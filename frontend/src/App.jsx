@@ -2724,31 +2724,38 @@ export function App() {
     ws.send(JSON.stringify({ op: "DISPATCH", t: type, d: data }));
   }
 
+  function canUseRealtimeVoiceGateway() {
+    const ws = nodeGatewayWsRef.current;
+    return !!(ws && ws.readyState === WebSocket.OPEN && nodeGatewayReadyRef.current);
+  }
+
   async function joinVoiceChannel(channel) {
     if (!channel?.id || !activeGuildId || !activeServer?.baseUrl || !activeServer?.membershipToken) return;
+    let sfuError = null;
     try {
       setStatus(`Joining ${channel.name}...`);
-      await voiceSfuRef.current?.join({
-        guildId: activeGuildId,
-        channelId: channel.id,
-        audioInputDeviceId,
-        isMuted,
-        isDeafened,
-        audioOutputDeviceId
-      });
-      setVoiceSession({ guildId: activeGuildId, channelId: channel.id });
-      setStatus(`Joined ${channel.name}.`);
-      return;
+      if (canUseRealtimeVoiceGateway()) {
+        await voiceSfuRef.current?.join({
+          guildId: activeGuildId,
+          channelId: channel.id,
+          audioInputDeviceId,
+          isMuted,
+          isDeafened,
+          audioOutputDeviceId
+        });
+        setVoiceSession({ guildId: activeGuildId, channelId: channel.id });
+        setStatus(`Joined ${channel.name}.`);
+        return;
+      }
     } catch (error) {
-      const message = `Voice connection failed: ${error.message || "VOICE_JOIN_FAILED"}`;
-      setStatus(message);
-      window.alert(message);
+      sfuError = error;
     }
 
     try {
       await nodeApi(activeServer.baseUrl, `/v1/channels/${channel.id}/voice/join`, activeServer.membershipToken, { method: "POST" });
       setVoiceSession({ guildId: activeGuildId, channelId: channel.id });
-      setStatus(`Joined ${channel.name} (REST fallback).`);
+      const fallbackReason = sfuError?.message ? ` (gateway fallback: ${sfuError.message})` : "";
+      setStatus(`Joined ${channel.name} (REST voice mode).${fallbackReason}`);
     } catch (error) {
       const message = `Voice connection failed: ${error.message || "VOICE_JOIN_FAILED"}`;
       setStatus(message);
@@ -2810,17 +2817,33 @@ export function App() {
       await forceLocalDisconnect();
       setStatus("Disconnected from voice.");
 
-      if (!targetGuildId || !targetChannelId) return;
-
-      try {
-        await sendNodeVoiceDispatch("VOICE_LEAVE", { guildId: targetGuildId, channelId: targetChannelId });
+      if (!targetGuildId || !targetChannelId) {
+        if (!connectedServer?.baseUrl || !connectedServer?.membershipToken) return;
+        try {
+          await nodeApi(connectedServer.baseUrl, "/v1/me/voice-disconnect", connectedServer.membershipToken, { method: "POST" });
+        } catch (error) {
+          const message = `Disconnected locally. Server voice leave failed: ${error.message || "VOICE_LEAVE_FAILED"}`;
+          setStatus(message);
+          console.warn(message);
+        }
         return;
-      } catch {}
+      }
+
+      if (canUseRealtimeVoiceGateway()) {
+        try {
+          await sendNodeVoiceDispatch("VOICE_LEAVE", { guildId: targetGuildId, channelId: targetChannelId });
+          return;
+        } catch {}
+      }
 
       if (!connectedServer?.baseUrl || !connectedServer?.membershipToken) return;
 
       try {
-        await nodeApi(connectedServer.baseUrl, `/v1/channels/${targetChannelId}/voice/leave`, connectedServer.membershipToken, { method: "POST" });
+        if (targetChannelId) {
+          await nodeApi(connectedServer.baseUrl, `/v1/channels/${targetChannelId}/voice/leave`, connectedServer.membershipToken, { method: "POST" });
+          return;
+        }
+        await nodeApi(connectedServer.baseUrl, "/v1/me/voice-disconnect", connectedServer.membershipToken, { method: "POST" });
       } catch (error) {
         const message = `Disconnected locally. Server voice leave failed: ${error.message || "VOICE_LEAVE_FAILED"}`;
         setStatus(message);

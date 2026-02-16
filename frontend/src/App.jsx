@@ -510,6 +510,7 @@ export function App() {
   const [email, setEmail] = useState("");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [pendingVerificationEmail, setPendingVerificationEmail] = useState("");
   const [me, setMe] = useState(null);
 
   const [navMode, setNavMode] = useState("servers");
@@ -2196,6 +2197,31 @@ export function App() {
     };
   }, [navMode, accessToken, activeGuildId, guildState?.members]);
 
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search || "");
+    const verifyEmailToken = params.get("verifyEmailToken");
+    if (!verifyEmailToken) return;
+
+    setStatus("Verifying your email...");
+    api("/v1/auth/verify-email", {
+      method: "POST",
+      body: JSON.stringify({ token: verifyEmailToken })
+    })
+      .then(() => {
+        setAuthMode("login");
+        setStatus("Email verified. You can now log in.");
+      })
+      .catch((error) => {
+        setStatus(`Email verification failed: ${error.message}`);
+      })
+      .finally(() => {
+        params.delete("verifyEmailToken");
+        const next = params.toString();
+        const nextUrl = `${window.location.pathname}${next ? `?${next}` : ""}${window.location.hash || ""}`;
+        window.history.replaceState({}, "", nextUrl);
+      });
+  }, []);
+
   async function handleAuthSubmit(event) {
     event.preventDefault();
     setStatus("Authenticating...");
@@ -2203,15 +2229,45 @@ export function App() {
     try {
       if (authMode === "register") {
         await api("/v1/auth/register", { method: "POST", body: JSON.stringify({ email, username, password }) });
+        setPendingVerificationEmail(email.trim());
+        setAuthMode("login");
+        setPassword("");
+        setStatus("Account created. Check your email for a verification link before logging in.");
+        return;
       }
 
       const loginData = await api("/v1/auth/login", { method: "POST", body: JSON.stringify({ email, password }) });
       setAccessToken(loginData.accessToken);
       setRefreshToken(loginData.refreshToken || "");
       setMe(loginData.user);
+      setPendingVerificationEmail("");
       setStatus("Authenticated.");
     } catch (error) {
+      if (error?.message === "EMAIL_NOT_VERIFIED") {
+        setPendingVerificationEmail(email.trim());
+        setStatus("Auth failed: EMAIL_NOT_VERIFIED. Use the resend button below if needed.");
+        return;
+      }
       setStatus(`Auth failed: ${error.message}`);
+    }
+  }
+
+  async function handleResendVerification() {
+    const targetEmail = (pendingVerificationEmail || email || "").trim();
+    if (!targetEmail) {
+      setStatus("Enter your email first, then resend verification.");
+      return;
+    }
+    setStatus("Sending verification email...");
+    try {
+      await api("/v1/auth/resend-verification", {
+        method: "POST",
+        body: JSON.stringify({ email: targetEmail })
+      });
+      setPendingVerificationEmail(targetEmail);
+      setStatus("If the account exists and is unverified, a new verification email has been sent.");
+    } catch (error) {
+      setStatus(`Resend failed: ${error.message}`);
     }
   }
 
@@ -4074,11 +4130,19 @@ export function App() {
             <label>Email<input value={email} onChange={(event) => setEmail(event.target.value)} type="email" required /></label>
             {authMode === "register" && <label>Username<input value={username} onChange={(event) => setUsername(event.target.value)} required /></label>}
             <label>Password<input value={password} onChange={(event) => setPassword(event.target.value)} type="password" required /></label>
-            <button type="submit">{authMode === "login" ? "Log in" : "Create account & continue"}</button>
+            <button type="submit">{authMode === "login" ? "Log in" : "Create account"}</button>
           </form>
           <button className="link-btn" onClick={() => setAuthMode(authMode === "login" ? "register" : "login")}>
             {authMode === "login" ? "Need an account? Register" : "Have an account? Login"}
           </button>
+          {authMode === "login" && (
+            <button type="button" className="link-btn" onClick={handleResendVerification}>
+              Resend verification email
+            </button>
+          )}
+          {pendingVerificationEmail && authMode === "login" && (
+            <p className="sub">Pending verification: {pendingVerificationEmail}</p>
+          )}
           <p className="status">{status}</p>
         </div>
       </div>

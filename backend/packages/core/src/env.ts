@@ -49,7 +49,18 @@ const Env = z.object({
   STRIPE_PRICE_ID_BOOST_GBP_10: z.string().min(1).optional(),
   STRIPE_SUCCESS_URL: z.string().url().optional(),
   STRIPE_CANCEL_URL: z.string().url().optional(),
-  STRIPE_CUSTOMER_PORTAL_RETURN_URL: z.string().url().optional()
+  STRIPE_CUSTOMER_PORTAL_RETURN_URL: z.string().url().optional(),
+
+  // Auth email verification
+  AUTH_REQUIRE_EMAIL_VERIFICATION: boolFlag.default(true),
+  AUTH_EMAIL_VERIFICATION_TOKEN_TTL_MINUTES: z.coerce.number().int().min(5).max(1440).default(60),
+  APP_BASE_URL: z.string().url().default("http://localhost:5173"),
+  SMTP_HOST: z.string().min(1).optional(),
+  SMTP_PORT: z.coerce.number().int().min(1).max(65535).default(587),
+  SMTP_SECURE: boolFlag.default(false),
+  SMTP_USER: z.string().min(1).optional(),
+  SMTP_PASS: z.string().min(1).optional(),
+  SMTP_FROM: z.string().email().optional()
 });
 
 export const env = Env.parse(process.env);

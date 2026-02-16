@@ -5,6 +5,8 @@ import { q } from "../db.js";
 import { hashPassword, verifyPassword, sha256Hex } from "../crypto.js";
 import crypto from "node:crypto";
 import { parseBody } from "../validation.js";
+import { env } from "../env.js";
+import { sendVerificationEmail } from "../mail.js";
 
 const Register = z.object({
   email: z.string().email(),
@@ -17,11 +19,42 @@ const Login = z.object({
   password: z.string().min(1)
 });
 
+const VerifyEmail = z.object({
+  token: z.string().min(16)
+});
+
+const ResendVerification = z.object({
+  email: z.string().email()
+});
+
 const ACCESS_TOKEN_TTL = "12h";
 const REFRESH_TOKEN_TTL_MS = 365 * 24 * 60 * 60 * 1000; // 1 year
 
 function randomToken(): string {
   return crypto.randomBytes(32).toString("hex");
+}
+
+function toSqlTimestamp(msFromEpoch: number): string {
+  return new Date(msFromEpoch).toISOString().slice(0, 19).replace("T", " ");
+}
+
+async function issueEmailVerificationToken(userId: string): Promise<string> {
+  const token = randomToken();
+  const tokenHash = sha256Hex(token);
+  const expiresAt = toSqlTimestamp(Date.now() + (env.AUTH_EMAIL_VERIFICATION_TOKEN_TTL_MINUTES * 60 * 1000));
+
+  await q(
+    `INSERT INTO email_verification_tokens (id,user_id,token_hash,expires_at)
+     VALUES (:id,:userId,:tokenHash,:expiresAt)`,
+    { id: ulidLike(), userId, tokenHash, expiresAt }
+  );
+
+  return token;
+}
+
+async function sendEmailVerificationForUser(userId: string, email: string) {
+  const token = await issueEmailVerificationToken(userId);
+  await sendVerificationEmail(email, token);
 }
 
 export async function authRoutes(app: FastifyInstance) {
@@ -48,6 +81,18 @@ export async function authRoutes(app: FastifyInstance) {
       { id, email: body.email, username: body.username, passwordHash: pwHash }
     );
 
+    if (env.AUTH_REQUIRE_EMAIL_VERIFICATION) {
+      try {
+        await sendEmailVerificationForUser(id, body.email);
+      } catch (error) {
+        await q(`DELETE FROM users WHERE id=:id`, { id });
+        if ((error as Error)?.message === "SMTP_NOT_CONFIGURED") {
+          return rep.code(500).send({ error: "SMTP_NOT_CONFIGURED" });
+        }
+        return rep.code(500).send({ error: "EMAIL_SEND_FAILED" });
+      }
+    }
+
     // Bootstrap platform founder on first registration if unset
     await q(`INSERT INTO platform_config (id, founder_user_id) VALUES (1, NULL) ON DUPLICATE KEY UPDATE id=id`);
     const founder = await q<{ founder_user_id: string | null }>(`SELECT founder_user_id FROM platform_config WHERE id=1`);
@@ -58,13 +103,18 @@ export async function authRoutes(app: FastifyInstance) {
       await q(`INSERT INTO user_badges (user_id,badge) VALUES (:id,'PLATFORM_ADMIN') ON DUPLICATE KEY UPDATE user_id=user_id`, { id });
     }
 
-    return rep.send({ id, email: body.email, username: body.username });
+    return rep.send({
+      id,
+      email: body.email,
+      username: body.username,
+      emailVerificationRequired: env.AUTH_REQUIRE_EMAIL_VERIFICATION
+    });
   });
 
   app.post("/v1/auth/login", async (req, rep) => {
     const body = parseBody(Login, req.body);
-    const users = await q<{ id: string; password_hash: string; username: string; email: string }>(
-      `SELECT id,password_hash,username,email FROM users WHERE email=:email`,
+    const users = await q<{ id: string; password_hash: string; username: string; email: string; email_verified_at: string | null }>(
+      `SELECT id,password_hash,username,email,email_verified_at FROM users WHERE email=:email`,
       { email: body.email }
     );
     if (!users.length) return rep.code(401).send({ error: "INVALID_CREDENTIALS" });
@@ -72,6 +122,9 @@ export async function authRoutes(app: FastifyInstance) {
     const u = users[0];
     const ok = await verifyPassword(u.password_hash, body.password);
     if (!ok) return rep.code(401).send({ error: "INVALID_CREDENTIALS" });
+    if (env.AUTH_REQUIRE_EMAIL_VERIFICATION && !u.email_verified_at) {
+      return rep.code(403).send({ error: "EMAIL_NOT_VERIFIED" });
+    }
 
     const accessToken = app.jwt.sign({ sub: u.id, typ: "access" }, { expiresIn: ACCESS_TOKEN_TTL });
 
@@ -90,6 +143,57 @@ export async function authRoutes(app: FastifyInstance) {
       accessToken,
       refreshToken: refresh
     });
+  });
+
+  app.post("/v1/auth/verify-email", async (req, rep) => {
+    const body = parseBody(VerifyEmail, req.body);
+    const tokenHash = sha256Hex(body.token);
+    const rows = await q<{ id: string; user_id: string; expires_at: string; used_at: string | null }>(
+      `SELECT id,user_id,expires_at,used_at
+       FROM email_verification_tokens
+       WHERE token_hash=:tokenHash
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      { tokenHash }
+    );
+
+    if (!rows.length) return rep.code(400).send({ error: "INVALID_VERIFICATION_TOKEN" });
+    const record = rows[0];
+    if (record.used_at) return rep.code(400).send({ error: "VERIFICATION_TOKEN_USED" });
+    if (new Date(record.expires_at).getTime() < Date.now()) return rep.code(400).send({ error: "VERIFICATION_TOKEN_EXPIRED" });
+
+    await q(
+      `UPDATE users SET email_verified_at=COALESCE(email_verified_at, NOW()) WHERE id=:userId`,
+      { userId: record.user_id }
+    );
+    await q(
+      `UPDATE email_verification_tokens SET used_at=NOW() WHERE id=:id`,
+      { id: record.id }
+    );
+
+    return rep.send({ ok: true });
+  });
+
+  app.post("/v1/auth/resend-verification", async (req, rep) => {
+    const body = parseBody(ResendVerification, req.body);
+    if (!env.AUTH_REQUIRE_EMAIL_VERIFICATION) return rep.send({ ok: true });
+
+    const rows = await q<{ id: string; email: string; email_verified_at: string | null }>(
+      `SELECT id,email,email_verified_at FROM users WHERE email=:email LIMIT 1`,
+      { email: body.email }
+    );
+    if (!rows.length) return rep.send({ ok: true });
+    if (rows[0].email_verified_at) return rep.send({ ok: true });
+
+    try {
+      await sendEmailVerificationForUser(rows[0].id, rows[0].email);
+      return rep.send({ ok: true });
+    } catch (error) {
+      if ((error as Error)?.message === "SMTP_NOT_CONFIGURED") {
+        return rep.code(500).send({ error: "SMTP_NOT_CONFIGURED" });
+      }
+      return rep.code(500).send({ error: "EMAIL_SEND_FAILED" });
+    }
   });
 
   app.post("/v1/auth/refresh", async (req, rep) => {

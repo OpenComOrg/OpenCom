@@ -20,7 +20,7 @@
   --shadow-lg: 0 1.13vw 2.63vw rgba(2, 9, 25, 0.48);
 
   /* Typography & Spacing: Now all SCALABLE with clamp() and vw  */
-  --base-size: clamp(13px, 1vw + 0.5em, 18px);
+  --base-size: clamp(12px, 0.24vw + 10.5px, 15px);
   --space-xs: clamp(4px, 0.35vw, 8px);
   --space-sm: clamp(8px, 0.6vw, 14px);
   --space-md: clamp(12px, 0.85vw, 20px);
@@ -29,9 +29,9 @@
   --panel-max: min(1200px, 98vw);
 
   /* For scalable server rails, etc. */
-  --sidebar-width: clamp(60px, 7vw, 80px);
-  --channel-sidebar-width: clamp(200px, 17vw, 280px);
-  --channel-sidebar-width-voice: clamp(230px, 21vw, 320px);
+  --sidebar-width: clamp(56px, 5.8vw, 76px);
+  --channel-sidebar-width: clamp(190px, 16vw, 255px);
+  --channel-sidebar-width-voice: clamp(215px, 18vw, 290px);
 }
 
 html {
@@ -136,7 +136,7 @@ button.danger { background: linear-gradient(135deg, #eb5d73, #c84159); }
 }
 
 .auth-card {
-  width: min(32vw, 500px);
+  width: min(92vw, 500px);
   padding: var(--space-lg);
   border-radius: calc(var(--radius) * 1.25);
   background: rgba(17, 30, 53, 0.88);
@@ -295,6 +295,10 @@ button.danger { background: linear-gradient(135deg, #eb5d73, #c84159); }
   font-size: 1rem;
   cursor: pointer;
   transition: background 0.2s, border-color 0.2s, opacity 0.2s;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .landing-btn-primary {
@@ -472,7 +476,7 @@ button.danger { background: linear-gradient(135deg, #eb5d73, #c84159); }
 }
 
 .sidebar-header { padding: var(--space-md); border-bottom: 1px solid var(--border-subtle);}
-.sidebar-header h2 { margin: 0; font-size: 1.52em; letter-spacing: 0.02em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;}
+.sidebar-header h2 { margin: 0; font-size: clamp(1.1rem, 1.35vw, 1.45rem); letter-spacing: 0.02em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;}
 .sidebar-header small { color: var(--text-dim); display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;}
 .sidebar-block { padding: var(--space-sm); display: grid; gap: var(--space-xs);}
 .sidebar-footer {
@@ -524,8 +528,8 @@ button.danger { background: linear-gradient(135deg, #eb5d73, #c84159); }
   background: rgba(149, 168, 205, 0.14);
   color: var(--text-soft);
   border-radius: calc(var(--radius) * 0.6);
-  min-width: 28px;
-  height: 28px;
+  min-width: 24px;
+  height: 24px;
   padding: 0;
   display: inline-flex;
   align-items: center;
@@ -866,7 +870,7 @@ button.danger { background: linear-gradient(135deg, #eb5d73, #c84159); }
 }
 .chat-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) clamp(160px, 20vw, 310px);
+  grid-template-columns: minmax(0, 1fr) clamp(180px, 18vw, 300px);
   grid-template-rows: minmax(0, 1fr); /* <-- add this */
   height: 100%;
   min-width: 0;
@@ -896,15 +900,17 @@ button.danger { background: linear-gradient(135deg, #eb5d73, #c84159); }
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: var(--space-xs);
+  gap: calc(var(--space-xs) * 0.8);
   background: rgba(18, 26, 44, 0.78);
   backdrop-filter: blur(8px);
   flex-shrink: 0;
 }
 .chat-header h3 { margin: 0; font-size: clamp(0.95rem, 1.8vw, 1.35rem); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .chat-header small { font-size: clamp(0.7rem, 1.2vw, 0.85rem); }
-.chat-actions { display: flex; align-items: center; gap: var(--space-xs);}
-.search-input { width: clamp(100px, 15vw, 260px); background: rgba(12, 21, 38, 0.9); border: 1px solid var(--border-subtle);}
+.chat-actions { display: flex; align-items: center; gap: calc(var(--space-xs) * 0.75); min-width: 0; }
+.chat-header .ghost { padding: 0.34em 0.52em; font-size: 0.92em; }
+.chat-header button:hover { transform: none; box-shadow: none; }
+.search-input { width: clamp(96px, 12vw, 210px); background: rgba(12, 21, 38, 0.9); border: 1px solid var(--border-subtle);}
 .pinned-strip {
   margin: var(--space-xs) var(--space-md);
   border: 1px solid var(--border-subtle);

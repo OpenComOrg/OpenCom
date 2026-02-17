@@ -18,6 +18,8 @@ Development:
 ./scripts/dev/init-env.sh
 ./scripts/dev/setup-database.sh --init-env --with-docker
 ./scripts/dev/start.sh all
+./scripts/client.sh
+./scripts/client.sh --build
 ```
 
 Docs:
@@ -44,5 +46,10 @@ Legacy commands still work, for example:
 - `./scripts/start.sh`
 - `./scripts/setup-database.sh`
 - `./scripts/create-server.sh`
+
+Client wrappers:
+
+- Linux/macOS shell: `./scripts/client.sh` (or `./scripts/client.sh --build`)
+- Windows CMD: `scripts\client.bat` (or `scripts\client.bat --build`)
 
 These wrappers forward to the new directory layout.

@@ -42,9 +42,10 @@ function createWindow() {
   });
 
   if (fs.existsSync(LOCAL_INDEX)) {
-    mainWindow.loadFile(LOCAL_INDEX, { search: "desktop=1" });
+    mainWindow.loadFile(LOCAL_INDEX, { search: "desktop=1&route=%2Fapp" });
   } else {
     const url = new URL(REMOTE_FALLBACK_URL);
+    url.pathname = "/app";
     url.searchParams.set("desktop", "1");
     mainWindow.loadURL(url.toString());
   }

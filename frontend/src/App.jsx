@@ -1,5 +1,20 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createSfuVoiceClient } from "./voice/sfuClient";
+import { LandingPage } from "./components/LandingPage";
+import { AuthShell } from "./components/AuthShell";
+import { DOWNLOAD_TARGETS, getPreferredDownloadTarget } from "./lib/downloads";
+import {
+  APP_ROUTE_CLIENT,
+  APP_ROUTE_HOME,
+  APP_ROUTE_LOGIN,
+  buildInviteJoinUrl,
+  getAppRouteFromLocation,
+  getInviteCodeFromCurrentLocation,
+  isInviteJoinPath,
+  normalizeAppPath,
+  parseInviteCodeFromInput,
+  writeAppRoute
+} from "./lib/routing";
 
 const CORE_API = import.meta.env.VITE_CORE_API_URL || "https://openapi.donskyblock.xyz";
 
@@ -34,16 +49,6 @@ const CLIENT_EXTENSIONS_DEV_MODE_KEY = "opencom_client_extensions_dev_mode";
 const CLIENT_EXTENSIONS_DEV_URLS_KEY = "opencom_client_extensions_dev_urls";
 const ACCESS_TOKEN_KEY = "opencom_access_token";
 const REFRESH_TOKEN_KEY = "opencom_refresh_token";
-const DOWNLOAD_REPOSITORY = import.meta.env.VITE_BUILD_REPOSITORY || "donskyblock/OpenCom";
-const DOWNLOAD_BRANCH = import.meta.env.VITE_BUILD_BRANCH || "main";
-const DOWNLOAD_BASE_URL = (import.meta.env.VITE_BUILD_BASE_URL
-  || `https://raw.githubusercontent.com/${DOWNLOAD_REPOSITORY}/${DOWNLOAD_BRANCH}`).replace(/\/$/, "");
-
-const DOWNLOAD_TARGETS = [
-  { href: `${DOWNLOAD_BASE_URL}/frontend/OpenCom.exe`, label: "Windows (.exe)" },
-  { href: `${DOWNLOAD_BASE_URL}/frontend/OpenCom.deb`, label: "Linux (.deb)" },
-  { href: `${DOWNLOAD_BASE_URL}/frontend/OpenCom.tar.gz`, label: "macOS (.tar.gz)" }
-];
 
 const BUILTIN_EMOTES = {
   smile: "😄",
@@ -396,30 +401,6 @@ function getSlashQuery(value = "") {
   return commandToken.toLowerCase();
 }
 
-function parseInviteCodeFromInput(value = "") {
-  const trimmed = (value || "").trim();
-  if (!trimmed) return "";
-  if (/^[a-zA-Z0-9_-]{3,32}$/.test(trimmed)) return trimmed;
-  try {
-    const parsed = new URL(trimmed);
-    const queryCode = parsed.searchParams.get("join");
-    if (queryCode && /^[a-zA-Z0-9_-]{3,32}$/.test(queryCode)) return queryCode;
-    for (const key of parsed.searchParams.keys()) {
-      if (/^join[a-zA-Z0-9_-]{3,32}$/.test(key)) {
-        return key;
-      }
-    }
-    const hash = (parsed.hash || "").replace(/^#/, "");
-    if (hash.startsWith("join=")) {
-      const hashCode = decodeURIComponent(hash.slice(5));
-      if (/^[a-zA-Z0-9_-]{3,32}$/.test(hashCode)) return hashCode;
-    }
-  } catch {
-    return "";
-  }
-  return "";
-}
-
 function parseCommandArgs(raw = "") {
   const tokens = [];
   const regex = /"([^"\\]*(?:\\.[^"\\]*)*)"|'([^'\\]*(?:\\.[^'\\]*)*)'|(\S+)/g;
@@ -444,12 +425,6 @@ function coerceCommandArg(value, optionType) {
     throw new Error(`Invalid boolean: ${value}`);
   }
   return value;
-}
-
-function shouldSkipLandingPage() {
-  if (typeof window === "undefined") return false;
-  const params = new URLSearchParams(window.location.search || "");
-  return params.get("desktop") === "1";
 }
 
 function contentMentionsSelf(content = "", selfId, selfNames = []) {
@@ -692,7 +667,7 @@ export function App() {
   const [categoryDragId, setCategoryDragId] = useState(null);
   const [channelPermsChannelId, setChannelPermsChannelId] = useState("");
   const [presenceByUserId, setPresenceByUserId] = useState({});
-  const [showClientFlow, setShowClientFlow] = useState(shouldSkipLandingPage);
+  const [routePath, setRoutePath] = useState(getAppRouteFromLocation);
   const [downloadsMenuOpen, setDownloadsMenuOpen] = useState(false);
   const [gatewayConnected, setGatewayConnected] = useState(false);
   const [dmNotification, setDmNotification] = useState(null);
@@ -756,14 +731,48 @@ export function App() {
   const activeChannelIdRef = useRef("");
   const profileCardDragOffsetRef = useRef({ x: 0, y: 0 });
   const downloadMenuRef = useRef(null);
+  const preferredDownloadTarget = useMemo(() => getPreferredDownloadTarget(DOWNLOAD_TARGETS), []);
   const loadedClientExtensionIdsRef = useRef(new Set());
   const extensionPanelsRef = useRef([]);
   const serversRef = useRef([]);
   const storageScope = me?.id || "anonymous";
 
+  function navigateAppRoute(nextRoute, { replace = false } = {}) {
+    writeAppRoute(nextRoute, { replace });
+    setRoutePath(getAppRouteFromLocation());
+  }
+
   useEffect(() => {
     serversRef.current = servers;
   }, [servers]);
+
+  useEffect(() => {
+    const onPopState = () => setRoutePath(getAppRouteFromLocation());
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (window.location.protocol === "file:") return;
+    if (isInviteJoinPath(window.location.pathname || "")) return;
+    const canonical = normalizeAppPath(window.location.pathname || "");
+    if (canonical !== (window.location.pathname || "")) {
+      navigateAppRoute(canonical, { replace: true });
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!accessToken) return;
+    if (routePath === APP_ROUTE_CLIENT) return;
+    navigateAppRoute(APP_ROUTE_CLIENT, { replace: true });
+  }, [accessToken, routePath]);
+
+  useEffect(() => {
+    if (accessToken) return;
+    if (routePath !== APP_ROUTE_CLIENT) return;
+    navigateAppRoute(APP_ROUTE_LOGIN, { replace: true });
+  }, [accessToken, routePath]);
 
   useEffect(() => {
     function closeDownloadsMenuOnOutsideClick(event) {
@@ -1931,23 +1940,18 @@ export function App() {
       .catch(() => {});
   }, [accessToken, guildState?.members, friends]);
 
-  // Handle invite link: ?join=CODE — pre-fill join form and require explicit accept.
+  // Handle invite link: /join/:code (plus legacy ?join=CODE) — pre-fill join form and require explicit accept.
   useEffect(() => {
-    const code = parseInviteCodeFromInput(window.location.href || "");
+    const code = getInviteCodeFromCurrentLocation();
     if (!code) return;
     setJoinInviteCode(code);
     setInvitePendingCode(code);
     setAddServerModalOpen(true);
     setAddServerTab("join");
     previewInvite(code);
-    const url = new URL(window.location.href);
-    url.searchParams.delete("join");
-    for (const key of Array.from(url.searchParams.keys())) {
-      if (/^join[a-zA-Z0-9_-]{3,32}$/.test(key)) url.searchParams.delete(key);
-    }
-    if (url.hash.startsWith("#join=")) url.hash = url.hash.replace(/#join=[^#&]*/, "").replace(/^#&?|&#?$/, "") || "";
-    window.history.replaceState({}, "", url.pathname + (url.search || "") + (url.hash ? "#" + url.hash : ""));
-  }, []);
+    const nextRoute = accessToken ? APP_ROUTE_CLIENT : APP_ROUTE_LOGIN;
+    navigateAppRoute(nextRoute, { replace: true });
+  }, [accessToken]);
 
   useEffect(() => {
     if (navMode !== "servers" || !activeServer) {
@@ -2312,6 +2316,9 @@ export function App() {
     const params = new URLSearchParams(window.location.search || "");
     const verifyEmailToken = params.get("verifyEmailToken");
     if (!verifyEmailToken) return;
+    if (getAppRouteFromLocation() === APP_ROUTE_HOME) {
+      navigateAppRoute(APP_ROUTE_LOGIN, { replace: true });
+    }
 
     setStatus("Verifying your email...");
     api("/v1/auth/verify-email", {
@@ -4426,109 +4433,34 @@ export function App() {
   }
 
   if (!accessToken) {
-    if (!showClientFlow) {
+    if (routePath === APP_ROUTE_HOME) {
       return (
-        <div className="landing-page">
-          <header className="landing-header">
-            <img src="logo.png" alt="OpenCom" className="landing-logo" />
-            <span className="landing-brand">OpenCom</span>
-          </header>
-          <main className="landing-main">
-            <section className="landing-hero">
-              <h1 className="landing-headline">The best way to communicate.</h1>
-              <p className="landing-sub">One place for your servers, friends, and communities. Chat, voice, and stay in sync—without the noise.</p>
-            </section>
-            <section className="landing-features">
-              <div className="landing-feature">
-                <span className="landing-feature-icon">💬</span>
-                <h3>Servers & channels</h3>
-                <p>Organize conversations by topic. Create spaces that scale from a few friends to large communities.</p>
-              </div>
-              <div className="landing-feature">
-                <span className="landing-feature-icon">👥</span>
-                <h3>Friends & DMs</h3>
-                <p>Add friends, send direct messages, and see who’s online. Simple and private.</p>
-              </div>
-              <div className="landing-feature">
-                <span className="landing-feature-icon">🔊</span>
-                <h3>Voice & presence</h3>
-                <p>Jump into voice channels when you need to talk. Status and presence keep everyone in the loop.</p>
-              </div>
-            </section>
-            <section className="landing-cta">
-              <div className="landing-cta-download" ref={downloadMenuRef}>
-                <h3>Get the desktop app</h3>
-                <p className="landing-hint">
-                  Windows, macOS, and Linux — one install, all your chats.
-                </p>
-
-                <div className="download-wrapper">
-                  <button
-                    type="button"
-                    className="landing-btn landing-btn-secondary"
-                    onClick={() => setDownloadsMenuOpen((current) => !current)}
-                  >
-                    Download ▼
-                  </button>
-
-                  {downloadsMenuOpen && (
-                    <div className="download-menu">
-                      {DOWNLOAD_TARGETS.map((target) => (
-                        <a
-                          key={target.href}
-                          href={target.href}
-                          className="download-item"
-                          target="_blank"
-                          rel="noopener noreferrer"
-                        >
-                          {target.label}
-                        </a>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
-              <div className="landing-cta-client">
-                <h3>Use OpenCom now</h3>
-                <p className="landing-hint">Open the client in your browser. No install required.</p>
-                <button type="button" className="landing-btn landing-btn-primary" onClick={() => setShowClientFlow(true)}>
-                  Open client
-                </button>
-              </div>
-            </section>
-          </main>
-          <footer className="landing-footer">
-            <p>OpenCom — one place for teams, communities, and friends.</p>
-          </footer>
-        </div>
+        <LandingPage
+          downloadMenuRef={downloadMenuRef}
+          downloadsMenuOpen={downloadsMenuOpen}
+          setDownloadsMenuOpen={setDownloadsMenuOpen}
+          downloadTargets={DOWNLOAD_TARGETS}
+          preferredDownloadTarget={preferredDownloadTarget}
+          onOpenClient={() => navigateAppRoute(APP_ROUTE_LOGIN)}
+        />
       );
     }
     return (
-      <div className="auth-shell">
-        <div className="auth-card">
-          <button type="button" className="link-btn auth-back" onClick={() => setShowClientFlow(false)}>← Back to home</button>
-          <h1>Welcome back</h1>
-          <p className="sub">OpenCom keeps your teams, communities, and updates in one place.</p>
-          <form onSubmit={handleAuthSubmit}>
-            <label>Email<input value={email} onChange={(event) => setEmail(event.target.value)} type="email" required /></label>
-            {authMode === "register" && <label>Username<input value={username} onChange={(event) => setUsername(event.target.value)} required /></label>}
-            <label>Password<input value={password} onChange={(event) => setPassword(event.target.value)} type="password" required /></label>
-            <button type="submit">{authMode === "login" ? "Log in" : "Create account"}</button>
-          </form>
-          <button className="link-btn" onClick={() => setAuthMode(authMode === "login" ? "register" : "login")}>
-            {authMode === "login" ? "Need an account? Register" : "Have an account? Login"}
-          </button>
-          {authMode === "login" && (
-            <button type="button" className="link-btn" onClick={handleResendVerification}>
-              Resend verification email
-            </button>
-          )}
-          {pendingVerificationEmail && authMode === "login" && (
-            <p className="sub">Pending verification: {pendingVerificationEmail}</p>
-          )}
-          <p className="status">{status}</p>
-        </div>
-      </div>
+      <AuthShell
+        authMode={authMode}
+        setAuthMode={setAuthMode}
+        email={email}
+        setEmail={setEmail}
+        username={username}
+        setUsername={setUsername}
+        password={password}
+        setPassword={setPassword}
+        pendingVerificationEmail={pendingVerificationEmail}
+        status={status}
+        onSubmit={handleAuthSubmit}
+        onResendVerification={handleResendVerification}
+        onBackHome={() => navigateAppRoute(APP_ROUTE_HOME)}
+      />
     );
   }
 
@@ -5933,8 +5865,8 @@ export function App() {
                         <p className="hint">Code: <code>{inviteCode}</code></p>
                         <p className="hint">Invite link (share this):</p>
                         <div className="invite-link-row">
-                          <input readOnly className="invite-link-input" value={inviteJoinUrl || `${typeof window !== "undefined" ? window.location.origin + (window.location.pathname || "/") : ""}?join=${encodeURIComponent(inviteCode)}`} />
-                          <button type="button" onClick={() => { const u = inviteJoinUrl || `${window.location.origin}${window.location.pathname || "/"}?join=${encodeURIComponent(inviteCode)}`; navigator.clipboard.writeText(u).then(() => setStatus("Invite link copied.")).catch(() => setStatus("Could not copy.")); }}>Copy link</button>
+                          <input readOnly className="invite-link-input" value={inviteJoinUrl || buildInviteJoinUrl(inviteCode)} />
+                          <button type="button" onClick={() => { const u = inviteJoinUrl || buildInviteJoinUrl(inviteCode); navigator.clipboard.writeText(u).then(() => setStatus("Invite link copied.")).catch(() => setStatus("Could not copy.")); }}>Copy link</button>
                         </div>
                       </>
                     )}

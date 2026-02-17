@@ -60,7 +60,10 @@ const Env = z.object({
   SMTP_SECURE: boolFlag.default(false),
   SMTP_USER: z.string().min(1).optional(),
   SMTP_PASS: z.string().min(1).optional(),
-  SMTP_FROM: z.string().min(1).optional()
+  SMTP_FROM: z.string().min(1).optional(),
+
+  // Public downloadable desktop artifacts served by core (/downloads/:filename)
+  DOWNLOADS_STORAGE_DIR: z.string().default("frontend/public/downloads")
 });
 
 export const env = Env.parse(process.env);

@@ -1,4 +1,4 @@
-const DOWNLOAD_BASE_URL = (import.meta.env.VITE_DOWNLOADS_BASE_URL || "").replace(/\/$/, "");
+const DOWNLOAD_BASE_URL = (import.meta.env.VITE_DOWNLOADS_BASE_URL || import.meta.env.VITE_CORE_API_URL || "").replace(/\/$/, "");
 
 export const DOWNLOAD_TARGETS = [
   { href: `${DOWNLOAD_BASE_URL}/downloads/OpenCom.exe`, label: "Windows (.exe)" },

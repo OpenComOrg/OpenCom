@@ -197,9 +197,10 @@ export async function inviteRoutes(app: FastifyInstance) {
     }
 
     const compactKey = normalizedCode.toLowerCase().startsWith("join") ? normalizedCode : `join${normalizedCode}`;
+    const publicBaseUrl = env.APP_BASE_URL.replace(/\/$/, "");
     const compactJoinUrl = boostUser && wantsCustomCode
-      ? `${env.PUBLIC_BASE_URL.replace(/\/$/, "")}/?${encodeURIComponent(compactKey)}`
-      : `${env.PUBLIC_BASE_URL.replace(/\/$/, "")}/?join=${encodeURIComponent(normalizedCode)}`;
+      ? `${publicBaseUrl}/?${encodeURIComponent(compactKey)}`
+      : `${publicBaseUrl}/?join=${encodeURIComponent(normalizedCode)}`;
     return {
       code: normalizedCode,
       serverId: body.serverId,

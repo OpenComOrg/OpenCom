@@ -1,0 +1,42 @@
+{
+  "expo": {
+    "name": "OpenCom",
+    "slug": "opencom-android",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "scheme": "opencom",
+    "userInterfaceStyle": "light",
+    "android": {
+      "package": "online.opencom.mobile",
+      "edgeToEdgeEnabled": true,
+      "permissions": [
+        "POST_NOTIFICATIONS"
+      ],
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "autoVerify": true,
+          "category": [
+            "BROWSABLE",
+            "DEFAULT"
+          ],
+          "data": [
+            {
+              "scheme": "https",
+              "host": "opencom.online",
+              "pathPrefix": "/join/"
+            },
+            {
+              "scheme": "https",
+              "host": "www.opencom.online",
+              "pathPrefix": "/join/"
+            }
+          ]
+        }
+      ]
+    },
+    "extra": {
+      "opencomCoreApiUrl": "https://api.opencom.online"
+    }
+  }
+}

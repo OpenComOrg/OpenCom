@@ -1,0 +1,29 @@
+{
+  "name": "opencom-android",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Android mobile wrapper for OpenCom",
+  "main": "node_modules/expo/AppEntry.js",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo run:android",
+    "prebuild": "expo prebuild",
+    "ios": "expo run:ios",
+    "apk": "./scripts/build-android-apk.sh",
+    "apk:relay": "./scripts/build-android-apk.sh --relay"
+  },
+  "dependencies": {
+    "@react-native-async-storage/async-storage": "^2.2.0",
+    "expo": "^53.0.0",
+    "expo-device": "~7.1.4",
+    "expo-notifications": "~0.31.4",
+    "expo-status-bar": "~2.2.3",
+    "react": "19.0.0",
+    "react-native": "0.79.2"
+  },
+  "devDependencies": {
+    "@types/react": "~19.0.10",
+    "babel-preset-expo": "~13.2.3",
+    "typescript": "~5.8.3"
+  }
+}

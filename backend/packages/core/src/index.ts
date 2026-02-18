@@ -22,6 +22,7 @@ import { extensionRoutes } from "./routes/extensions.js";
 import { billingRoutes } from "./routes/billing.js";
 import { downloadRoutes } from "./routes/downloads.js";
 import { linkPreviewRoutes } from "./routes/linkPreview.js";
+import { pushRoutes } from "./routes/push.js";
 import { env } from "./env.js";
 import { makeRedis } from "./redis.js";
 import { presenceUpsert } from "./presence.js";
@@ -52,5 +53,6 @@ await extensionRoutes(app);
 await billingRoutes(app);
 await linkPreviewRoutes(app);
 await downloadRoutes(app);
+await pushRoutes(app);
 
 app.listen({ port: env.CORE_PORT, host: env.CORE_HOST });

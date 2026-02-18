@@ -808,15 +808,43 @@ export function App() {
   function getPresence(userId) {
     if (!userId) return "offline";
     if (userId === me?.id) return selfStatus;
-    return presenceByUserId[userId]?.status ?? "offline";
+    const status = String(presenceByUserId[userId]?.status ?? "offline").toLowerCase();
+    return status === "invisible" ? "offline" : status;
   }
   function getRichPresence(userId) {
     if (!userId) return null;
     return presenceByUserId[userId]?.richPresence ?? null;
   }
-  const presenceLabels = { online: "Online", idle: "Idle", dnd: "Do Not Disturb", offline: "Offline" };
+  const presenceLabels = { online: "Online", idle: "Idle", dnd: "Do Not Disturb", offline: "Offline", invisible: "Invisible" };
   function presenceLabel(status) {
     return presenceLabels[status] || status || "Offline";
+  }
+  function presenceIndicatorClass(status) {
+    const normalized = String(status || "offline").toLowerCase();
+    if (normalized === "online") return "presence-online";
+    if (normalized === "idle") return "presence-idle";
+    if (normalized === "dnd") return "presence-dnd";
+    return "presence-offline";
+  }
+  function renderPresenceAvatar({ userId, username, pfpUrl, size = 28 }) {
+    const avatarStatus = getPresence(userId);
+    const seed = String(userId || username || "?");
+    const seedCode = seed.charCodeAt(0) || 0;
+    return (
+      <div className="avatar-with-presence" style={{ width: `${size}px`, height: `${size}px` }}>
+        {pfpUrl ? (
+          <img src={profileImageUrl(pfpUrl)} alt={username} className="avatar-presence-image" />
+        ) : (
+          <div
+            className="avatar-presence-fallback"
+            style={{ background: `hsl(${Math.abs(seedCode * 7) % 360}, 70%, 60%)` }}
+          >
+            {String(username || "?").substring(0, 1).toUpperCase()}
+          </div>
+        )}
+        <span className={`presence-indicator-dot ${presenceIndicatorClass(avatarStatus)}`} />
+      </div>
+    );
   }
 
   const dmMessagesRef = useRef(null);
@@ -4561,67 +4589,86 @@ export function App() {
   function renderContentWithMentions(message) {
     const content = message?.content || "";
     const nodes = [];
-    const pushTextWithEmotes = (text, keyPrefix) => {
-      if (!text) return;
-      const emoteRegex = /:([a-zA-Z0-9_+-]{2,32}):/g;
+    const renderInlineMarkdown = (text, keyPrefix) => {
+      if (!text) return [];
+      const out = [];
+      const inlineRegex = /(\[([^\]\n]{1,200})\]\((https?:\/\/[^\s)]+)\)|https?:\/\/[^\s<>"'`]+|`([^`\n]+)`|\*\*([^*\n]+)\*\*|__([^_\n]+)__|~~([^~\n]+)~~|\*([^*\n]+)\*|_([^_\n]+)_|\n|:([a-zA-Z0-9_+-]{2,32}):)/g;
       let cursorLocal = 0;
-      let emoteMatch = emoteRegex.exec(text);
-      let index = 0;
-      while (emoteMatch) {
-        const start = emoteMatch.index ?? 0;
-        if (start > cursorLocal) {
-          nodes.push(<span key={`${keyPrefix}-plain-${index}`}>{text.slice(cursorLocal, start)}</span>);
-          index += 1;
-        }
-        const token = String(emoteMatch[1] || "").toLowerCase();
-        const emote = BUILTIN_EMOTES[token];
-        if (emote) {
-          nodes.push(<span key={`${keyPrefix}-emote-${index}`} className="message-emote" title={`:${token}:`}>{emote}</span>);
-        } else if (serverEmoteByName.has(token)) {
-          const custom = serverEmoteByName.get(token);
-          nodes.push(
-            <img
-              key={`${keyPrefix}-custom-emote-${index}`}
-              className="message-custom-emote"
-              src={custom.imageUrl || custom.image_url}
-              alt={`:${token}:`}
-              title={`:${token}:`}
-            />
-          );
-        } else {
-          nodes.push(<span key={`${keyPrefix}-raw-${index}`}>{emoteMatch[0]}</span>);
-        }
-        index += 1;
-        cursorLocal = start + emoteMatch[0].length;
-        emoteMatch = emoteRegex.exec(text);
-      }
-      if (cursorLocal < text.length) {
-        nodes.push(<span key={`${keyPrefix}-tail-${index}`}>{text.slice(cursorLocal)}</span>);
-      }
-    };
-
-    const pushTextWithLinks = (text, keyPrefix) => {
-      if (!text) return;
-      const regex = /(https?:\/\/[^\s<>"'`]+)/gi;
-      let lastIndex = 0;
-      let match = regex.exec(text);
+      let match = inlineRegex.exec(text);
       let localIndex = 0;
+
       while (match) {
-        const index = match.index ?? 0;
-        if (index > lastIndex) {
-          pushTextWithEmotes(text.slice(lastIndex, index), `${keyPrefix}-text-${localIndex}`);
+        const start = match.index ?? 0;
+        if (start > cursorLocal) {
+          out.push(<span key={`${keyPrefix}-plain-${localIndex}`}>{text.slice(cursorLocal, start)}</span>);
           localIndex += 1;
         }
-        const url = match[1];
-        nodes.push(<a key={`${keyPrefix}-link-${localIndex}`} href={url} target="_blank" rel="noreferrer">{url}</a>);
+
+        const full = match[0] || "";
+        const markdownLabel = match[2];
+        const markdownUrl = match[3];
+        const inlineCode = match[4];
+        const boldA = match[5];
+        const boldB = match[6];
+        const strike = match[7];
+        const italicA = match[8];
+        const italicB = match[9];
+        const emoteToken = match[10];
+
+        if (markdownLabel && markdownUrl) {
+          out.push(
+            <a key={`${keyPrefix}-md-link-${localIndex}`} href={markdownUrl} target="_blank" rel="noreferrer">
+              {renderInlineMarkdown(markdownLabel, `${keyPrefix}-md-link-label-${localIndex}`)}
+            </a>
+          );
+        } else if (/^https?:\/\//i.test(full)) {
+          out.push(<a key={`${keyPrefix}-link-${localIndex}`} href={full} target="_blank" rel="noreferrer">{full}</a>);
+        } else if (inlineCode) {
+          out.push(<code key={`${keyPrefix}-code-${localIndex}`} className="message-inline-code">{inlineCode}</code>);
+        } else if (boldA || boldB) {
+          const inner = boldA || boldB;
+          out.push(<strong key={`${keyPrefix}-bold-${localIndex}`}>{renderInlineMarkdown(inner, `${keyPrefix}-bold-inner-${localIndex}`)}</strong>);
+        } else if (strike) {
+          out.push(<s key={`${keyPrefix}-strike-${localIndex}`}>{renderInlineMarkdown(strike, `${keyPrefix}-strike-inner-${localIndex}`)}</s>);
+        } else if (italicA || italicB) {
+          const inner = italicA || italicB;
+          out.push(<em key={`${keyPrefix}-italic-${localIndex}`}>{renderInlineMarkdown(inner, `${keyPrefix}-italic-inner-${localIndex}`)}</em>);
+        } else if (full === "\n") {
+          out.push(<br key={`${keyPrefix}-br-${localIndex}`} />);
+        } else if (emoteToken) {
+          const token = String(emoteToken || "").toLowerCase();
+          const emote = BUILTIN_EMOTES[token];
+          if (emote) {
+            out.push(<span key={`${keyPrefix}-emote-${localIndex}`} className="message-emote" title={`:${token}:`}>{emote}</span>);
+          } else if (serverEmoteByName.has(token)) {
+            const custom = serverEmoteByName.get(token);
+            out.push(
+              <img
+                key={`${keyPrefix}-custom-emote-${localIndex}`}
+                className="message-custom-emote"
+                src={custom.imageUrl || custom.image_url}
+                alt={`:${token}:`}
+                title={`:${token}:`}
+              />
+            );
+          } else {
+            out.push(<span key={`${keyPrefix}-raw-emote-${localIndex}`}>{full}</span>);
+          }
+        } else {
+          out.push(<span key={`${keyPrefix}-raw-${localIndex}`}>{full}</span>);
+        }
+
         localIndex += 1;
-        lastIndex = index + url.length;
-        match = regex.exec(text);
+        cursorLocal = start + full.length;
+        match = inlineRegex.exec(text);
       }
-      if (lastIndex < text.length) {
-        pushTextWithEmotes(text.slice(lastIndex), `${keyPrefix}-tail-${localIndex}`);
+
+      if (cursorLocal < text.length) {
+        out.push(<span key={`${keyPrefix}-tail-${localIndex}`}>{text.slice(cursorLocal)}</span>);
       }
+      return out;
     };
+
     const mentionRegex = /@\{([^}\n]{1,64})\}|@([a-zA-Z0-9_.-]{2,64})/g;
     let cursor = 0;
 
@@ -4635,7 +4682,7 @@ export function App() {
       if (!mentionAtWordBoundary || !raw) continue;
 
       if (index > cursor) {
-        pushTextWithLinks(content.slice(cursor, index), `text-${cursor}`);
+        nodes.push(...renderInlineMarkdown(content.slice(cursor, index), `text-${cursor}`));
       }
 
       if (raw.toLowerCase() === "everyone") {
@@ -4665,7 +4712,7 @@ export function App() {
     }
 
     if (cursor < content.length) {
-      pushTextWithLinks(content.slice(cursor), `tail-${cursor}`);
+      nodes.push(...renderInlineMarkdown(content.slice(cursor), `tail-${cursor}`));
     }
 
     return nodes.length ? nodes : content;
@@ -4919,13 +4966,7 @@ export function App() {
           <section className="sidebar-block channels-container">
             {dms.map((dm) => (
                 <button key={dm.id} className={`channel-row dm-sidebar-row ${dm.id === activeDmId ? "active" : ""}`} onClick={() => setActiveDmId(dm.id)} title={`DM ${dm.name}`} style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                  {dm.pfp_url ? (
-                    <img src={profileImageUrl(dm.pfp_url)} alt={dm.name} style={{ width: "28px", height: "28px", borderRadius: "50%", objectFit: "cover", flexShrink: 0 }} />
-                  ) : (
-                    <div style={{ width: "28px", height: "28px", borderRadius: "50%", background: `hsl(${Math.abs((dm.participantId || dm.id || "").charCodeAt(0) * 7) % 360}, 70%, 60%)`, display: "grid", placeItems: "center", fontSize: "12px", fontWeight: "bold", flexShrink: 0 }}>
-                      {dm.name?.substring(0, 1).toUpperCase()}
-                    </div>
-                  )}
+                  {renderPresenceAvatar({ userId: dm.participantId || dm.id, username: dm.name, pfpUrl: dm.pfp_url, size: 28 })}
                   <span className="channel-hash">@</span> 
                   <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis" }}>{dm.name}</span>
                 </button>
@@ -4935,19 +4976,13 @@ export function App() {
         )}
 
         {navMode === "friends" && (
-          <section className="sidebar-block channels-container">
+          <section className="sidebar-block channels-container friend-sidebar-list">
             {friends.map((friend) => (
               <button className="friend-row friend-sidebar-row" key={friend.id} onClick={() => openDmFromFriend(friend)} title={`Open ${friend.username}`} style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                {friend.pfp_url ? (
-                  <img src={profileImageUrl(friend.pfp_url)} alt={friend.username} style={{ width: "28px", height: "28px", borderRadius: "50%", objectFit: "cover", flexShrink: 0 }} />
-                ) : (
-                  <div style={{ width: "28px", height: "28px", borderRadius: "50%", background: `hsl(${Math.abs((friend.id || "").charCodeAt(0) * 7) % 360}, 70%, 60%)`, display: "grid", placeItems: "center", fontSize: "12px", fontWeight: "bold", flexShrink: 0 }}>
-                    {friend.username?.substring(0, 1).toUpperCase()}
-                  </div>
-                )}
+                {renderPresenceAvatar({ userId: friend.id, username: friend.username, pfpUrl: friend.pfp_url, size: 28 })}
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <strong>{friend.username}</strong>
-                  <span className="hint">{friend.status}</span>
+                  <span className="hint">{presenceLabel(getPresence(friend.id))}</span>
                 </div>
               </button>
             ))}
@@ -4996,7 +5031,7 @@ export function App() {
           )}
 
           <div className="user-row">
-            <div className="avatar">{profile?.pfpUrl ? <img src={profileImageUrl(profile.pfpUrl)} alt="Your avatar" className="avatar-image" /> : getInitials(me?.username || "OpenCom User")}</div>
+            {renderPresenceAvatar({ userId: me?.id, username: me?.username || "OpenCom User", pfpUrl: profile?.pfpUrl, size: 36 })}
             <div className="user-meta"><strong>{me?.username}</strong><span>{canManageServer ? "Owner" : "Member"}</span></div>
             <select className="status-select" value={selfStatus} onChange={(event) => setSelfStatus(event.target.value)} title="Your status">
               <option value="online">Online</option>
@@ -5223,7 +5258,7 @@ export function App() {
                       ))}
                     </div>
                   )}
-                  <input
+                  <textarea
                     ref={composerInputRef}
                     value={messageText}
                     onChange={(event) => setMessageText(event.target.value)}
@@ -5250,14 +5285,15 @@ export function App() {
                         setMessageText("");
                         return;
                       }
-                      if ((event.key === "Tab" || event.key === "Enter") && slashCommandSuggestions.length > 0) {
+                      if ((event.key === "Tab" || (event.key === "Enter" && !event.shiftKey)) && slashCommandSuggestions.length > 0) {
                         event.preventDefault();
                         const selected = slashCommandSuggestions[Math.min(slashSelectionIndex, slashCommandSuggestions.length - 1)] || slashCommandSuggestions[0];
                         if (!selected) return;
                         setMessageText(`/${selected.name} `);
                         return;
                       }
-                      if (event.key === "Enter") {
+                      if (event.key === "Enter" && !event.shiftKey) {
+                        event.preventDefault();
                         sendMessage();
                         return;
                       }
@@ -5406,11 +5442,9 @@ export function App() {
                             onClick={(event) => { event.stopPropagation(); openMemberProfile(member); }}
                             onContextMenu={(event) => openMemberContextMenu(event, member)}
                           >
-                            {member.pfp_url ? (
-                              <img src={profileImageUrl(member.pfp_url)} alt={member.username} className={`avatar member-avatar ${speaking ? "speaking" : ""}`} style={{ objectFit: "cover" }} />
-                            ) : (
-                              <div className={`avatar member-avatar ${speaking ? "speaking" : ""}`}>{getInitials(member.username)}</div>
-                            )}
+                            <div className={speaking ? "speaking" : ""}>
+                              {renderPresenceAvatar({ userId: member.id, username: member.username, pfpUrl: member.pfp_url, size: 32 })}
+                            </div>
                             <div>
                               <strong style={color ? { color } : undefined}>{member.username}</strong>
                               <span>{memberVoice ? `${memberVoice.deafened ? "🔇" : memberVoice.muted ? "🎙️" : "🎤"} In voice` : presenceLabel(getPresence(member.id))}</span>
@@ -5484,7 +5518,7 @@ export function App() {
                               content: message.content,
                               mine: message.authorId === me?.id
                             })}>
-                              {activePinnedDmMessages.some((item) => item.id === message.id) ? "📌 " : ""}{message.content}
+                              {activePinnedDmMessages.some((item) => item.id === message.id) ? "📌 " : ""}{renderContentWithMentions(message)}
                             </p>
                           ))}
                         </div>
@@ -5496,7 +5530,18 @@ export function App() {
               {!activeDm && <p className="empty">Select a DM on the left.</p>}
             </div>
             <footer className="composer dm-composer" onClick={() => dmComposerInputRef.current?.focus()}>
-              <input ref={dmComposerInputRef} value={dmText} onChange={(event) => setDmText(event.target.value)} placeholder={`Message ${activeDm?.name || "friend"}`} onKeyDown={(event) => event.key === "Enter" && sendDm()} />
+              <textarea
+                ref={dmComposerInputRef}
+                value={dmText}
+                onChange={(event) => setDmText(event.target.value)}
+                placeholder={`Message ${activeDm?.name || "friend"}`}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && !event.shiftKey) {
+                    event.preventDefault();
+                    sendDm();
+                  }
+                }}
+              />
               <button className="send-btn" onClick={sendDm} disabled={!activeDm || !dmText.trim()}>Send</button>
             </footer>
           </section>
@@ -5551,9 +5596,12 @@ export function App() {
 
               {(friendView === "online" ? filteredFriends.filter((friend) => getPresence(friend.id) !== "offline") : filteredFriends).map((friend) => (
                 <div key={friend.id} className="friend-row">
-                  <div className="friend-meta">
-                    <strong>{friend.username}</strong>
-                    <span>{presenceLabel(getPresence(friend.id))}</span>
+                  <div className="friend-row-main">
+                    {renderPresenceAvatar({ userId: friend.id, username: friend.username, pfpUrl: friend.pfp_url, size: 32 })}
+                    <div className="friend-meta">
+                      <strong>{friend.username}</strong>
+                      <span>{presenceLabel(getPresence(friend.id))}</span>
+                    </div>
                   </div>
                   <button className="ghost" onClick={(event) => { event.stopPropagation(); openDmFromFriend(friend); }}>Message</button>
                 </div>
@@ -5564,8 +5612,13 @@ export function App() {
               <h4>Active Now</h4>
               {filteredFriends.slice(0, 5).map((friend) => (
                 <button key={`active-${friend.id}`} className="active-card" onClick={(event) => { event.stopPropagation(); openMemberProfile(friend); }}>
-                  <strong>{friend.username}</strong>
-                  <span>{getPresence(friend.id) === "online" ? "Available now" : presenceLabel(getPresence(friend.id))}</span>
+                  <div className="friend-row-main">
+                    {renderPresenceAvatar({ userId: friend.id, username: friend.username, pfpUrl: friend.pfp_url, size: 30 })}
+                    <div className="friend-meta">
+                      <strong>{friend.username}</strong>
+                      <span>{getPresence(friend.id) === "online" ? "Available now" : presenceLabel(getPresence(friend.id))}</span>
+                    </div>
+                  </div>
                 </button>
               ))}
               {!filteredFriends.length && <p className="hint">When friends are active, they will appear here.</p>}

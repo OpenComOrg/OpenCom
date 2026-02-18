@@ -793,6 +793,7 @@ export function App() {
   const [fullProfileDraft, setFullProfileDraft] = useState(createBasicFullProfile({}));
   const [fullProfileViewer, setFullProfileViewer] = useState(null);
   const [fullProfileDraggingElementId, setFullProfileDraggingElementId] = useState("");
+  const [profileStudioSelectedElementId, setProfileStudioSelectedElementId] = useState("");
   const fullProfileDragOffsetRef = useRef({ x: 0, y: 0 });
   const fullProfileEditorCanvasRef = useRef(null);
   const [rpcForm, setRpcForm] = useState({
@@ -1593,6 +1594,10 @@ export function App() {
 
   const canModerateMembers = canKickMembers || canBanMembers;
   const hasBoostForFullProfiles = !!(boostStatus?.active || profile?.boostActive || profile?.badges?.includes?.("boost"));
+  const selectedProfileStudioElement = useMemo(
+    () => (fullProfileDraft?.elements || []).find((item) => item.id === profileStudioSelectedElementId) || null,
+    [fullProfileDraft?.elements, profileStudioSelectedElementId]
+  );
   const canAccessServerAdminPanel = useMemo(() => {
     return servers.some((server) => {
       const roles = Array.isArray(server?.roles) ? server.roles : [];
@@ -2046,6 +2051,17 @@ export function App() {
       window.removeEventListener("mouseup", onUp);
     };
   }, [fullProfileDraggingElementId, fullProfileDraft.elements]);
+
+  useEffect(() => {
+    const elements = fullProfileDraft?.elements || [];
+    if (!elements.length) {
+      if (profileStudioSelectedElementId) setProfileStudioSelectedElementId("");
+      return;
+    }
+    if (!profileStudioSelectedElementId || !elements.some((item) => item.id === profileStudioSelectedElementId)) {
+      setProfileStudioSelectedElementId(elements[0].id);
+    }
+  }, [fullProfileDraft?.elements, profileStudioSelectedElementId]);
 
   useEffect(() => {
     const onGlobalClick = () => {
@@ -4235,26 +4251,44 @@ export function App() {
     }));
   }
 
-  function addFullProfileTextBlock() {
+  function addFullProfileElement(elementType) {
+    const type = String(elementType || "").toLowerCase();
+    if (!["avatar", "banner", "name", "bio", "links", "text"].includes(type)) return;
+    const nextId = `${type}-${Date.now()}`;
+    const fallback = type === "banner"
+      ? { x: 0, y: 0, w: 100, h: 34 }
+      : type === "avatar"
+        ? { x: 4, y: 21, w: 20, h: 31 }
+        : type === "name"
+          ? { x: 30, y: 30, w: 66, h: 10 }
+          : type === "bio"
+            ? { x: 4, y: 54, w: 92, h: 22 }
+            : type === "links"
+              ? { x: 4, y: 76, w: 56, h: 20 }
+              : { x: 8, y: 22, w: 58, h: 12 };
     setFullProfileDraft((current) => {
-      const nextIndex = (current.elements || []).filter((item) => item.type === "text").length + 1;
-      const textBlock = {
-        id: `text-${Date.now()}`,
-        type: "text",
-        x: 8,
-        y: Math.min(92, 14 + nextIndex * 10),
-        w: 58,
-        h: 12,
-        order: 10 + nextIndex,
-        text: `Custom text ${nextIndex}`
-      };
+      const nextIndex = (current.elements || []).length + 1;
       return {
         ...current,
         mode: "custom",
         enabled: true,
-        elements: [...(current.elements || []), textBlock]
+        elements: [
+          ...(current.elements || []),
+          {
+            id: nextId,
+            type,
+            ...fallback,
+            order: 10 + nextIndex,
+            text: type === "text" ? `Custom text ${nextIndex}` : ""
+          }
+        ]
       };
     });
+    setProfileStudioSelectedElementId(nextId);
+  }
+
+  function addFullProfileTextBlock() {
+    addFullProfileElement("text");
   }
 
   function removeFullProfileElement(elementId) {
@@ -4263,6 +4297,7 @@ export function App() {
       mode: "custom",
       elements: (current.elements || []).filter((item) => item.id !== elementId)
     }));
+    if (profileStudioSelectedElementId === elementId) setProfileStudioSelectedElementId("");
   }
 
   function addFullProfileLink() {
@@ -4303,6 +4338,19 @@ export function App() {
 
   function resetFullProfileDraftToBasic() {
     setFullProfileDraft(createBasicFullProfile(profile || {}));
+    setProfileStudioSelectedElementId("");
+  }
+
+  function nudgeFullProfileElement(elementId, patch) {
+    const element = (fullProfileDraft?.elements || []).find((item) => item.id === elementId);
+    if (!element) return;
+    updateFullProfileElement(elementId, {
+      x: clampProfilePercent(patch.x ?? element.x, 0, 100, element.x),
+      y: clampProfilePercent(patch.y ?? element.y, 0, 100, element.y),
+      w: clampProfilePercent(patch.w ?? element.w, 1, 100, element.w),
+      h: clampProfilePercent(patch.h ?? element.h, 1, 100, element.h),
+      order: Math.max(0, Math.min(100, Number.isFinite(Number(patch.order)) ? Number(patch.order) : Number(element.order || 0)))
+    });
   }
 
   async function saveFullProfileDraft() {
@@ -4346,6 +4394,7 @@ export function App() {
       x: px - Number(element.x || 0),
       y: py - Number(element.y || 0)
     };
+    setProfileStudioSelectedElementId(elementId);
     setFullProfileDraggingElementId(elementId);
   }
 
@@ -7134,10 +7183,130 @@ export function App() {
         )}
 
         {navMode === "profile" && (
-          <div className="social-panel">
-            <h3>Your Profile</h3>
-            <p className="hint">Manage your public details and account appearance in Settings.</p>
-            <button onClick={() => { setSettingsOpen(true); setSettingsTab("profile"); }}>Open Profile Settings</button>
+          <div className="profile-studio">
+            <section className="profile-studio-header card">
+              <div>
+                <h3>Profile Studio</h3>
+                <p className="hint">Full-page profile builder with drag and drop editing.</p>
+              </div>
+              <div className="row-actions">
+                <button type="button" className="ghost" onClick={resetFullProfileDraftToBasic}>Reset</button>
+                <button type="button" onClick={saveFullProfileDraft}>Save Full Profile</button>
+              </div>
+            </section>
+
+            <section className="profile-studio-layout">
+              <aside className="card profile-studio-panel">
+                <h4>Identity</h4>
+                <label>Display Name<input value={profileForm.displayName} onChange={(event) => setProfileForm((current) => ({ ...current, displayName: event.target.value }))} /></label>
+                <label>Bio<textarea rows={3} value={profileForm.bio} onChange={(event) => setProfileForm((current) => ({ ...current, bio: event.target.value }))} /></label>
+                <label>Avatar URL<input value={profileForm.pfpUrl} onChange={(event) => setProfileForm((current) => ({ ...current, pfpUrl: event.target.value }))} /></label>
+                <label>Upload Avatar<input type="file" accept="image/*" onChange={onAvatarUpload} /></label>
+                <label>Banner URL<input value={profileForm.bannerUrl} onChange={(event) => setProfileForm((current) => ({ ...current, bannerUrl: event.target.value }))} /></label>
+                <label>Upload Banner<input type="file" accept="image/*" onChange={onBannerUpload} /></label>
+                <button type="button" onClick={saveProfile}>Save Identity</button>
+
+                <h4>Add Elements</h4>
+                <div className="profile-studio-tool-grid">
+                  <button type="button" className="ghost" onClick={() => addFullProfileElement("avatar")}>Avatar</button>
+                  <button type="button" className="ghost" onClick={() => addFullProfileElement("banner")}>Banner</button>
+                  <button type="button" className="ghost" onClick={() => addFullProfileElement("name")}>Name</button>
+                  <button type="button" className="ghost" onClick={() => addFullProfileElement("bio")}>Bio</button>
+                  <button type="button" className="ghost" onClick={() => addFullProfileElement("links")}>Links</button>
+                  <button type="button" className="ghost" onClick={addFullProfileTextBlock}>Text</button>
+                </div>
+                {!hasBoostForFullProfiles && <p className="hint">Boost is required to save custom layouts.</p>}
+              </aside>
+
+              <section className="card profile-studio-canvas-wrap">
+                <div className="profile-studio-canvas-head">
+                  <h4>Canvas</h4>
+                  <p className="hint">Drag elements directly to place them.</p>
+                </div>
+                <div
+                  ref={fullProfileEditorCanvasRef}
+                  className={`full-profile-canvas profile-studio-canvas ${hasBoostForFullProfiles ? "" : "locked"}`}
+                  style={{
+                    background: fullProfileDraft?.theme?.background || "linear-gradient(150deg, #16274b, #0f1a33 65%)",
+                    color: fullProfileDraft?.theme?.text || "#dfe9ff"
+                  }}
+                >
+                  <div className="full-profile-canvas-card" style={{ background: fullProfileDraft?.theme?.card || "rgba(9, 14, 28, 0.62)" }}>
+                    {(fullProfileDraft?.elements || [])
+                      .slice()
+                      .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+                      .map((element) => (
+                        <div
+                          key={element.id}
+                          className={`full-profile-element full-profile-element-${element.type} ${fullProfileDraggingElementId === element.id ? "dragging" : ""} ${profileStudioSelectedElementId === element.id ? "selected" : ""}`}
+                          style={{ left: `${element.x}%`, top: `${element.y}%`, width: `${element.w}%`, height: `${element.h}%` }}
+                          onMouseDown={(event) => {
+                            if (!hasBoostForFullProfiles) return;
+                            onFullProfileElementMouseDown(event, element.id);
+                          }}
+                          onClick={() => setProfileStudioSelectedElementId(element.id)}
+                        >
+                          {renderFullProfileElement(element, { ...(profile || {}), ...profileForm, fullProfile: fullProfileDraft })}
+                        </div>
+                      ))}
+                  </div>
+                  {!hasBoostForFullProfiles && (
+                    <div className="full-profile-lock-overlay">
+                      <p>Boost required for full customization.</p>
+                      <button type="button" onClick={() => openBoostUpsell("Boost required", "Custom full profiles are a Boost perk.", "Open billing")}>See Boost</button>
+                    </div>
+                  )}
+                </div>
+              </section>
+
+              <aside className="card profile-studio-panel">
+                <h4>Inspector</h4>
+                {selectedProfileStudioElement ? (
+                  <>
+                    <p className="hint">Editing: <strong>{selectedProfileStudioElement.type}</strong></p>
+                    {selectedProfileStudioElement.type === "text" && (
+                      <label>Text<input value={selectedProfileStudioElement.text || ""} onChange={(event) => updateFullProfileElement(selectedProfileStudioElement.id, { text: event.target.value })} /></label>
+                    )}
+                    <label>X
+                      <input type="range" min={0} max={100} value={Math.round(selectedProfileStudioElement.x)} onChange={(event) => nudgeFullProfileElement(selectedProfileStudioElement.id, { x: event.target.value })} />
+                    </label>
+                    <label>Y
+                      <input type="range" min={0} max={100} value={Math.round(selectedProfileStudioElement.y)} onChange={(event) => nudgeFullProfileElement(selectedProfileStudioElement.id, { y: event.target.value })} />
+                    </label>
+                    <label>Width
+                      <input type="range" min={1} max={100} value={Math.round(selectedProfileStudioElement.w)} onChange={(event) => nudgeFullProfileElement(selectedProfileStudioElement.id, { w: event.target.value })} />
+                    </label>
+                    <label>Height
+                      <input type="range" min={1} max={100} value={Math.round(selectedProfileStudioElement.h)} onChange={(event) => nudgeFullProfileElement(selectedProfileStudioElement.id, { h: event.target.value })} />
+                    </label>
+                    <div className="row-actions">
+                      <button type="button" className="ghost" onClick={() => nudgeFullProfileElement(selectedProfileStudioElement.id, { order: Number(selectedProfileStudioElement.order || 0) + 1 })}>Bring Forward</button>
+                      <button type="button" className="ghost" onClick={() => nudgeFullProfileElement(selectedProfileStudioElement.id, { order: Number(selectedProfileStudioElement.order || 0) - 1 })}>Send Back</button>
+                      {selectedProfileStudioElement.type === "text" && (
+                        <button type="button" className="danger" onClick={() => removeFullProfileElement(selectedProfileStudioElement.id)}>Remove</button>
+                      )}
+                    </div>
+                  </>
+                ) : (
+                  <p className="hint">Select an element on the canvas.</p>
+                )}
+
+                <h4>Theme</h4>
+                <label>Canvas Background<input value={fullProfileDraft?.theme?.background || ""} onChange={(event) => setFullProfileDraft((current) => ({ ...current, mode: "custom", theme: { ...(current.theme || {}), background: event.target.value } }))} /></label>
+                <label>Card Surface<input value={fullProfileDraft?.theme?.card || ""} onChange={(event) => setFullProfileDraft((current) => ({ ...current, mode: "custom", theme: { ...(current.theme || {}), card: event.target.value } }))} /></label>
+                <label>Text Color<input value={fullProfileDraft?.theme?.text || ""} onChange={(event) => setFullProfileDraft((current) => ({ ...current, mode: "custom", theme: { ...(current.theme || {}), text: event.target.value } }))} /></label>
+
+                <h4>Links</h4>
+                {(fullProfileDraft?.links || []).map((link) => (
+                  <div key={link.id} className="full-profile-link-editor">
+                    <input value={link.label || ""} placeholder="Label" onChange={(event) => updateFullProfileLink(link.id, { label: event.target.value })} />
+                    <input value={link.url || ""} placeholder="https://..." onChange={(event) => updateFullProfileLink(link.id, { url: event.target.value })} />
+                    <button type="button" className="danger" onClick={() => removeFullProfileLink(link.id)}>Remove</button>
+                  </div>
+                ))}
+                <button type="button" className="ghost" onClick={addFullProfileLink}>Add Link</button>
+              </aside>
+            </section>
           </div>
         )}
       </main>
@@ -7625,93 +7794,18 @@ export function App() {
                   <button onClick={saveProfile}>Save Profile</button>
 
                   <hr style={{ borderColor: "var(--border-subtle)", width: "100%" }} />
-                  <h4>Full Profile (Boost)</h4>
-                  <p className="hint">
-                    Non-boost users automatically use avatar + banner + bio. Boost lets you fully customize layout, links, and text blocks.
-                  </p>
-                  <div
-                    ref={fullProfileEditorCanvasRef}
-                    className={`full-profile-canvas ${hasBoostForFullProfiles ? "" : "locked"}`}
-                    style={{
-                      background: fullProfileDraft?.theme?.background || "linear-gradient(150deg, #16274b, #0f1a33 65%)",
-                      color: fullProfileDraft?.theme?.text || "#dfe9ff"
+                  <h4>Full Profile Studio</h4>
+                  <p className="hint">Use the dedicated Profile page for drag-and-drop full profile customization.</p>
+                  <button
+                    type="button"
+                    className="ghost"
+                    onClick={() => {
+                      setSettingsOpen(false);
+                      setNavMode("profile");
                     }}
                   >
-                    <div
-                      className="full-profile-canvas-card"
-                      style={{ background: fullProfileDraft?.theme?.card || "rgba(9, 14, 28, 0.62)" }}
-                    >
-                      {(fullProfileDraft?.elements || [])
-                        .slice()
-                        .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
-                        .map((element) => (
-                          <div
-                            key={element.id}
-                            className={`full-profile-element full-profile-element-${element.type} ${fullProfileDraggingElementId === element.id ? "dragging" : ""}`}
-                            style={{
-                              left: `${element.x}%`,
-                              top: `${element.y}%`,
-                              width: `${element.w}%`,
-                              height: `${element.h}%`
-                            }}
-                            onMouseDown={(event) => {
-                              if (!hasBoostForFullProfiles) return;
-                              onFullProfileElementMouseDown(event, element.id);
-                            }}
-                          >
-                            {renderFullProfileElement(element, { ...(profile || {}), fullProfile: fullProfileDraft })}
-                          </div>
-                        ))}
-                    </div>
-                    {!hasBoostForFullProfiles && (
-                      <div className="full-profile-lock-overlay">
-                        <p>Boost required for full customization.</p>
-                        <button type="button" onClick={() => openBoostUpsell("Boost required", "Custom full profiles are a Boost perk.", "Open billing")}>See Boost</button>
-                      </div>
-                    )}
-                  </div>
-
-                  <label>Canvas Background<input value={fullProfileDraft?.theme?.background || ""} onChange={(event) => setFullProfileDraft((current) => ({ ...current, mode: "custom", theme: { ...(current.theme || {}), background: event.target.value } }))} /></label>
-                  <label>Card Surface<input value={fullProfileDraft?.theme?.card || ""} onChange={(event) => setFullProfileDraft((current) => ({ ...current, mode: "custom", theme: { ...(current.theme || {}), card: event.target.value } }))} /></label>
-                  <label>Text Color<input value={fullProfileDraft?.theme?.text || ""} onChange={(event) => setFullProfileDraft((current) => ({ ...current, mode: "custom", theme: { ...(current.theme || {}), text: event.target.value } }))} /></label>
-
-                  <div className="full-profile-editor-grid">
-                    {(fullProfileDraft?.elements || []).map((element) => (
-                      <div key={`editor-${element.id}`} className="full-profile-editor-item">
-                        <div className="full-profile-editor-item-head">
-                          <strong>{element.type}</strong>
-                          {element.type === "text" && <button type="button" className="danger" onClick={() => removeFullProfileElement(element.id)}>Remove</button>}
-                        </div>
-                        {element.type === "text" && (
-                          <input value={element.text || ""} onChange={(event) => updateFullProfileElement(element.id, { text: event.target.value })} placeholder="Text content" />
-                        )}
-                        <div className="full-profile-editor-item-row">
-                          <label>X<input type="number" min={0} max={100} value={Math.round(element.x)} onChange={(event) => updateFullProfileElement(element.id, { x: clampProfilePercent(event.target.value, 0, 100, element.x) })} /></label>
-                          <label>Y<input type="number" min={0} max={100} value={Math.round(element.y)} onChange={(event) => updateFullProfileElement(element.id, { y: clampProfilePercent(event.target.value, 0, 100, element.y) })} /></label>
-                          <label>W<input type="number" min={1} max={100} value={Math.round(element.w)} onChange={(event) => updateFullProfileElement(element.id, { w: clampProfilePercent(event.target.value, 1, 100, element.w) })} /></label>
-                          <label>H<input type="number" min={1} max={100} value={Math.round(element.h)} onChange={(event) => updateFullProfileElement(element.id, { h: clampProfilePercent(event.target.value, 1, 100, element.h) })} /></label>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-
-                  <div className="row-actions" style={{ width: "100%" }}>
-                    <button type="button" className="ghost" onClick={addFullProfileTextBlock}>Add Text Block</button>
-                    <button type="button" className="ghost" onClick={resetFullProfileDraftToBasic}>Reset to Default</button>
-                  </div>
-
-                  <h5 style={{ margin: "0.25rem 0" }}>Links</h5>
-                  {(fullProfileDraft?.links || []).map((link) => (
-                    <div key={link.id} className="full-profile-link-editor">
-                      <input value={link.label || ""} placeholder="Label" onChange={(event) => updateFullProfileLink(link.id, { label: event.target.value })} />
-                      <input value={link.url || ""} placeholder="https://..." onChange={(event) => updateFullProfileLink(link.id, { url: event.target.value })} />
-                      <button type="button" className="danger" onClick={() => removeFullProfileLink(link.id)}>Remove</button>
-                    </div>
-                  ))}
-                  <div className="row-actions" style={{ width: "100%" }}>
-                    <button type="button" className="ghost" onClick={addFullProfileLink}>Add Link</button>
-                    <button type="button" onClick={saveFullProfileDraft}>Save Full Profile</button>
-                  </div>
+                    Open Profile Studio
+                  </button>
 
                   <hr style={{ borderColor: "var(--border-subtle)", width: "100%" }} />
                   <h4>Rich Presence (RPC-style)</h4>

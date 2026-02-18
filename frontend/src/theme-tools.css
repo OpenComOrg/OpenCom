@@ -168,6 +168,9 @@ button.ghost {
   grid-template-columns: 280px minmax(0, 1fr);
   gap: 12px;
 }
+.creator-layout-wide {
+  grid-template-columns: 260px minmax(0, 1fr);
+}
 
 .creator-sidebar,
 .creator-main {
@@ -202,11 +205,54 @@ button.ghost {
   border-color: rgba(124, 192, 255, 0.62);
 }
 
+.creator-grid-2 {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.creator-visual-builder {
+  padding: 12px;
+  display: grid;
+  gap: 10px;
+}
+
+.creator-visual-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+}
+
+.creator-preview {
+  border-radius: 12px;
+  padding: 14px;
+  border: 1px solid rgba(153, 183, 242, 0.35);
+}
+
+.creator-preview-card {
+  padding: 12px;
+  border: 1px solid rgba(171, 196, 246, 0.32);
+  display: grid;
+  gap: 6px;
+}
+
+.creator-preview-card p {
+  margin: 0;
+}
+
 @media (max-width: 860px) {
   .theme-tool-filters {
     grid-template-columns: minmax(0, 1fr);
   }
   .creator-layout {
     grid-template-columns: minmax(0, 1fr);
+  }
+  .creator-grid-2 {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .creator-visual-head {
+    flex-direction: column;
+    align-items: flex-start;
   }
 }

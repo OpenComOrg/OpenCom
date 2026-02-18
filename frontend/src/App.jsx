@@ -397,6 +397,28 @@ function useThemeCss() {
     localStorage.setItem(THEME_ENABLED_STORAGE_KEY, enabled ? "1" : "0");
   }, [css, enabled]);
 
+  useEffect(() => {
+    const onThemeUpdated = (event) => {
+      const nextCss = String(event?.detail?.css ?? localStorage.getItem(THEME_STORAGE_KEY) || "");
+      const nextEnabled = event?.detail?.enabled !== undefined
+        ? !!event.detail.enabled
+        : localStorage.getItem(THEME_ENABLED_STORAGE_KEY) !== "0";
+      setCss(nextCss);
+      setEnabled(nextEnabled);
+    };
+    const onStorage = (event) => {
+      if (!event || (event.key !== THEME_STORAGE_KEY && event.key !== THEME_ENABLED_STORAGE_KEY)) return;
+      onThemeUpdated({});
+    };
+
+    window.addEventListener("opencom-theme-updated", onThemeUpdated);
+    window.addEventListener("storage", onStorage);
+    return () => {
+      window.removeEventListener("opencom-theme-updated", onThemeUpdated);
+      window.removeEventListener("storage", onStorage);
+    };
+  }, []);
+
   return [css, setCss, enabled, setEnabled];
 }
 
@@ -8139,6 +8161,14 @@ export function App() {
                   <label><input type="checkbox" checked={themeEnabled} onChange={(event) => setThemeEnabled(event.target.checked)} /> Enable custom CSS</label>
                   <input type="file" accept="text/css,.css" onChange={onUploadTheme} />
                   <textarea value={themeCss} onChange={(event) => setThemeCss(event.target.value)} rows={10} placeholder="Paste custom CSS" />
+                  <div className="row-actions" style={{ width: "100%", marginTop: "0.5rem" }}>
+                    <button type="button" className="ghost" onClick={() => window.open("/theme-catalog.html", "_blank", "noopener,noreferrer")}>
+                      Open Theme Catalogue
+                    </button>
+                    <button type="button" className="ghost" onClick={() => window.open("/theme-creator.html", "_blank", "noopener,noreferrer")}>
+                      Open Theme Creator
+                    </button>
+                  </div>
                 </section>
               )}
 

@@ -1293,6 +1293,45 @@ button.danger { background: linear-gradient(135deg, #eb5d73, #c84159); }
   cursor: pointer;
   font: inherit;
 }
+.message-image-link-embed,
+.message-image-attachment {
+  display: block;
+  border: 1px solid rgba(125, 164, 255, 0.28);
+  background: rgba(17, 27, 47, 0.9);
+  border-radius: calc(var(--radius) * 0.65);
+  overflow: hidden;
+  text-decoration: none;
+  color: var(--text-soft);
+}
+.message-image-link-embed img,
+.message-image-attachment img {
+  width: 100%;
+  max-height: 380px;
+  object-fit: contain;
+  background: #0a1020;
+  display: block;
+}
+.message-image-link-meta,
+.message-image-attachment-meta {
+  padding: 0.45em 0.6em;
+}
+.message-image-link-meta strong,
+.message-image-attachment-meta strong {
+  color: var(--text-main);
+}
+.message-image-link-meta p,
+.message-image-attachment-meta p {
+  margin: 0.15em 0 0;
+  font-size: 0.84em;
+  color: var(--text-dim);
+  word-break: break-word;
+}
+.message-image-attachment {
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
 .message-invite-embed {
   border: 1px solid rgba(125, 164, 255, 0.28);
   background: linear-gradient(180deg, rgba(29, 31, 40, 0.94), rgba(20, 24, 36, 0.96));

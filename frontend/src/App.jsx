@@ -756,6 +756,7 @@ export function App() {
   const [boostGiftCheckoutBusy, setBoostGiftCheckoutBusy] = useState(false);
   const [boostGiftSent, setBoostGiftSent] = useState([]);
   const [linkPreviewByUrl, setLinkPreviewByUrl] = useState({});
+  const [attachmentPreviewUrlById, setAttachmentPreviewUrlById] = useState({});
   const [addServerModalOpen, setAddServerModalOpen] = useState(false);
   const [addServerTab, setAddServerTab] = useState("create");
   const [serverContextMenu, setServerContextMenu] = useState(null);
@@ -897,6 +898,8 @@ export function App() {
   const isAtBottomRef = useRef(true);
   const lastDmMessageCountRef = useRef(0);
   const linkPreviewFetchInFlightRef = useRef(new Set());
+  const attachmentPreviewFetchInFlightRef = useRef(new Set());
+  const attachmentPreviewUrlByIdRef = useRef({});
   const autoJoinInviteAttemptRef = useRef("");
   const previousDmIdRef = useRef("");
   const activeChannelIdRef = useRef("");
@@ -918,6 +921,10 @@ export function App() {
   useEffect(() => {
     serversRef.current = servers;
   }, [servers]);
+
+  useEffect(() => {
+    attachmentPreviewUrlByIdRef.current = attachmentPreviewUrlById || {};
+  }, [attachmentPreviewUrlById]);
 
   useEffect(() => {
     const onPopState = () => setRoutePath(getAppRouteFromLocation());
@@ -2394,6 +2401,63 @@ export function App() {
         });
     }
   }, [accessToken, messages, dms, activeDmId, linkPreviewByUrl]);
+
+  useEffect(() => {
+    if (!activeServer?.baseUrl || !activeServer?.membershipToken) return;
+    const candidates = [];
+    for (const message of messages || []) {
+      for (const attachment of message?.attachments || []) {
+        if (!attachment?.id || !isImageMimeType(attachment.contentType)) continue;
+        if (attachmentPreviewUrlById[attachment.id]) continue;
+        if (attachmentPreviewFetchInFlightRef.current.has(attachment.id)) continue;
+        candidates.push(attachment);
+      }
+    }
+
+    for (const attachment of candidates) {
+      attachmentPreviewFetchInFlightRef.current.add(attachment.id);
+      const source = String(attachment.url || "");
+      const requestUrl = source.startsWith("http")
+        ? source
+        : `${activeServer.baseUrl}${source.startsWith("/") ? "" : "/"}${source}`;
+
+      fetch(requestUrl, {
+        headers: { Authorization: `Bearer ${activeServer.membershipToken}` }
+      })
+        .then((response) => response.ok ? response.blob() : null)
+        .then((blob) => {
+          if (!blob || !isImageMimeType(blob.type || attachment.contentType || "")) return;
+          const objectUrl = URL.createObjectURL(blob);
+          setAttachmentPreviewUrlById((current) => {
+            const existing = current[attachment.id];
+            if (existing) URL.revokeObjectURL(objectUrl);
+            return existing ? current : { ...current, [attachment.id]: objectUrl };
+          });
+        })
+        .catch(() => {})
+        .finally(() => {
+          attachmentPreviewFetchInFlightRef.current.delete(attachment.id);
+        });
+    }
+  }, [messages, activeServer?.baseUrl, activeServer?.membershipToken, attachmentPreviewUrlById]);
+
+  useEffect(() => {
+    const old = attachmentPreviewUrlByIdRef.current || {};
+    Object.values(old).forEach((url) => {
+      try { URL.revokeObjectURL(url); } catch {}
+    });
+    attachmentPreviewFetchInFlightRef.current.clear();
+    setAttachmentPreviewUrlById({});
+  }, [activeServerId]);
+
+  useEffect(() => {
+    return () => {
+      const urls = attachmentPreviewUrlByIdRef.current || {};
+      Object.values(urls).forEach((url) => {
+        try { URL.revokeObjectURL(url); } catch {}
+      });
+    };
+  }, []);
 
   useEffect(() => {
     if (navMode !== "servers" || !activeServer) {
@@ -5189,6 +5253,22 @@ export function App() {
     }
   }
 
+  function isImageMimeType(value = "") {
+    return /^image\//i.test(String(value || ""));
+  }
+
+  function isLikelyImageUrl(value = "") {
+    const raw = String(value || "").trim();
+    if (!raw) return false;
+    if (/^data:image\//i.test(raw)) return true;
+    try {
+      const parsed = new URL(raw);
+      return /\.(png|jpe?g|gif|webp|bmp|svg|heic|avif)(?:[?#]|$)/i.test(parsed.pathname || "");
+    } catch {
+      return /\.(png|jpe?g|gif|webp|bmp|svg|heic|avif)(?:[?#]|$)/i.test(raw);
+    }
+  }
+
   function getLinkPreviewForUrl(value) {
     const raw = String(value || "");
     if (!raw) return null;
@@ -5291,6 +5371,21 @@ export function App() {
       );
     }
 
+    const imageUrl = String(embed?.imageUrl || preview?.imageUrl || "").trim();
+    const fallbackImageUrl = !imageUrl && isLikelyImageUrl(embed?.url) ? String(embed.url) : "";
+    const resolvedImageUrl = imageUrl || fallbackImageUrl;
+    if (resolvedImageUrl) {
+      return (
+        <a key={key} className="message-image-link-embed" href={embed.url} target="_blank" rel="noreferrer">
+          <img src={resolvedImageUrl} alt={embed.title || "Image"} loading="lazy" />
+          <div className="message-image-link-meta">
+            <strong>{embed.title || "Image"}</strong>
+            <p>{embed.url}</p>
+          </div>
+        </a>
+      );
+    }
+
     return (
       <a key={key} className="message-embed-card" href={embed.url} target="_blank" rel="noreferrer">
         <strong>{embed.title || "Link"}</strong>
@@ -5298,6 +5393,49 @@ export function App() {
         <p>{embed.url}</p>
         {embed.action?.label && <small>{embed.action.label}</small>}
       </a>
+    );
+  }
+
+  function renderMessageAttachmentCard(attachment, key) {
+    const imagePreviewUrl = attachmentPreviewUrlById[attachment?.id] || "";
+    const directUrl = String(attachment?.url || "");
+    const directImageUrl = isLikelyImageUrl(directUrl) ? directUrl : "";
+    const imageUrl = imagePreviewUrl || directImageUrl;
+    const isImage = isImageMimeType(attachment?.contentType || "") || Boolean(imageUrl);
+
+    if (isImage && imageUrl) {
+      return (
+        <button
+          key={key}
+          type="button"
+          className="message-image-attachment"
+          onClick={(event) => {
+            event.stopPropagation();
+            openMessageAttachment(attachment);
+          }}
+        >
+          <img src={imageUrl} alt={attachment?.fileName || "Image attachment"} loading="lazy" />
+          <div className="message-image-attachment-meta">
+            <strong>{attachment?.fileName || "Image"}</strong>
+            <p>{attachment?.contentType || "image"}</p>
+          </div>
+        </button>
+      );
+    }
+
+    return (
+      <button
+        key={key}
+        type="button"
+        className="message-embed-card message-embed-card-btn"
+        onClick={(event) => {
+          event.stopPropagation();
+          openMessageAttachment(attachment);
+        }}
+      >
+        <strong>{attachment?.fileName || "Attachment"}</strong>
+        <p>{attachment?.contentType || "file"}</p>
+      </button>
     );
   }
 
@@ -5769,20 +5907,7 @@ export function App() {
                                 )}
                                 {Array.isArray(message?.attachments) && message.attachments.length > 0 && (
                                   <div className="message-embeds">
-                                    {message.attachments.map((attachment, index) => (
-                                      <button
-                                        key={`${message.id}-att-${index}`}
-                                        type="button"
-                                        className="message-embed-card message-embed-card-btn"
-                                        onClick={(event) => {
-                                          event.stopPropagation();
-                                          openMessageAttachment(attachment);
-                                        }}
-                                      >
-                                        <strong>{attachment.fileName || "Attachment"}</strong>
-                                        <p>{attachment.contentType || "file"}</p>
-                                      </button>
-                                    ))}
+                                    {message.attachments.map((attachment, index) => renderMessageAttachmentCard(attachment, `${message.id}-att-${index}`))}
                                   </div>
                                 )}
                               </div>
@@ -6111,6 +6236,11 @@ export function App() {
                               {derivedLinkEmbeds.length > 0 && (
                                 <div className="message-embeds">
                                   {derivedLinkEmbeds.map((embed, index) => renderMessageLinkEmbedCard(embed, `${message.id}-dm-derived-link-${index}`))}
+                                </div>
+                              )}
+                              {Array.isArray(message?.attachments) && message.attachments.length > 0 && (
+                                <div className="message-embeds">
+                                  {message.attachments.map((attachment, index) => renderMessageAttachmentCard(attachment, `${message.id}-dm-att-${index}`))}
                                 </div>
                               )}
                             </div>

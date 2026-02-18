@@ -1788,31 +1788,6 @@ button.danger { background: linear-gradient(135deg, #eb5d73, #c84159); }
   letter-spacing: -0.02em;
 }
 
-.voice-channel-member-controls {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-
-.voice-mini-btn {
-  font-size: 0.74em;
-  padding: 2px 6px;
-  border-radius: 8px;
-}
-
-.voice-volume-control {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 0.74em;
-  color: var(--text-dim);
-}
-
-.voice-volume-control input[type="range"] {
-  width: 78px;
-}
-
 .speaking {
   box-shadow: 0 0 0 2px rgba(53, 214, 130, 0.95), 0 0 10px rgba(53, 214, 130, 0.35);
 }

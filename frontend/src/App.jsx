@@ -6416,63 +6416,18 @@ export function App() {
                               <div className="voice-channel-members">
                                 {voiceMembersByChannel.get(channel.id).map((member) => {
                                   const speaking = !!voiceSpeakingByGuild[activeGuildId]?.[member.userId];
-                                  const audioPref = getVoiceMemberAudioPref(member.userId);
-                                  const canModerateThisMember = member.userId !== me?.id;
                                   return (
-                                    <div key={`${channel.id}-${member.userId}`} className="voice-channel-member-row">
+                                    <div
+                                      key={`${channel.id}-${member.userId}`}
+                                      className="voice-channel-member-row"
+                                      onContextMenu={(event) => openMemberContextMenu(event, member)}
+                                    >
                                       <div className="voice-channel-member-main">
                                         <div className={`avatar member-avatar vc-avatar ${speaking ? "speaking" : ""}`}>
                                           {member.pfp_url ? <img src={profileImageUrl(member.pfp_url)} alt={member.username} className="avatar-image" /> : getInitials(member.username)}
                                         </div>
                                         <span className="voice-channel-member-name">{member.username}</span>
                                         <span className="voice-channel-member-icons">{member.deafened ? "🔇" : member.muted ? "🎙️" : "🎤"}</span>
-                                      </div>
-                                      <div className="voice-channel-member-controls">
-                                        <button
-                                          type="button"
-                                          className={`voice-mini-btn ${audioPref.muted ? "danger" : "ghost"}`}
-                                          onClick={() => setVoiceMemberAudioPref(member.userId, { muted: !audioPref.muted })}
-                                        >
-                                          {audioPref.muted ? "Unmute local" : "Mute local"}
-                                        </button>
-                                        <label className="voice-volume-control">
-                                          <span>{audioPref.volume}%</span>
-                                          <input
-                                            type="range"
-                                            min={0}
-                                            max={100}
-                                            step={1}
-                                            value={audioPref.volume}
-                                            onChange={(event) => setVoiceMemberAudioPref(member.userId, { volume: Number(event.target.value) })}
-                                          />
-                                        </label>
-                                        {canModerateThisMember && canServerMuteMembers && (
-                                          <button
-                                            type="button"
-                                            className={`voice-mini-btn ${member.muted ? "danger" : "ghost"}`}
-                                            onClick={() => setServerVoiceMemberState(channel.id, member.userId, { muted: !member.muted })}
-                                          >
-                                            {member.muted ? "Server Unmute" : "Server Mute"}
-                                          </button>
-                                        )}
-                                        {canModerateThisMember && canServerDeafenMembers && (
-                                          <button
-                                            type="button"
-                                            className={`voice-mini-btn ${member.deafened ? "danger" : "ghost"}`}
-                                            onClick={() => setServerVoiceMemberState(channel.id, member.userId, { deafened: !member.deafened })}
-                                          >
-                                            {member.deafened ? "Server Undeafen" : "Server Deafen"}
-                                          </button>
-                                        )}
-                                        {canModerateThisMember && canMoveVoiceMembers && (
-                                          <button
-                                            type="button"
-                                            className="voice-mini-btn danger"
-                                            onClick={() => disconnectVoiceMember(channel.id, member.userId)}
-                                          >
-                                            Disconnect
-                                          </button>
-                                        )}
                                       </div>
                                     </div>
                                   );

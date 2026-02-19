@@ -72,7 +72,8 @@ function createBasicFullProfile(profileData = {}) {
       { id: "name", type: "name", x: 30, y: 30, w: 66, h: 10, order: 2 },
       { id: "bio", type: "bio", x: 4, y: 54, w: 92, h: hasBio ? 30 : 18, order: 3 }
     ],
-    links: []
+    links: [],
+    music: { url: "", autoplay: false, loop: true, volume: 60 }
   };
 }
 
@@ -131,13 +132,23 @@ function normalizeFullProfile(profileData = {}, fullProfileCandidate) {
     })
     .filter(Boolean);
 
+  const rawMusic = raw.music && typeof raw.music === "object" ? raw.music : {};
+  const candidateMusicUrl = String(rawMusic.url || "").trim().slice(0, 500);
+  const music = {
+    url: /^(https?:\/\/|\/|users\/)/i.test(candidateMusicUrl) ? candidateMusicUrl : "",
+    autoplay: !!rawMusic.autoplay,
+    loop: rawMusic.loop !== false,
+    volume: Math.max(0, Math.min(100, Number.isFinite(Number(rawMusic.volume)) ? Math.round(Number(rawMusic.volume)) : 60))
+  };
+
   return {
     version: 1,
     mode: raw.mode === "custom" ? "custom" : "basic",
     enabled: raw.enabled !== false,
     theme,
     elements: elements.length ? elements : basic.elements,
-    links
+    links,
+    music
   };
 }
 
@@ -794,6 +805,7 @@ export function App() {
   const [fullProfileViewer, setFullProfileViewer] = useState(null);
   const [fullProfileDraggingElementId, setFullProfileDraggingElementId] = useState("");
   const [profileStudioSelectedElementId, setProfileStudioSelectedElementId] = useState("");
+  const [profileStudioScale, setProfileStudioScale] = useState(100);
   const fullProfileDragOffsetRef = useRef({ x: 0, y: 0 });
   const fullProfileEditorCanvasRef = useRef(null);
   const [rpcForm, setRpcForm] = useState({
@@ -5702,10 +5714,16 @@ export function App() {
   }
 
   const MAX_IMAGE_BYTES = 25 * 1024 * 1024; // 25MB for raw image upload
+  const MAX_AUDIO_BYTES = 25 * 1024 * 1024; // 25MB for profile music upload
 
   function isAcceptedImage(file) {
     if (!file?.type) return false;
     return file.type.startsWith("image/");
+  }
+
+  function isAcceptedAudio(file) {
+    if (!file?.type) return false;
+    return file.type.startsWith("audio/");
   }
 
   async function uploadProfileImage(file, endpoint) {
@@ -5741,6 +5759,29 @@ export function App() {
       const data = await uploadProfileImage(file, "/v1/images/upload");
       if (!data?.imageUrl) throw new Error("UPLOAD_FAILED");
       onUploaded(data.imageUrl);
+      setStatus(`${label} uploaded.`);
+    } catch (error) {
+      setStatus(error?.message || "Upload failed.");
+    }
+  }
+
+  async function onAudioFieldUpload(event, label, onUploaded) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    if (!isAcceptedAudio(file)) {
+      setStatus("Please choose an audio file (MP3, WAV, OGG, M4A).");
+      return;
+    }
+    if (file.size > MAX_AUDIO_BYTES) {
+      setStatus(`Audio too large. Max ${Math.round(MAX_AUDIO_BYTES / 1024 / 1024)}MB.`);
+      return;
+    }
+    try {
+      setStatus(`Uploading ${label}...`);
+      const data = await uploadProfileImage(file, "/v1/media/upload");
+      if (!data?.mediaUrl) throw new Error("UPLOAD_FAILED");
+      onUploaded(data.mediaUrl);
       setStatus(`${label} uploaded.`);
     } catch (error) {
       setStatus(error?.message || "Upload failed.");
@@ -7183,11 +7224,17 @@ export function App() {
         )}
 
         {navMode === "profile" && (
-          <div className="profile-studio">
+          <div className="profile-studio profile-studio-full-page" style={{ fontSize: `${Math.max(0.8, Math.min(1.5, profileStudioScale / 100))}rem` }}>
             <section className="profile-studio-header card">
               <div>
                 <h3>Profile Studio</h3>
                 <p className="hint">Full-page profile builder with drag and drop editing.</p>
+              </div>
+              <div className="profile-studio-scale">
+                <label>
+                  UI Scale ({profileStudioScale}%)
+                  <input type="range" min={80} max={150} value={profileStudioScale} onChange={(event) => setProfileStudioScale(Number(event.target.value))} />
+                </label>
               </div>
               <div className="row-actions">
                 <button type="button" className="ghost" onClick={resetFullProfileDraftToBasic}>Reset</button>
@@ -7228,7 +7275,8 @@ export function App() {
                   className={`full-profile-canvas profile-studio-canvas ${hasBoostForFullProfiles ? "" : "locked"}`}
                   style={{
                     background: fullProfileDraft?.theme?.background || "linear-gradient(150deg, #16274b, #0f1a33 65%)",
-                    color: fullProfileDraft?.theme?.text || "#dfe9ff"
+                    color: fullProfileDraft?.theme?.text || "#dfe9ff",
+                    minHeight: `${Math.round(620 * Math.max(0.9, Math.min(1.35, profileStudioScale / 100)))}px`
                   }}
                 >
                   <div className="full-profile-canvas-card" style={{ background: fullProfileDraft?.theme?.card || "rgba(9, 14, 28, 0.62)" }}>
@@ -7305,6 +7353,48 @@ export function App() {
                   </div>
                 ))}
                 <button type="button" className="ghost" onClick={addFullProfileLink}>Add Link</button>
+
+                <h4>Profile Music</h4>
+                <label>
+                  Music URL (MP3/WAV/OGG/M4A)
+                  <input
+                    value={fullProfileDraft?.music?.url || ""}
+                    placeholder="https://... or /v1/profile-images/users/..."
+                    onChange={(event) => setFullProfileDraft((current) => ({
+                      ...current,
+                      mode: "custom",
+                      music: { ...(current.music || {}), url: event.target.value }
+                    }))}
+                  />
+                </label>
+                <label>
+                  Upload Music
+                  <input
+                    type="file"
+                    accept="audio/mpeg,audio/mp3,audio/wav,audio/x-wav,audio/ogg,audio/mp4,audio/x-m4a"
+                    onChange={(event) => onAudioFieldUpload(event, "profile music", (mediaUrl) => setFullProfileDraft((current) => ({
+                      ...current,
+                      mode: "custom",
+                      music: { ...(current.music || {}), url: mediaUrl }
+                    })))}
+                  />
+                </label>
+                <label>
+                  Volume ({Math.max(0, Math.min(100, Number(fullProfileDraft?.music?.volume ?? 60)))}%)
+                  <input
+                    type="range"
+                    min={0}
+                    max={100}
+                    value={Math.max(0, Math.min(100, Number(fullProfileDraft?.music?.volume ?? 60)))}
+                    onChange={(event) => setFullProfileDraft((current) => ({
+                      ...current,
+                      mode: "custom",
+                      music: { ...(current.music || {}), volume: Number(event.target.value) }
+                    }))}
+                  />
+                </label>
+                <label><input type="checkbox" checked={!!fullProfileDraft?.music?.autoplay} onChange={(event) => setFullProfileDraft((current) => ({ ...current, mode: "custom", music: { ...(current.music || {}), autoplay: event.target.checked } }))} /> Autoplay when opened</label>
+                <label><input type="checkbox" checked={fullProfileDraft?.music?.loop !== false} onChange={(event) => setFullProfileDraft((current) => ({ ...current, mode: "custom", music: { ...(current.music || {}), loop: event.target.checked } }))} /> Loop track</label>
               </aside>
             </section>
           </div>
@@ -7648,10 +7738,13 @@ export function App() {
 
       {fullProfileViewer && (
         <div className="settings-overlay" onClick={() => setFullProfileViewer(null)}>
-          <div className="add-server-modal full-profile-viewer-modal" onClick={(event) => event.stopPropagation()}>
-            <h3>{fullProfileViewer.displayName || fullProfileViewer.username}'s Full Profile</h3>
+          <div className="full-profile-viewer-fullscreen" onClick={(event) => event.stopPropagation()}>
+            <div className="full-profile-viewer-head">
+              <h3>{fullProfileViewer.displayName || fullProfileViewer.username}'s Full Profile</h3>
+              <button className="danger" onClick={() => setFullProfileViewer(null)}>Close</button>
+            </div>
             <div
-              className="full-profile-canvas full-profile-canvas-readonly"
+              className="full-profile-canvas full-profile-canvas-readonly full-profile-viewer-canvas"
               style={{
                 background: fullProfileViewer.fullProfile?.theme?.background || "linear-gradient(150deg, #16274b, #0f1a33 65%)",
                 color: fullProfileViewer.fullProfile?.theme?.text || "#dfe9ff"
@@ -7680,7 +7773,26 @@ export function App() {
                   ))}
               </div>
             </div>
-            <button className="danger" style={{ width: "100%", marginTop: "0.65rem" }} onClick={() => setFullProfileViewer(null)}>Close</button>
+            {fullProfileViewer.fullProfile?.music?.url && (
+              <div className="full-profile-viewer-audio">
+                <strong>Profile Music</strong>
+                <audio
+                  controls
+                  src={profileImageUrl(fullProfileViewer.fullProfile.music.url) || fullProfileViewer.fullProfile.music.url}
+                  autoPlay={!!fullProfileViewer.fullProfile.music.autoplay}
+                  loop={fullProfileViewer.fullProfile.music.loop !== false}
+                  preload="metadata"
+                  style={{ width: "100%" }}
+                  onLoadedMetadata={(event) => {
+                    try {
+                      event.currentTarget.volume = Math.max(0, Math.min(1, Number(fullProfileViewer.fullProfile?.music?.volume ?? 60) / 100));
+                    } catch {
+                      // ignore
+                    }
+                  }}
+                />
+              </div>
+            )}
           </div>
         </div>
       )}

@@ -25,6 +25,22 @@ function isValidImageReference(value: string) {
   return false;
 }
 
+function isValidMediaReference(value: string) {
+  const trimmed = String(value || "").trim();
+  if (!trimmed) return false;
+  if (/^https?:\/\//i.test(trimmed)) {
+    try {
+      const parsed = new URL(trimmed);
+      return parsed.protocol === "http:" || parsed.protocol === "https:";
+    } catch {
+      return false;
+    }
+  }
+  if (trimmed.startsWith("/")) return true;
+  if (trimmed.startsWith("users/")) return true;
+  return false;
+}
+
 const imageValue = z.string().max(6_000_000).refine(isValidImageReference, "Invalid image format");
 
 const UpdateProfile = z.object({
@@ -61,7 +77,13 @@ const UpdateFullProfile = z.object({
     text: z.string().max(40).optional()
   }).optional(),
   elements: z.array(FullProfileElementInput).max(24).optional(),
-  links: z.array(FullProfileLinkInput).max(16).optional()
+  links: z.array(FullProfileLinkInput).max(16).optional(),
+  music: z.object({
+    url: z.string().max(500).optional(),
+    autoplay: z.boolean().optional(),
+    loop: z.boolean().optional(),
+    volume: z.number().min(0).max(100).optional()
+  }).optional()
 });
 
 /** Extract relative path (users/userId/filename) from stored URL for deleteProfileImage */
@@ -84,6 +106,15 @@ function relPathFromStoredUrl(stored: string | null): string | null {
 }
 
 function normalizeImageReference(value: string) {
+  const trimmed = String(value || "").trim();
+  if (!trimmed) return "";
+  const base = env.PROFILE_IMAGE_BASE_URL.replace(/\/$/, "");
+  if (trimmed.startsWith("users/")) return `${base}/${trimmed}`;
+  if (trimmed.startsWith("/users/")) return `${base}${trimmed}`;
+  return trimmed;
+}
+
+function normalizeMediaReference(value: string) {
   const trimmed = String(value || "").trim();
   if (!trimmed) return "";
   const base = env.PROFILE_IMAGE_BASE_URL.replace(/\/$/, "");
@@ -135,7 +166,13 @@ function buildBasicFullProfile(user: { display_name: string | null; username: st
       { id: "name", type: "name", x: 30, y: 30, w: 66, h: 10, order: 2 },
       { id: "bio", type: "bio", x: 4, y: 54, w: 92, h: hasBio ? 30 : 18, order: 3 }
     ],
-    links: []
+    links: [],
+    music: {
+      url: "",
+      autoplay: false,
+      loop: true,
+      volume: 60
+    }
   };
 }
 
@@ -188,18 +225,32 @@ function normalizeFullProfile(raw: any, fallbackUser: { display_name: string | n
     })
     .filter(Boolean);
 
+  const incomingMusic = raw.music && typeof raw.music === "object" ? raw.music : {};
+  const musicUrlRaw = String(incomingMusic.url || "").trim();
+  const musicUrl = musicUrlRaw && isValidMediaReference(musicUrlRaw) ? normalizeMediaReference(musicUrlRaw).slice(0, 500) : "";
+  const music = {
+    url: musicUrl,
+    autoplay: !!incomingMusic.autoplay,
+    loop: incomingMusic.loop !== false,
+    volume: Math.round(clampNumber(incomingMusic.volume, 0, 100, 60))
+  };
+
   return {
     version: 1,
     mode: "custom",
     enabled: raw.enabled !== false,
     theme,
     elements: elements.length ? elements : basic.elements,
-    links
+    links,
+    music
   };
 }
 
 const ALLOWED_IMAGE_MIMES = new Set([
   "image/png", "image/jpeg", "image/gif", "image/webp", "image/svg+xml", "image/bmp"
+]);
+const ALLOWED_AUDIO_MIMES = new Set([
+  "audio/mpeg", "audio/mp3", "audio/wav", "audio/x-wav", "audio/ogg", "audio/mp4", "audio/x-m4a"
 ]);
 
 const MIME_ALIASES: Record<string, string> = {
@@ -240,7 +291,11 @@ export async function profileRoutes(app: FastifyInstance) {
       ".gif": "image/gif",
       ".webp": "image/webp",
       ".svg": "image/svg+xml",
-      ".bmp": "image/bmp"
+      ".bmp": "image/bmp",
+      ".mp3": "audio/mpeg",
+      ".wav": "audio/wav",
+      ".ogg": "audio/ogg",
+      ".m4a": "audio/mp4"
     };
     const contentType = mime[ext] ?? "application/octet-stream";
     rep.header("Content-Type", contentType);
@@ -320,6 +375,30 @@ export async function profileRoutes(app: FastifyInstance) {
     const saved = saveProfileImageFromBuffer(env.PROFILE_IMAGE_STORAGE_DIR, userId, "asset", buffer, mime);
     if (!saved) return rep.code(500).send({ error: "SAVE_FAILED" });
     return rep.send({ imageUrl: `${env.PROFILE_IMAGE_BASE_URL}/${saved}` });
+  });
+
+  app.post("/v1/media/upload", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
+    const userId = req.user.sub as string;
+    const data = await req.file();
+    if (!data) return rep.code(400).send({ error: "MISSING_FILE" });
+    const rawMime = String(data.mimetype || "").toLowerCase().trim();
+    const mime = MIME_ALIASES[rawMime] ?? rawMime;
+    const filenameExt = path.extname(String(data.filename || "")).toLowerCase();
+    const extToMime: Record<string, string> = {
+      ".mp3": "audio/mpeg",
+      ".wav": "audio/wav",
+      ".ogg": "audio/ogg",
+      ".m4a": "audio/mp4"
+    };
+    const guessedMime = extToMime[filenameExt] || "";
+    const resolvedMime = ALLOWED_AUDIO_MIMES.has(mime) ? mime : (ALLOWED_AUDIO_MIMES.has(guessedMime) ? guessedMime : "");
+    if (!resolvedMime) {
+      return rep.code(400).send({ error: "INVALID_MEDIA_TYPE", allowed: [...ALLOWED_AUDIO_MIMES] });
+    }
+    const buffer = await data.toBuffer();
+    const saved = saveProfileImageFromBuffer(env.PROFILE_IMAGE_STORAGE_DIR, userId, "asset", buffer, resolvedMime);
+    if (!saved) return rep.code(500).send({ error: "SAVE_FAILED" });
+    return rep.send({ mediaUrl: `${env.PROFILE_IMAGE_BASE_URL}/${saved}` });
   });
 
   app.get("/v1/users/:id/profile", async (req, rep) => {

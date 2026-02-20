@@ -643,18 +643,19 @@ function formatMessageTime(value) {
   if (!value) return "just now";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "just now";
+  const timeLabel = date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
   const now = new Date();
   const todayDayIndex = Math.floor(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()) / 86400000);
   const messageDayIndex = Math.floor(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()) / 86400000);
   const dayDiff = todayDayIndex - messageDayIndex;
-  if (dayDiff === 1) return "Yesterday";
+  if (dayDiff === 1) return `${timeLabel} Yesterday`;
   if (dayDiff > 1) {
     const dateOptions = date.getFullYear() === now.getFullYear()
       ? { month: "short", day: "numeric" }
       : { year: "numeric", month: "short", day: "numeric" };
-    return date.toLocaleDateString(undefined, dateOptions);
+    return `${timeLabel} ${date.toLocaleDateString(undefined, dateOptions)}`;
   }
-  return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  return timeLabel;
 }
 
 function rpcFormFromActivity(activity = null) {

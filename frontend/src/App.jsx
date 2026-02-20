@@ -97,6 +97,20 @@ function getContextMenuPoint(clientX, clientY, options = {}) {
   };
 }
 
+function clampProfileCardPosition(left, top, options = {}) {
+  const padding = Number.isFinite(Number(options.padding)) ? Math.max(0, Number(options.padding)) : 8;
+  const cardWidth = Number.isFinite(Number(options.width)) ? Math.max(1, Number(options.width)) : 320;
+  const cardHeight = Number.isFinite(Number(options.height)) ? Math.max(1, Number(options.height)) : 280;
+  const viewportWidth = typeof window !== "undefined" ? window.innerWidth : 1280;
+  const viewportHeight = typeof window !== "undefined" ? window.innerHeight : 720;
+  const maxX = Math.max(padding, viewportWidth - cardWidth - padding);
+  const maxY = Math.max(padding, viewportHeight - cardHeight - padding);
+  return {
+    x: Math.max(padding, Math.min(Number(left) || 0, maxX)),
+    y: Math.max(padding, Math.min(Number(top) || 0, maxY))
+  };
+}
+
 function normalizeFullProfile(profileData = {}, fullProfileCandidate) {
   const basic = createBasicFullProfile(profileData);
   const raw = fullProfileCandidate && typeof fullProfileCandidate === "object" ? fullProfileCandidate : {};
@@ -2080,9 +2094,7 @@ export function App() {
       const rawY = invertProfileDrag
         ? profileCardDragOffsetRef.current.y - event.clientY
         : event.clientY - profileCardDragOffsetRef.current.y;
-      const x = Math.max(8, Math.min(window.innerWidth - 340, rawX));
-      const y = Math.max(8, Math.min(window.innerHeight - 280, rawY));
-      setProfileCardPosition({ x, y });
+      setProfileCardPosition(clampProfileCardPosition(rawX, rawY));
     };
     const onUp = () => setDraggingProfileCard(false);
 
@@ -6026,7 +6038,10 @@ export function App() {
     }
   }
 
-  async function openMemberProfile(member) {
+  async function openMemberProfile(member, anchorPoint = null) {
+    if (anchorPoint && Number.isFinite(Number(anchorPoint.x)) && Number.isFinite(Number(anchorPoint.y))) {
+      setProfileCardPosition(clampProfileCardPosition(Number(anchorPoint.x) + 12, Number(anchorPoint.y) + 12));
+    }
     try {
       const profileData = await api(`/v1/users/${member.id}/profile`, {
         headers: { Authorization: `Bearer ${accessToken}` }
@@ -6264,7 +6279,7 @@ export function App() {
               className="message-mention mention-click"
               onClick={(event) => {
                 event.stopPropagation();
-                openMemberProfile(member);
+                openMemberProfile(member, { x: event.clientX, y: event.clientY });
               }}
             >
               @{member.username || member.id}
@@ -6951,7 +6966,7 @@ export function App() {
                               <button
                                 className="name-btn"
                                 style={roleColor ? { color: roleColor } : undefined}
-                                onClick={() => openMemberProfile({ id: group.authorId, username: group.author, status: getPresence(group.authorId), pfp_url: group.pfpUrl })}
+                                onClick={(event) => openMemberProfile({ id: group.authorId, username: group.author, status: getPresence(group.authorId), pfp_url: group.pfpUrl }, { x: event.clientX, y: event.clientY })}
                                 onContextMenu={(event) => openMemberContextMenu(event, { id: group.authorId, username: group.author, pfp_url: group.pfpUrl, roleIds: member?.roleIds || [] })}
                               >
                                 {group.author}
@@ -7238,7 +7253,7 @@ export function App() {
                             className="member-row"
                             key={member.id}
                             title={`View ${member.username}`}
-                            onClick={(event) => { event.stopPropagation(); openMemberProfile(member); }}
+                            onClick={(event) => { event.stopPropagation(); openMemberProfile(member, { x: event.clientX, y: event.clientY }); }}
                             onContextMenu={(event) => openMemberContextMenu(event, member)}
                           >
                             <div className={speaking ? "speaking" : ""}>
@@ -7302,7 +7317,7 @@ export function App() {
                           <strong className="msg-author">
                             <button
                               className="name-btn"
-                              onClick={() => openMemberProfile({ id: group.authorId, username: group.author, status: getPresence(group.authorId), pfp_url: group.pfpUrl })}
+                              onClick={(event) => openMemberProfile({ id: group.authorId, username: group.author, status: getPresence(group.authorId), pfp_url: group.pfpUrl }, { x: event.clientX, y: event.clientY })}
                               onContextMenu={(event) => openMemberContextMenu(event, { id: group.authorId, username: group.author, pfp_url: group.pfpUrl })}
                             >
                               {group.author}
@@ -7430,7 +7445,7 @@ export function App() {
             <aside className="active-now">
               <h4>Active Now</h4>
               {filteredFriends.slice(0, 5).map((friend) => (
-                <button key={`active-${friend.id}`} className="active-card" onClick={(event) => { event.stopPropagation(); openMemberProfile(friend); }}>
+                <button key={`active-${friend.id}`} className="active-card" onClick={(event) => { event.stopPropagation(); openMemberProfile(friend, { x: event.clientX, y: event.clientY }); }}>
                   <div className="friend-row-main">
                     {renderPresenceAvatar({ userId: friend.id, username: friend.username, pfpUrl: friend.pfp_url, size: 30 })}
                     <div className="friend-meta">
@@ -7726,7 +7741,7 @@ export function App() {
               </>
             );
           })()}
-          <button onClick={() => { openMemberProfile(memberContextMenu.member); setMemberContextMenu(null); }}>View Profile</button>
+          <button onClick={() => { openMemberProfile(memberContextMenu.member, { x: memberContextMenu.x, y: memberContextMenu.y }); setMemberContextMenu(null); }}>View Profile</button>
           <button onClick={() => { openDmFromFriend({ id: memberContextMenu.member.id, username: memberContextMenu.member.username || memberContextMenu.member.id }); setMemberContextMenu(null); }}>
             Message
           </button>
@@ -7892,7 +7907,7 @@ export function App() {
       {memberProfileCard && (
         <div
           className="member-profile-popout"
-          style={{ right: profileCardPosition.x, bottom: profileCardPosition.y }}
+          style={{ left: profileCardPosition.x, top: profileCardPosition.y, right: "auto", bottom: "auto" }}
           onClick={(event) => event.stopPropagation()}
           onContextMenu={(event) => openMemberContextMenu(event, memberProfileCard)}
         >

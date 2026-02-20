@@ -967,6 +967,10 @@ export function App() {
   const voiceGatewayCandidatesRef = useRef([]);
   const voiceSpeakingDetectorRef = useRef({ audioCtx: null, stream: null, analyser: null, timer: null, lastSpeaking: false });
   const pendingVoiceEventsRef = useRef(new Map());
+  const voiceSessionStartedAtRef = useRef(0);
+  const voiceServerDesyncMissesRef = useRef(0);
+  const voiceRecoveringRef = useRef(false);
+  const voiceLastRecoverAttemptAtRef = useRef(0);
   const selfUserIdRef = useRef("");
   const voiceMemberAudioPrefsByGuildRef = useRef(voiceMemberAudioPrefsByGuild);
   voiceMemberAudioPrefsByGuildRef.current = voiceMemberAudioPrefsByGuild;
@@ -3308,6 +3312,130 @@ export function App() {
       return { guildId: "", channelId: "" };
     });
   }, [mergedVoiceStates, voiceStatesByGuild, me?.id, activeGuildId, voiceConnectedGuildId]);
+
+  useEffect(() => {
+    if (voiceConnectedGuildId && voiceConnectedChannelId) {
+      voiceSessionStartedAtRef.current = Date.now();
+      voiceServerDesyncMissesRef.current = 0;
+      return;
+    }
+    voiceSessionStartedAtRef.current = 0;
+    voiceServerDesyncMissesRef.current = 0;
+    voiceRecoveringRef.current = false;
+  }, [voiceConnectedGuildId, voiceConnectedChannelId]);
+
+  useEffect(() => {
+    if (!voiceConnectedGuildId || !voiceConnectedChannelId) return;
+    if (isDisconnectingVoice) return;
+    const server = voiceConnectedServer || activeServer;
+    if (!server?.baseUrl || !server?.membershipToken) return;
+
+    let cancelled = false;
+    let pollInFlight = false;
+    let intervalId = null;
+    const attemptAutoRecover = async (statusMessage) => {
+      const now = Date.now();
+      if (voiceRecoveringRef.current) return false;
+      if (now - voiceLastRecoverAttemptAtRef.current < 12000) return false;
+      if (!canUseRealtimeVoiceGateway()) return false;
+      voiceRecoveringRef.current = true;
+      voiceLastRecoverAttemptAtRef.current = now;
+      try {
+        setStatus(statusMessage);
+        await voiceSfuRef.current?.join({
+          guildId: voiceConnectedGuildId,
+          channelId: voiceConnectedChannelId,
+          audioInputDeviceId,
+          noiseSuppression: noiseSuppressionEnabled,
+          isMuted,
+          isDeafened,
+          audioOutputDeviceId
+        });
+        if (cancelled) return true;
+        voiceSessionStartedAtRef.current = Date.now();
+        voiceServerDesyncMissesRef.current = 0;
+        setStatus("Voice reconnected.");
+        return true;
+      } catch {
+        return false;
+      } finally {
+        voiceRecoveringRef.current = false;
+      }
+    };
+
+    const reconcileVoiceState = async () => {
+      try {
+        const data = await nodeApi(server.baseUrl, "/v1/me/voice-state", server.membershipToken);
+        if (cancelled) return;
+        const serverVoiceStates = Array.isArray(data?.voiceStates) ? data.voiceStates : [];
+        const hasMatchingServerState = serverVoiceStates.some((state) => {
+          const guildId = state?.guildId || state?.guild_id || "";
+          const channelId = state?.channelId || state?.channel_id || "";
+          return guildId === voiceConnectedGuildId && channelId === voiceConnectedChannelId;
+        });
+        const sessionAgeMs = voiceSessionStartedAtRef.current ? (Date.now() - voiceSessionStartedAtRef.current) : 0;
+
+        if (hasMatchingServerState) {
+          voiceServerDesyncMissesRef.current = 0;
+          const localContext = voiceSfuRef.current?.getContext?.() || {};
+          const localHealthy = localContext.guildId === voiceConnectedGuildId
+            && localContext.channelId === voiceConnectedChannelId
+            && !!voiceSfuRef.current?.getLocalStream?.();
+          if (localHealthy || sessionAgeMs < 8000) return;
+          await attemptAutoRecover("Voice media dropped. Reconnecting...");
+          return;
+        }
+
+        voiceServerDesyncMissesRef.current += 1;
+        if (sessionAgeMs < 15000 || voiceServerDesyncMissesRef.current < 2) return;
+
+        const recovered = await attemptAutoRecover("Voice connection desynced. Reconnecting...");
+        if (recovered) return;
+        if (voiceServerDesyncMissesRef.current < 4) return;
+
+        setVoiceSession((prev) => {
+          if (prev.guildId !== voiceConnectedGuildId || prev.channelId !== voiceConnectedChannelId) return prev;
+          return { guildId: "", channelId: "" };
+        });
+        await cleanupVoiceRtc();
+        voiceServerDesyncMissesRef.current = 0;
+        setStatus("Voice session ended on the server. Local state re-synced.");
+      } catch {
+        // Keep local session on transient API failures; next pass can reconcile.
+      }
+    };
+
+    const runReconcile = () => {
+      if (pollInFlight) return;
+      pollInFlight = true;
+      reconcileVoiceState()
+        .catch(() => {})
+        .finally(() => {
+          pollInFlight = false;
+        });
+    };
+
+    runReconcile();
+    intervalId = setInterval(() => {
+      runReconcile();
+    }, 10000);
+
+    return () => {
+      cancelled = true;
+      if (intervalId) clearInterval(intervalId);
+    };
+  }, [
+    voiceConnectedGuildId,
+    voiceConnectedChannelId,
+    voiceConnectedServer,
+    activeServer,
+    isDisconnectingVoice,
+    audioInputDeviceId,
+    noiseSuppressionEnabled,
+    isMuted,
+    isDeafened,
+    audioOutputDeviceId
+  ]);
 
   useEffect(() => {
     if (!accessToken || (navMode !== "friends" && navMode !== "dms")) return;

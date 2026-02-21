@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OpenCom Status</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="page-bg"></div>
+    <main class="status-page">
+      <header class="hero" id="hero">
+        <div class="hero-overlay"></div>
+        <div class="hero-content">
+          <p class="eyebrow">System Status</p>
+          <h1 id="pageTitle">OpenCom Status</h1>
+          <p id="pageSubtitle" class="subtitle">Live service health and incident reporting</p>
+        </div>
+      </header>
+
+      <section class="summary-card">
+        <div class="summary-left">
+          <h2 id="overallLabel">Loading status...</h2>
+          <p id="lastChecked">Checking services...</p>
+        </div>
+        <span id="overallPill" class="state-pill state-loading">Updating</span>
+      </section>
+
+      <section class="card">
+        <div class="card-head">
+          <h3>Components</h3>
+          <p>Uptime over the past 60 days</p>
+        </div>
+        <div id="componentsGrid" class="components-grid"></div>
+      </section>
+
+      <section class="card">
+        <div class="card-head">
+          <h3>Incidents</h3>
+          <p id="incidentHint">No incidents reported.</p>
+        </div>
+        <div id="incidentsList" class="incidents-list"></div>
+      </section>
+    </main>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

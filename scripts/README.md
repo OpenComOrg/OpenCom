@@ -39,6 +39,8 @@ Operations:
 ./scripts/ops/configure-ws.sh --domain ws.opencom.online --ip 127.0.0.1
 ./scripts/ops/server-admin.sh search-users --query alice
 ./scripts/verify-user-email.sh alice
+./scripts/ops/status-monitor.sh --watch 60
+./scripts/ops/status-incident.sh add "API outage" "Investigating elevated 5xx." major investigating
 ```
 
 ## Compatibility wrappers

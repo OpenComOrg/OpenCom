@@ -1,0 +1,49 @@
+{
+  "generatedAt": "",
+  "page": {
+    "title": "OpenCom Status",
+    "brand": "OpenCom",
+    "subtitle": "Live service health and incident reporting",
+    "heroImageUrl": "",
+    "supportEmail": "status@opencom.online"
+  },
+  "overall": {
+    "state": "operational",
+    "label": "All Systems Operational"
+  },
+  "monitor": {
+    "historyDays": 60,
+    "timeoutMs": 8000,
+    "durationMs": 0
+  },
+  "components": [
+    {
+      "id": "api",
+      "name": "API",
+      "url": "https://api.opencom.online/health",
+      "method": "GET",
+      "state": "operational",
+      "label": "Operational",
+      "ok": true,
+      "statusCode": 0,
+      "responseTimeMs": 0,
+      "error": "",
+      "lastCheckedAt": "",
+      "history": []
+    },
+    {
+      "id": "frontend",
+      "name": "Frontend",
+      "url": "https://opencom.online/",
+      "method": "GET",
+      "state": "operational",
+      "label": "Operational",
+      "ok": true,
+      "statusCode": 0,
+      "responseTimeMs": 0,
+      "error": "",
+      "lastCheckedAt": "",
+      "history": []
+    }
+  ]
+}

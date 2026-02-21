@@ -1,0 +1,27 @@
+{
+  "page": {
+    "title": "OpenCom Status",
+    "brand": "OpenCom",
+    "subtitle": "Live service health and incident reporting",
+    "heroImageUrl": "",
+    "supportEmail": "status@opencom.online"
+  },
+  "monitor": {
+    "timeoutMs": 8000,
+    "historyDays": 60
+  },
+  "components": [
+    {
+      "id": "api",
+      "name": "API",
+      "url": "https://api.opencom.online/health",
+      "method": "GET"
+    },
+    {
+      "id": "frontend",
+      "name": "Frontend",
+      "url": "https://opencom.online/",
+      "method": "GET"
+    }
+  ]
+}

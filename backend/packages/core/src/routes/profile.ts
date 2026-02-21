@@ -58,7 +58,12 @@ const FullProfileElementInput = z.object({
   w: z.number().min(1).max(100),
   h: z.number().min(1).max(100),
   order: z.number().int().min(0).max(100).optional(),
-  text: z.string().max(500).optional().nullable()
+  text: z.string().max(500).optional().nullable(),
+  radius: z.number().min(0).max(40).optional(),
+  opacity: z.number().min(20).max(100).optional(),
+  fontSize: z.number().min(10).max(72).optional(),
+  align: z.enum(["left", "center", "right"]).optional(),
+  color: z.string().max(40).optional()
 });
 
 const FullProfileLinkInput = z.object({
@@ -74,7 +79,9 @@ const UpdateFullProfile = z.object({
   theme: z.object({
     background: z.string().max(300).optional(),
     card: z.string().max(120).optional(),
-    text: z.string().max(40).optional()
+    text: z.string().max(40).optional(),
+    accent: z.string().max(40).optional(),
+    fontPreset: z.enum(["sans", "serif", "mono", "display"]).optional()
   }).optional(),
   elements: z.array(FullProfileElementInput).max(24).optional(),
   links: z.array(FullProfileLinkInput).max(16).optional(),
@@ -158,13 +165,15 @@ function buildBasicFullProfile(user: { display_name: string | null; username: st
     theme: {
       background: "linear-gradient(150deg, #16274b, #0f1a33 65%)",
       card: "rgba(9, 14, 28, 0.62)",
-      text: "#dfe9ff"
+      text: "#dfe9ff",
+      accent: "#9bb6ff",
+      fontPreset: "sans"
     },
     elements: [
-      { id: "banner", type: "banner", x: 0, y: 0, w: 100, h: 34, order: 0 },
-      { id: "avatar", type: "avatar", x: 4, y: 21, w: 20, h: 31, order: 1 },
-      { id: "name", type: "name", x: 30, y: 30, w: 66, h: 10, order: 2 },
-      { id: "bio", type: "bio", x: 4, y: 54, w: 92, h: hasBio ? 30 : 18, order: 3 }
+      { id: "banner", type: "banner", x: 0, y: 0, w: 100, h: 34, order: 0, radius: 0, opacity: 100, fontSize: 16, align: "left", color: "" },
+      { id: "avatar", type: "avatar", x: 4, y: 21, w: 20, h: 31, order: 1, radius: 18, opacity: 100, fontSize: 16, align: "left", color: "" },
+      { id: "name", type: "name", x: 30, y: 30, w: 66, h: 10, order: 2, radius: 8, opacity: 100, fontSize: 22, align: "left", color: "" },
+      { id: "bio", type: "bio", x: 4, y: 54, w: 92, h: hasBio ? 30 : 18, order: 3, radius: 8, opacity: 100, fontSize: 14, align: "left", color: "" }
     ],
     links: [],
     music: {
@@ -181,10 +190,14 @@ function normalizeFullProfile(raw: any, fallbackUser: { display_name: string | n
   if (!raw || typeof raw !== "object") return basic;
 
   const parsedTheme = raw.theme && typeof raw.theme === "object" ? raw.theme : {};
+  const fontPresetRaw = String(parsedTheme.fontPreset || "").trim().toLowerCase();
+  const fontPreset = ["sans", "serif", "mono", "display"].includes(fontPresetRaw) ? fontPresetRaw : basic.theme.fontPreset;
   const theme = {
     background: typeof parsedTheme.background === "string" && parsedTheme.background.trim() ? parsedTheme.background.trim().slice(0, 300) : basic.theme.background,
     card: typeof parsedTheme.card === "string" && parsedTheme.card.trim() ? parsedTheme.card.trim().slice(0, 120) : basic.theme.card,
-    text: typeof parsedTheme.text === "string" && parsedTheme.text.trim() ? parsedTheme.text.trim().slice(0, 40) : basic.theme.text
+    text: typeof parsedTheme.text === "string" && parsedTheme.text.trim() ? parsedTheme.text.trim().slice(0, 40) : basic.theme.text,
+    accent: typeof parsedTheme.accent === "string" && parsedTheme.accent.trim() ? parsedTheme.accent.trim().slice(0, 40) : basic.theme.accent,
+    fontPreset
   };
 
   const incomingElements = Array.isArray(raw.elements) ? raw.elements : [];
@@ -194,6 +207,9 @@ function normalizeFullProfile(raw: any, fallbackUser: { display_name: string | n
     .map((item: any, index: number) => {
       const type = String(item.type || "").toLowerCase();
       if (!["avatar", "banner", "name", "bio", "links", "text"].includes(type)) return null;
+      const alignRaw = String(item.align || "").trim().toLowerCase();
+      const align = alignRaw === "center" || alignRaw === "right" ? alignRaw : "left";
+      const defaultFontSize = type === "name" ? 22 : (type === "bio" ? 14 : (type === "links" ? 14 : 16));
       return {
         id: typeof item.id === "string" && item.id.trim() ? item.id.trim().slice(0, 40) : `${type}-${index + 1}`,
         type,
@@ -202,7 +218,12 @@ function normalizeFullProfile(raw: any, fallbackUser: { display_name: string | n
         w: clampNumber(item.w, 1, 100, type === "banner" ? 100 : (type === "avatar" ? 20 : 80)),
         h: clampNumber(item.h, 1, 100, type === "banner" ? 34 : (type === "avatar" ? 31 : 12)),
         order: Math.round(clampNumber(item.order, 0, 100, index)),
-        text: typeof item.text === "string" ? item.text.slice(0, 500) : null
+        text: typeof item.text === "string" ? item.text.slice(0, 500) : null,
+        radius: Math.round(clampNumber(item.radius, 0, 40, type === "avatar" ? 18 : (type === "banner" ? 0 : 8))),
+        opacity: Math.round(clampNumber(item.opacity, 20, 100, 100)),
+        fontSize: Math.round(clampNumber(item.fontSize, 10, 72, defaultFontSize)),
+        align,
+        color: typeof item.color === "string" && item.color.trim() ? item.color.trim().slice(0, 40) : ""
       };
     })
     .filter(Boolean);

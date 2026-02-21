@@ -6,11 +6,12 @@ const KNOWN_BADGES = ["PLATFORM_ADMIN", "PLATFORM_FOUNDER"];
 
 async function api(path, token, panelPassword, options = {}) {
   const hasBody = options.body !== undefined && options.body !== null;
+  const trimmedPanelPassword = typeof panelPassword === "string" ? panelPassword.trim() : "";
   const response = await fetch(`${CORE_API}${path}`, {
     headers: {
       ...(hasBody ? { "Content-Type": "application/json" } : {}),
       Authorization: `Bearer ${token}`,
-      "x-admin-panel-password": panelPassword,
+      ...(trimmedPanelPassword ? { "x-admin-panel-password": trimmedPanelPassword } : {}),
       ...(options.headers || {})
     },
     ...options
@@ -27,6 +28,9 @@ async function api(path, token, panelPassword, options = {}) {
 export function AdminApp() {
   const [token, setToken] = useState(localStorage.getItem("opencom_access_token") || "");
   const [panelPassword, setPanelPassword] = useState(sessionStorage.getItem("opencom_admin_panel_password") || "");
+  const [autoPlatformUnlock, setAutoPlatformUnlock] = useState(false);
+  const [autoUnlockDisabled, setAutoUnlockDisabled] = useState(false);
+  const [autoUnlockChecking, setAutoUnlockChecking] = useState(false);
   const [status, setStatus] = useState("");
   const [statusType, setStatusType] = useState("info"); // info | success | error
   const [adminOverview, setAdminOverview] = useState({ founder: null, admins: [], activeBoostGrants: 0 });
@@ -58,10 +62,40 @@ export function AdminApp() {
   }, [panelPassword]);
 
   useEffect(() => {
-    if (!panelPassword || !token) return;
-    loadOverview();
+    if (!token) return;
     loadAdminStatus();
-  }, [panelPassword, token]);
+  }, [token]);
+
+  useEffect(() => {
+    if (!token || panelPassword || autoUnlockDisabled) return;
+    let cancelled = false;
+    setAutoUnlockChecking(true);
+    (async () => {
+      try {
+        const data = await api("/v1/me/admin-status", token, "");
+        if (cancelled) return;
+        setAdminStatus(data);
+        const canAutoUnlock = data?.isPlatformAdmin === true || data?.isPlatformOwner === true;
+        setAutoPlatformUnlock(canAutoUnlock);
+        if (canAutoUnlock) showStatus("Auto-unlocked as platform staff.", "success");
+      } catch {
+        if (cancelled) return;
+        setAutoPlatformUnlock(false);
+      } finally {
+        if (!cancelled) setAutoUnlockChecking(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [token, panelPassword, autoUnlockDisabled]);
+
+  const isPanelUnlocked = !!panelPassword || autoPlatformUnlock;
+
+  useEffect(() => {
+    if (!isPanelUnlocked || !token) return;
+    loadOverview();
+  }, [isPanelUnlocked, token]);
 
   async function loadAdminStatus() {
     try {
@@ -308,20 +342,36 @@ export function AdminApp() {
     }
   }
 
-  if (!panelPassword) {
+  if (!isPanelUnlocked) {
     return (
       <div className="admin-unlock">
         <div className="admin-unlock-card">
           <h1>OpenCom Platform Admin</h1>
-          <p className="admin-unlock-desc">Enter the server-configured admin panel password to continue.</p>
+          <p className="admin-unlock-desc">
+            {autoUnlockChecking
+              ? "Checking your account for platform admin access..."
+              : "Enter the server-configured admin panel password to continue."}
+          </p>
           <input
             type="password"
             placeholder="Admin panel password"
             value={unlockInput}
             onChange={(e) => setUnlockInput(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && unlockInput.trim() && setPanelPassword(unlockInput.trim())}
+            onKeyDown={(e) => {
+              if (e.key !== "Enter" || !unlockInput.trim()) return;
+              setAutoUnlockDisabled(false);
+              setPanelPassword(unlockInput.trim());
+            }}
           />
-          <button onClick={() => unlockInput.trim() && setPanelPassword(unlockInput.trim())}>Unlock</button>
+          <button
+            onClick={() => {
+              if (!unlockInput.trim()) return;
+              setAutoUnlockDisabled(false);
+              setPanelPassword(unlockInput.trim());
+            }}
+          >
+            Unlock
+          </button>
           <p className="admin-status-msg">{status}</p>
         </div>
       </div>
@@ -347,7 +397,19 @@ export function AdminApp() {
             </span>
           )}
           <a href="/server-admin.html" target="_blank" rel="noopener noreferrer" className="admin-link-out">Server Admin →</a>
-          <button type="button" className="admin-lock-btn" onClick={() => { setPanelPassword(""); sessionStorage.removeItem("opencom_admin_panel_password"); showStatus(""); }}>Lock panel</button>
+          <button
+            type="button"
+            className="admin-lock-btn"
+            onClick={() => {
+              setPanelPassword("");
+              setAutoPlatformUnlock(false);
+              setAutoUnlockDisabled(true);
+              sessionStorage.removeItem("opencom_admin_panel_password");
+              showStatus("");
+            }}
+          >
+            Lock panel
+          </button>
         </div>
       </header>
 

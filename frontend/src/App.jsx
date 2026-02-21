@@ -64,13 +64,15 @@ function createBasicFullProfile(profileData = {}) {
     theme: {
       background: "linear-gradient(150deg, #16274b, #0f1a33 65%)",
       card: "rgba(9, 14, 28, 0.62)",
-      text: "#dfe9ff"
+      text: "#dfe9ff",
+      accent: "#9bb6ff",
+      fontPreset: "sans"
     },
     elements: [
-      { id: "banner", type: "banner", x: 0, y: 0, w: 100, h: 34, order: 0 },
-      { id: "avatar", type: "avatar", x: 4, y: 21, w: 20, h: 31, order: 1 },
-      { id: "name", type: "name", x: 30, y: 30, w: 66, h: 10, order: 2 },
-      { id: "bio", type: "bio", x: 4, y: 54, w: 92, h: hasBio ? 30 : 18, order: 3 }
+      { id: "banner", type: "banner", x: 0, y: 0, w: 100, h: 34, order: 0, radius: 0, opacity: 100, fontSize: 16, align: "left", color: "" },
+      { id: "avatar", type: "avatar", x: 4, y: 21, w: 20, h: 31, order: 1, radius: 18, opacity: 100, fontSize: 16, align: "left", color: "" },
+      { id: "name", type: "name", x: 30, y: 30, w: 66, h: 10, order: 2, radius: 8, opacity: 100, fontSize: 22, align: "left", color: "" },
+      { id: "bio", type: "bio", x: 4, y: 54, w: 92, h: hasBio ? 30 : 18, order: 3, radius: 8, opacity: 100, fontSize: 14, align: "left", color: "" }
     ],
     links: [],
     music: { url: "", autoplay: false, loop: true, volume: 60 }
@@ -130,10 +132,14 @@ function normalizeFullProfile(profileData = {}, fullProfileCandidate) {
   const raw = fullProfileCandidate && typeof fullProfileCandidate === "object" ? fullProfileCandidate : {};
 
   const themeInput = raw.theme && typeof raw.theme === "object" ? raw.theme : {};
+  const fontPresetRaw = String(themeInput.fontPreset || "").trim().toLowerCase();
+  const fontPreset = ["sans", "serif", "mono", "display"].includes(fontPresetRaw) ? fontPresetRaw : basic.theme.fontPreset;
   const theme = {
     background: typeof themeInput.background === "string" && themeInput.background.trim() ? themeInput.background.trim().slice(0, 300) : basic.theme.background,
     card: typeof themeInput.card === "string" && themeInput.card.trim() ? themeInput.card.trim().slice(0, 120) : basic.theme.card,
-    text: typeof themeInput.text === "string" && themeInput.text.trim() ? themeInput.text.trim().slice(0, 40) : basic.theme.text
+    text: typeof themeInput.text === "string" && themeInput.text.trim() ? themeInput.text.trim().slice(0, 40) : basic.theme.text,
+    accent: typeof themeInput.accent === "string" && themeInput.accent.trim() ? themeInput.accent.trim().slice(0, 40) : basic.theme.accent,
+    fontPreset
   };
 
   const rawElements = Array.isArray(raw.elements) ? raw.elements : [];
@@ -153,12 +159,20 @@ function normalizeFullProfile(profileData = {}, fullProfileCandidate) {
         { x: item.x, y: item.y, w: item.w, h: item.h },
         defaults
       );
+      const alignRaw = String(item.align || "").trim().toLowerCase();
+      const align = alignRaw === "center" || alignRaw === "right" ? alignRaw : "left";
+      const defaultFontSize = type === "name" ? 22 : (type === "bio" ? 14 : (type === "links" ? 14 : 16));
       return {
         id: String(item.id || `${type}-${index + 1}`).slice(0, 40),
         type,
         ...rect,
         order: Math.max(0, Math.min(100, Number.isFinite(Number(item.order)) ? Math.round(Number(item.order)) : index)),
-        text: typeof item.text === "string" ? item.text.slice(0, 500) : ""
+        text: typeof item.text === "string" ? item.text.slice(0, 500) : "",
+        radius: Math.round(clampProfilePercent(item.radius, 0, 40, type === "avatar" ? 18 : (type === "banner" ? 0 : 8))),
+        opacity: Math.round(clampProfilePercent(item.opacity, 20, 100, 100)),
+        fontSize: Math.round(clampProfilePercent(item.fontSize, 10, 72, defaultFontSize)),
+        align,
+        color: typeof item.color === "string" && item.color.trim() ? item.color.trim().slice(0, 40) : ""
       };
     })
     .filter(Boolean);
@@ -865,8 +879,6 @@ export function App() {
   const [fullProfileViewer, setFullProfileViewer] = useState(null);
   const [fullProfileDraggingElementId, setFullProfileDraggingElementId] = useState("");
   const [profileStudioSelectedElementId, setProfileStudioSelectedElementId] = useState("");
-  const [profileStudioScaleAuto, setProfileStudioScaleAuto] = useState(true);
-  const [profileStudioScale, setProfileStudioScale] = useState(100);
   const [viewportSize, setViewportSize] = useState(() => ({ width: typeof window !== "undefined" ? window.innerWidth : 1280, height: typeof window !== "undefined" ? window.innerHeight : 720 }));
   const fullProfileDragOffsetRef = useRef({ x: 0, y: 0 });
   const fullProfileElementsRef = useRef([]);
@@ -908,6 +920,8 @@ export function App() {
   const [voiceSession, setVoiceSession] = useState({ guildId: "", channelId: "" });
   const [isDisconnectingVoice, setIsDisconnectingVoice] = useState(false);
   const [isScreenSharing, setIsScreenSharing] = useState(false);
+  const [selectedScreenShareProducerId, setSelectedScreenShareProducerId] = useState("");
+  const [screenShareOverlayOpen, setScreenShareOverlayOpen] = useState(true);
   const [isMuted, setIsMuted] = useState(false);
   const [isDeafened, setIsDeafened] = useState(false);
   const [micGain, setMicGain] = useState(Number(localStorage.getItem(MIC_GAIN_KEY) || 100));
@@ -1121,12 +1135,17 @@ export function App() {
   const attachmentInputRef = useRef(null);
   const dmComposerInputRef = useRef(null);
   const isAtBottomRef = useRef(true);
+  const isServerAtBottomRef = useRef(true);
   const lastDmMessageCountRef = useRef(0);
+  const lastServerMessageCountRef = useRef(0);
   const linkPreviewFetchInFlightRef = useRef(new Set());
   const attachmentPreviewFetchInFlightRef = useRef(new Set());
   const attachmentPreviewUrlByIdRef = useRef({});
   const autoJoinInviteAttemptRef = useRef("");
   const previousDmIdRef = useRef("");
+  const previousServerChannelIdRef = useRef("");
+  const dmScrollPositionsRef = useRef({});
+  const serverScrollPositionsRef = useRef({});
   const dialogResolverRef = useRef(null);
   const dialogInputRef = useRef(null);
   const activeServerIdRef = useRef("");
@@ -1692,15 +1711,10 @@ export function App() {
 
   const canModerateMembers = canKickMembers || canBanMembers;
   const hasBoostForFullProfiles = !!(boostStatus?.active || profile?.boostActive || profile?.badges?.includes?.("boost"));
-  const autoProfileStudioScale = useMemo(
-    () => {
-      const widthFactor = viewportSize.width / 1920;
-      const heightFactor = viewportSize.height / 1080;
-      return Math.max(85, Math.min(130, Math.round(Math.min(widthFactor, heightFactor) * 115)));
-    },
-    [viewportSize.width, viewportSize.height]
+  const profileStudioCanvasMinHeight = useMemo(
+    () => Math.max(420, Math.min(900, Math.round(viewportSize.height - 300))),
+    [viewportSize.height]
   );
-  const effectiveProfileStudioScale = profileStudioScaleAuto ? autoProfileStudioScale : profileStudioScale;
   const profileStudioPreviewProfile = useMemo(() => ({
     ...(profile || {}),
     displayName: typeof profileForm?.displayName === "string" ? profileForm.displayName : (profile?.displayName ?? ""),
@@ -1829,11 +1843,14 @@ export function App() {
     const map = new Map();
     for (const vs of mergedVoiceStates) {
       if (!vs?.channelId || !vs?.userId) continue;
+      const member = resolvedMemberList.find((item) => item.id === vs.userId);
       if (!map.has(vs.channelId)) map.set(vs.channelId, []);
       map.get(vs.channelId).push({
+        id: vs.userId,
         userId: vs.userId,
         username: memberNameById.get(vs.userId) || vs.userId,
-        pfp_url: resolvedMemberList.find((m) => m.id === vs.userId)?.pfp_url || null,
+        pfp_url: member?.pfp_url || null,
+        roleIds: member?.roleIds || [],
         muted: !!vs.muted,
         deafened: !!vs.deafened
       });
@@ -1844,6 +1861,10 @@ export function App() {
     () => Object.values(remoteScreenSharesByProducerId),
     [remoteScreenSharesByProducerId]
   );
+  const selectedRemoteScreenShare = useMemo(() => {
+    if (!remoteScreenShares.length) return null;
+    return remoteScreenShares.find((share) => share.producerId === selectedScreenShareProducerId) || remoteScreenShares[0];
+  }, [remoteScreenShares, selectedScreenShareProducerId]);
   const activeVoiceMemberAudioPrefs = useMemo(() => {
     if (!activeGuildId) return {};
     const scoped = voiceMemberAudioPrefsByGuild?.[activeGuildId];
@@ -2312,60 +2333,122 @@ export function App() {
     return () => window.removeEventListener("keydown", onHotkey);
   }, [isInVoiceChannel]);
 
-  // Handle scroll position for server messages
+  useEffect(() => {
+    if (navMode !== "servers") previousServerChannelIdRef.current = "";
+    if (navMode !== "dms") previousDmIdRef.current = "";
+  }, [navMode]);
+
+  // Keep server chat scroll position per channel and only auto-scroll when user is near the bottom.
   useEffect(() => {
     if (!messagesRef.current || navMode !== "servers") return;
-    messagesRef.current.scrollTo({ top: messagesRef.current.scrollHeight, behavior: "smooth" });
-  }, [messages, navMode]);
+    const container = messagesRef.current;
+    const channelKey = `${activeGuildId || ""}:${activeChannelId || ""}`;
+    const isNewChannel = channelKey !== previousServerChannelIdRef.current;
+    const currentMessageCount = messages.length;
 
-  // Handle scroll position for DM messages - only scroll if at bottom
-  useEffect(() => {
-    if (!dmMessagesRef.current || navMode !== "dms") return;
-    
-    const container = dmMessagesRef.current;
-    const isNewDm = activeDmId !== previousDmIdRef.current;
-    
-    if (isNewDm) {
-      // New DM selected - scroll to bottom
-      previousDmIdRef.current = activeDmId;
-      lastDmMessageCountRef.current = activeDm?.messages?.length || 0;
-      container.scrollTo({ top: container.scrollHeight, behavior: "smooth" });
-      isAtBottomRef.current = true;
+    if (isNewChannel) {
+      previousServerChannelIdRef.current = channelKey;
+      lastServerMessageCountRef.current = currentMessageCount;
+      const savedTop = serverScrollPositionsRef.current[channelKey];
+      if (Number.isFinite(savedTop)) {
+        container.scrollTop = savedTop;
+        isServerAtBottomRef.current = container.scrollHeight - container.scrollTop - container.clientHeight < 100;
+      } else {
+        container.scrollTo({ top: container.scrollHeight, behavior: "auto" });
+        isServerAtBottomRef.current = true;
+      }
       return;
     }
-    
-    // Check if user is near bottom
+
     const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 100;
-    
-    // Check if new messages were added
+    const hasNewMessages = currentMessageCount > lastServerMessageCountRef.current;
+    if (hasNewMessages && isNearBottom) {
+      container.scrollTo({ top: container.scrollHeight, behavior: "smooth" });
+      isServerAtBottomRef.current = true;
+    } else if (hasNewMessages) {
+      isServerAtBottomRef.current = false;
+    }
+    lastServerMessageCountRef.current = currentMessageCount;
+  }, [messages, activeGuildId, activeChannelId, navMode]);
+
+  // Persist server channel scroll location.
+  useEffect(() => {
+    if (!messagesRef.current || navMode !== "servers") return;
+    const container = messagesRef.current;
+    const channelKey = `${activeGuildId || ""}:${activeChannelId || ""}`;
+    const handleScroll = () => {
+      const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 100;
+      isServerAtBottomRef.current = isNearBottom;
+      serverScrollPositionsRef.current[channelKey] = container.scrollTop;
+    };
+    handleScroll();
+    container.addEventListener("scroll", handleScroll, { passive: true });
+    return () => container.removeEventListener("scroll", handleScroll);
+  }, [navMode, activeGuildId, activeChannelId]);
+
+  // Keep DM scroll position per thread and only auto-scroll when user is near the bottom.
+  useEffect(() => {
+    if (!dmMessagesRef.current || navMode !== "dms") return;
+    const container = dmMessagesRef.current;
+    const dmKey = activeDmId || "";
+    const isNewDm = dmKey !== previousDmIdRef.current;
     const currentMessageCount = activeDm?.messages?.length || 0;
+
+    if (isNewDm) {
+      previousDmIdRef.current = dmKey;
+      lastDmMessageCountRef.current = currentMessageCount;
+      const savedTop = dmScrollPositionsRef.current[dmKey];
+      if (Number.isFinite(savedTop)) {
+        container.scrollTop = savedTop;
+        isAtBottomRef.current = container.scrollHeight - container.scrollTop - container.clientHeight < 100;
+      } else {
+        container.scrollTo({ top: container.scrollHeight, behavior: "auto" });
+        isAtBottomRef.current = true;
+      }
+      return;
+    }
+
+    const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 100;
     const hasNewMessages = currentMessageCount > lastDmMessageCountRef.current;
-    
-    // Only auto-scroll if user is at bottom and new messages arrived
     if (hasNewMessages && isNearBottom) {
       container.scrollTo({ top: container.scrollHeight, behavior: "smooth" });
       isAtBottomRef.current = true;
     } else if (hasNewMessages) {
-      // New messages but user scrolled up - don't scroll, just update count
       isAtBottomRef.current = false;
     }
-    
     lastDmMessageCountRef.current = currentMessageCount;
   }, [activeDm?.messages, activeDmId, navMode]);
 
-  // Track scroll position for DMs
+  // Persist DM scroll location.
   useEffect(() => {
     if (!dmMessagesRef.current || navMode !== "dms") return;
-    
     const container = dmMessagesRef.current;
+    const dmKey = activeDmId || "";
     const handleScroll = () => {
       const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 100;
       isAtBottomRef.current = isNearBottom;
+      dmScrollPositionsRef.current[dmKey] = container.scrollTop;
     };
-    
-    container.addEventListener("scroll", handleScroll);
+    handleScroll();
+    container.addEventListener("scroll", handleScroll, { passive: true });
     return () => container.removeEventListener("scroll", handleScroll);
   }, [navMode, activeDmId]);
+
+  useEffect(() => {
+    if (!remoteScreenShares.length) {
+      setSelectedScreenShareProducerId("");
+      setScreenShareOverlayOpen(false);
+      return;
+    }
+    const selectedStillExists = remoteScreenShares.some((share) => share.producerId === selectedScreenShareProducerId);
+    if (!selectedStillExists) {
+      setSelectedScreenShareProducerId(remoteScreenShares[0].producerId);
+    }
+  }, [remoteScreenShares, selectedScreenShareProducerId]);
+
+  useEffect(() => {
+    if (remoteScreenShares.length) setScreenShareOverlayOpen(true);
+  }, [remoteScreenShares.length]);
 
   useEffect(() => {
     if (!accessToken) return;
@@ -4598,7 +4681,12 @@ export function App() {
             type,
             ...placement,
             order: 10 + nextIndex,
-            text: type === "text" ? `Custom text ${nextIndex}` : ""
+            text: type === "text" ? `Custom text ${nextIndex}` : "",
+            radius: type === "avatar" ? 18 : (type === "banner" ? 0 : 8),
+            opacity: 100,
+            fontSize: type === "name" ? 22 : (type === "bio" ? 14 : (type === "links" ? 14 : 16)),
+            align: "left",
+            color: ""
           }
         ]
       };
@@ -5708,6 +5796,8 @@ export function App() {
     await voiceSfuRef.current?.cleanup();
     setIsScreenSharing(false);
     setRemoteScreenSharesByProducerId({});
+    setSelectedScreenShareProducerId("");
+    setScreenShareOverlayOpen(false);
   }
 
   async function waitForVoiceGatewayReady(timeoutMs = 15000) {
@@ -5769,19 +5859,11 @@ export function App() {
     return usable;
   }
 
-  async function enterShareFullscreen(event) {
-    const node = event?.currentTarget;
-    if (!node) return;
-    const requestFullscreen = node.requestFullscreen || node.webkitRequestFullscreen || node.msRequestFullscreen;
-    if (typeof requestFullscreen !== "function") {
-      setStatus("Fullscreen is not supported in this browser.");
-      return;
-    }
-    try {
-      await requestFullscreen.call(node);
-    } catch (error) {
-      setStatus(`Could not open fullscreen: ${error.message || "FULLSCREEN_FAILED"}`);
-    }
+  function selectScreenShare(producerId) {
+    const id = String(producerId || "").trim();
+    if (!id) return;
+    setSelectedScreenShareProducerId(id);
+    setScreenShareOverlayOpen(true);
   }
 
   async function setServerVoiceMemberState(channelId, memberId, patch = {}) {
@@ -6018,7 +6100,8 @@ export function App() {
   }
 
   function openMemberContextMenu(event, member) {
-    if (!member?.id) return;
+    const memberId = member?.id || member?.userId;
+    if (!memberId) return;
     event.preventDefault();
     event.stopPropagation();
     const pos = getContextMenuPoint(event.clientX, event.clientY, { width: 280, height: 460 });
@@ -6026,7 +6109,7 @@ export function App() {
     setChannelContextMenu(null);
     setCategoryContextMenu(null);
     setMessageContextMenu(null);
-    setMemberContextMenu({ x: pos.x, y: pos.y, member });
+    setMemberContextMenu({ x: pos.x, y: pos.y, member: { ...member, id: memberId } });
   }
 
   const MAX_IMAGE_BYTES = 25 * 1024 * 1024; // 25MB for raw image upload
@@ -6234,9 +6317,43 @@ export function App() {
     };
   }
 
+  function getFullProfileFontFamily(preset) {
+    const key = String(preset || "").trim().toLowerCase();
+    if (key === "serif") return "\"Merriweather\", Georgia, serif";
+    if (key === "mono") return "\"JetBrains Mono\", \"SFMono-Regular\", Consolas, monospace";
+    if (key === "display") return "\"Space Grotesk\", \"Avenir Next\", \"Segoe UI\", sans-serif";
+    return "\"Plus Jakarta Sans\", \"Segoe UI\", system-ui, sans-serif";
+  }
+
+  function getFullProfileElementFrameStyle(element) {
+    const radius = Math.max(0, Math.min(40, Number(element?.radius ?? 8)));
+    const opacity = Math.max(20, Math.min(100, Number(element?.opacity ?? 100)));
+    const alignRaw = String(element?.align || "").trim().toLowerCase();
+    const align = alignRaw === "center" || alignRaw === "right" ? alignRaw : "left";
+    return {
+      left: `${element.x}%`,
+      top: `${element.y}%`,
+      width: `${element.w}%`,
+      height: `${element.h}%`,
+      borderRadius: `${radius}px`,
+      opacity: opacity / 100,
+      textAlign: align
+    };
+  }
+
   function renderFullProfileElement(element, viewerProfile) {
     if (!element || !viewerProfile) return null;
     const type = String(element.type || "").toLowerCase();
+    const alignRaw = String(element.align || "").trim().toLowerCase();
+    const textAlign = alignRaw === "center" || alignRaw === "right" ? alignRaw : "left";
+    const textColor = typeof element.color === "string" && element.color.trim() ? element.color.trim() : undefined;
+    const textSize = Math.max(10, Math.min(72, Number(element.fontSize || (type === "name" ? 22 : (type === "bio" ? 14 : 16)))));
+    const textStyle = {
+      textAlign,
+      color: textColor,
+      fontSize: `${textSize}px`,
+      lineHeight: 1.35
+    };
     if (type === "banner") {
       const banner = profileImageUrl(viewerProfile.bannerUrl || "");
       return banner ? <img src={banner} alt="Banner" className="full-profile-banner-image" /> : <div className="full-profile-banner-fallback" />;
@@ -6250,15 +6367,15 @@ export function App() {
       );
     }
     if (type === "name") {
-      return <strong>{viewerProfile.displayName || viewerProfile.username || "User"}</strong>;
+      return <strong className="full-profile-rich-text" style={textStyle}>{viewerProfile.displayName || viewerProfile.username || "User"}</strong>;
     }
     if (type === "bio") {
-      return <span>{viewerProfile.bio || "No bio set."}</span>;
+      return <span className="full-profile-rich-text" style={textStyle}>{viewerProfile.bio || "No bio set."}</span>;
     }
     if (type === "links") {
       const links = Array.isArray(viewerProfile.fullProfile?.links) ? viewerProfile.fullProfile.links : [];
       return (
-        <div className="full-profile-links-list">
+        <div className="full-profile-links-list" style={textStyle}>
           {links.length === 0 && <span className="hint">No links configured.</span>}
           {links.map((link) => (
             <a key={link.id || link.url} href={link.url} target="_blank" rel="noreferrer">{link.label}</a>
@@ -6266,7 +6383,7 @@ export function App() {
         </div>
       );
     }
-    return <span>{element.text || "Custom text"}</span>;
+    return <span className="full-profile-rich-text" style={textStyle}>{element.text || "Custom text"}</span>;
   }
 
   function insertEmoteToken(name) {
@@ -6948,22 +7065,33 @@ export function App() {
               </div>
               {!!remoteScreenShares.length && (
                 <div className="voice-screen-grid">
-                  {remoteScreenShares.map((share) => (
-                    <div className="voice-screen-tile" key={share.producerId}>
+                  {remoteScreenShares.map((share) => {
+                    const isSelected = selectedRemoteScreenShare?.producerId === share.producerId;
+                    return (
+                    <button
+                      type="button"
+                      className={`voice-screen-tile ${isSelected ? "active" : ""}`}
+                      key={share.producerId}
+                      onClick={() => selectScreenShare(share.producerId)}
+                      title="Show this share in overlay"
+                    >
                       <video
                         autoPlay
                         playsInline
-                        title="Click to view fullscreen"
-                        onClick={enterShareFullscreen}
+                        muted
                         ref={(node) => {
                           if (!node || !share.stream) return;
                           if (node.srcObject !== share.stream) node.srcObject = share.stream;
                         }}
                       />
                       <span>{memberNameById.get(share.userId) || share.userId || "Screen Share"}</span>
-                    </div>
-                  ))}
+                    </button>
+                    );
+                  })}
                 </div>
+              )}
+              {!!remoteScreenShares.length && !screenShareOverlayOpen && (
+                <button type="button" className="ghost" onClick={() => setScreenShareOverlayOpen(true)}>Show Screen Overlay</button>
               )}
             </div>
           )}
@@ -7576,36 +7704,15 @@ export function App() {
         )}
 
         {navMode === "profile" && (
-          <div className="profile-studio profile-studio-full-page" style={{ fontSize: `${Math.max(0.8, Math.min(1.5, effectiveProfileStudioScale / 100))}rem` }}>
-            <section className="profile-studio-header card">
-              <div>
-                <h3>Profile Studio</h3>
-                <p className="hint">Full-page profile builder with drag and drop editing.</p>
-              </div>
-              <div className="profile-studio-scale">
-                <label>
-                  UI Scale ({effectiveProfileStudioScale}%)
-                  <input
-                    type="range"
-                    min={80}
-                    max={150}
-                    value={profileStudioScaleAuto ? effectiveProfileStudioScale : profileStudioScale}
-                    onChange={(event) => {
-                      setProfileStudioScaleAuto(false);
-                      setProfileStudioScale(Number(event.target.value));
-                    }}
-                  />
-                </label>
-                <label><input type="checkbox" checked={profileStudioScaleAuto} onChange={(event) => setProfileStudioScaleAuto(event.target.checked)} /> Auto scale for my resolution</label>
-              </div>
-              <div className="row-actions">
-                <button type="button" className="ghost" onClick={resetFullProfileDraftToBasic}>Reset</button>
-                <button type="button" onClick={saveFullProfileDraft}>Save Full Profile</button>
-              </div>
-            </section>
-
+          <div className="profile-studio profile-studio-full-page">
             <section className="profile-studio-layout">
               <aside className="card profile-studio-panel">
+                <h3>Profile Studio</h3>
+                <p className="hint">Drag, resize, and style each element directly on the canvas.</p>
+                <div className="row-actions">
+                  <button type="button" className="ghost" onClick={resetFullProfileDraftToBasic}>Reset</button>
+                  <button type="button" onClick={saveFullProfileDraft}>Save Full Profile</button>
+                </div>
                 <h4>Identity</h4>
                 <label>Display Name<input value={profileForm.displayName} onChange={(event) => setProfileForm((current) => ({ ...current, displayName: event.target.value }))} /></label>
                 <label>Bio<textarea rows={3} value={profileForm.bio} onChange={(event) => setProfileForm((current) => ({ ...current, bio: event.target.value }))} /></label>
@@ -7638,7 +7745,9 @@ export function App() {
                   style={{
                     background: fullProfileDraft?.theme?.background || "linear-gradient(150deg, #16274b, #0f1a33 65%)",
                     color: fullProfileDraft?.theme?.text || "#dfe9ff",
-                    minHeight: `${Math.max(420, Math.min(900, Math.round((viewportSize.height - 320) * Math.max(0.86, Math.min(1.2, effectiveProfileStudioScale / 100)))))}px`
+                    minHeight: `${profileStudioCanvasMinHeight}px`,
+                    "--full-profile-accent": fullProfileDraft?.theme?.accent || "#9bb6ff",
+                    "--full-profile-font": getFullProfileFontFamily(fullProfileDraft?.theme?.fontPreset || "sans")
                   }}
                 >
                   <div className="full-profile-canvas-card" style={{ background: fullProfileDraft?.theme?.card || "rgba(9, 14, 28, 0.62)" }}>
@@ -7649,7 +7758,7 @@ export function App() {
                         <div
                           key={element.id}
                           className={`full-profile-element full-profile-element-${element.type} ${fullProfileDraggingElementId === element.id ? "dragging" : ""} ${profileStudioSelectedElementId === element.id ? "selected" : ""}`}
-                          style={{ left: `${element.x}%`, top: `${element.y}%`, width: `${element.w}%`, height: `${element.h}%` }}
+                          style={getFullProfileElementFrameStyle(element)}
                           onMouseDown={(event) => {
                             if (!hasBoostForFullProfiles) return;
                             onFullProfileElementMouseDown(event, element.id);
@@ -7706,12 +7815,60 @@ export function App() {
                     <label>Height
                       <input type="range" min={1} max={100} value={Math.round(selectedProfileStudioElement.h)} onChange={(event) => nudgeFullProfileElement(selectedProfileStudioElement.id, { h: event.target.value })} />
                     </label>
+                    <label>Opacity ({Math.max(20, Math.min(100, Number(selectedProfileStudioElement.opacity ?? 100)))}%)
+                      <input
+                        type="range"
+                        min={20}
+                        max={100}
+                        value={Math.max(20, Math.min(100, Number(selectedProfileStudioElement.opacity ?? 100)))}
+                        onChange={(event) => updateFullProfileElement(selectedProfileStudioElement.id, { opacity: Number(event.target.value) })}
+                      />
+                    </label>
+                    <label>Corner Radius ({Math.max(0, Math.min(40, Number(selectedProfileStudioElement.radius ?? 8)))}px)
+                      <input
+                        type="range"
+                        min={0}
+                        max={40}
+                        value={Math.max(0, Math.min(40, Number(selectedProfileStudioElement.radius ?? 8)))}
+                        onChange={(event) => updateFullProfileElement(selectedProfileStudioElement.id, { radius: Number(event.target.value) })}
+                      />
+                    </label>
+                    {["name", "bio", "links", "text"].includes(selectedProfileStudioElement.type) && (
+                      <>
+                        <label>Font Size ({Math.max(10, Math.min(72, Number(selectedProfileStudioElement.fontSize ?? 16)))}px)
+                          <input
+                            type="range"
+                            min={10}
+                            max={72}
+                            value={Math.max(10, Math.min(72, Number(selectedProfileStudioElement.fontSize ?? 16)))}
+                            onChange={(event) => updateFullProfileElement(selectedProfileStudioElement.id, { fontSize: Number(event.target.value) })}
+                          />
+                        </label>
+                        <label>
+                          Text Align
+                          <select
+                            value={["left", "center", "right"].includes(selectedProfileStudioElement.align) ? selectedProfileStudioElement.align : "left"}
+                            onChange={(event) => updateFullProfileElement(selectedProfileStudioElement.id, { align: event.target.value })}
+                          >
+                            <option value="left">Left</option>
+                            <option value="center">Center</option>
+                            <option value="right">Right</option>
+                          </select>
+                        </label>
+                        <label>
+                          Text Color
+                          <input
+                            value={selectedProfileStudioElement.color || ""}
+                            placeholder="inherit or #RRGGBB"
+                            onChange={(event) => updateFullProfileElement(selectedProfileStudioElement.id, { color: event.target.value })}
+                          />
+                        </label>
+                      </>
+                    )}
                     <div className="row-actions">
                       <button type="button" className="ghost" onClick={() => nudgeFullProfileElement(selectedProfileStudioElement.id, { order: Number(selectedProfileStudioElement.order || 0) + 1 })}>Bring Forward</button>
                       <button type="button" className="ghost" onClick={() => nudgeFullProfileElement(selectedProfileStudioElement.id, { order: Number(selectedProfileStudioElement.order || 0) - 1 })}>Send Back</button>
-                      {selectedProfileStudioElement.type === "text" && (
-                        <button type="button" className="danger" onClick={() => removeFullProfileElement(selectedProfileStudioElement.id)}>Remove</button>
-                      )}
+                      <button type="button" className="danger" onClick={() => removeFullProfileElement(selectedProfileStudioElement.id)}>Remove</button>
                     </div>
                   </>
                 ) : (
@@ -7722,6 +7879,19 @@ export function App() {
                 <label>Canvas Background<input value={fullProfileDraft?.theme?.background || ""} onChange={(event) => setFullProfileDraft((current) => ({ ...current, mode: "custom", theme: { ...(current.theme || {}), background: event.target.value } }))} /></label>
                 <label>Card Surface<input value={fullProfileDraft?.theme?.card || ""} onChange={(event) => setFullProfileDraft((current) => ({ ...current, mode: "custom", theme: { ...(current.theme || {}), card: event.target.value } }))} /></label>
                 <label>Text Color<input value={fullProfileDraft?.theme?.text || ""} onChange={(event) => setFullProfileDraft((current) => ({ ...current, mode: "custom", theme: { ...(current.theme || {}), text: event.target.value } }))} /></label>
+                <label>Accent Color<input value={fullProfileDraft?.theme?.accent || ""} onChange={(event) => setFullProfileDraft((current) => ({ ...current, mode: "custom", theme: { ...(current.theme || {}), accent: event.target.value } }))} /></label>
+                <label>
+                  Font Style
+                  <select
+                    value={["sans", "serif", "mono", "display"].includes(fullProfileDraft?.theme?.fontPreset) ? fullProfileDraft.theme.fontPreset : "sans"}
+                    onChange={(event) => setFullProfileDraft((current) => ({ ...current, mode: "custom", theme: { ...(current.theme || {}), fontPreset: event.target.value } }))}
+                  >
+                    <option value="sans">Modern Sans</option>
+                    <option value="serif">Serif</option>
+                    <option value="mono">Monospace</option>
+                    <option value="display">Display</option>
+                  </select>
+                </label>
 
                 <h4>Links</h4>
                 {(fullProfileDraft?.links || []).map((link) => (
@@ -7776,6 +7946,40 @@ export function App() {
                 <label><input type="checkbox" checked={fullProfileDraft?.music?.loop !== false} onChange={(event) => setFullProfileDraft((current) => ({ ...current, mode: "custom", music: { ...(current.music || {}), loop: event.target.checked } }))} /> Loop track</label>
               </aside>
             </section>
+          </div>
+        )}
+        {isInVoiceChannel && (navMode === "servers" || navMode === "dms") && screenShareOverlayOpen && selectedRemoteScreenShare && (
+          <div className="voice-share-overlay" onClick={(event) => event.stopPropagation()}>
+            <div className="voice-share-overlay-head">
+              <strong>Screen Share</strong>
+              <div className="voice-share-overlay-actions">
+                {remoteScreenShares.length > 1 && (
+                  <select
+                    value={selectedRemoteScreenShare.producerId}
+                    onChange={(event) => selectScreenShare(event.target.value)}
+                  >
+                    {remoteScreenShares.map((share) => (
+                      <option key={share.producerId} value={share.producerId}>
+                        {memberNameById.get(share.userId) || share.userId || "Screen Share"}
+                      </option>
+                    ))}
+                  </select>
+                )}
+                <button type="button" className="ghost" onClick={() => setScreenShareOverlayOpen(false)}>Hide</button>
+              </div>
+            </div>
+            <video
+              autoPlay
+              playsInline
+              className="voice-share-overlay-video"
+              ref={(node) => {
+                if (!node || !selectedRemoteScreenShare.stream) return;
+                if (node.srcObject !== selectedRemoteScreenShare.stream) node.srcObject = selectedRemoteScreenShare.stream;
+              }}
+            />
+            <span className="voice-share-overlay-name">
+              {memberNameById.get(selectedRemoteScreenShare.userId) || selectedRemoteScreenShare.userId || "Screen Share"}
+            </span>
           </div>
         )}
       </main>
@@ -8124,10 +8328,12 @@ export function App() {
               <button className="danger" onClick={() => setFullProfileViewer(null)}>Close</button>
             </div>
             <div
-              className="full-profile-canvas full-profile-canvas-readonly full-profile-viewer-canvas"
+              className="full-profile-canvas full-profile-canvas-readonly full-profile-viewer-canvas profile-studio-canvas"
               style={{
                 background: fullProfileViewer.fullProfile?.theme?.background || "linear-gradient(150deg, #16274b, #0f1a33 65%)",
-                color: fullProfileViewer.fullProfile?.theme?.text || "#dfe9ff"
+                color: fullProfileViewer.fullProfile?.theme?.text || "#dfe9ff",
+                "--full-profile-accent": fullProfileViewer.fullProfile?.theme?.accent || "#9bb6ff",
+                "--full-profile-font": getFullProfileFontFamily(fullProfileViewer.fullProfile?.theme?.fontPreset || "sans")
               }}
             >
               <div
@@ -8141,12 +8347,7 @@ export function App() {
                     <div
                       key={element.id}
                       className={`full-profile-element full-profile-element-${element.type}`}
-                      style={{
-                        left: `${element.x}%`,
-                        top: `${element.y}%`,
-                        width: `${element.w}%`,
-                        height: `${element.h}%`
-                      }}
+                      style={getFullProfileElementFrameStyle(element)}
                     >
                       {renderFullProfileElement(element, fullProfileViewer)}
                     </div>

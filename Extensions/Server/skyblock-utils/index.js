@@ -1,50 +1,44 @@
 import { command, createServerContext, optionString } from "../../lib/opencom-extension-sdk.js";
 
 
-async function getSkillLevel(username, skill) {
-    res = await fetch(`https://api.donskyblock.xyz/skill/${username}/${skill}`, {
-        method: 'GET',
+async function fetchJson(url) {
+    const res = await fetch(url, {
+        method: "GET",
         headers: {
-            'Content-Type': 'application/json'
+            "Content-Type": "application/json"
         }
     });
-    const data = await res.json();
-    if (data.success != true){
+
+    if (!res.ok) {
+        return null;
+    }
+
+    return res.json().catch(() => null);
+}
+
+async function getSkillLevel(username, skill) {
+    const data = await fetchJson(`https://api.donskyblock.xyz/skill/${encodeURIComponent(username)}/${encodeURIComponent(skill)}`);
+    if (!data || typeof data.level !== "number") {
         return 0;
     }
-    const skill_level = data.level;
-    return skill_level;
+    return data.level;
 }
 
 
 async function getSlayerLevel(username, slayer) {
-    res = await fetch(`https://api.donskyblock.xyz/${username}/${slayer}`, {
-        method: 'GET',
-        headers: {
-            'Content-Type': 'application/json'
-        }
-    });
-    const data = await res.json();
-    if (data.success != true){
+    const data = await fetchJson(`https://api.donskyblock.xyz/${encodeURIComponent(username)}/${encodeURIComponent(slayer)}`);
+    if (!data || typeof data.level !== "number") {
         return 0;
     }
-    const slayer_level = data.level;
-    return slayer_level;
+    return data.level;
 }
 
 async function getDungeonLevel(username) {
-    res = await fetch(`https://api.donskyblock.xyz/cata/${username}`, {
-        method: 'GET',
-        headers: {
-            'Content-Type': 'application/json'
-        }
-    });
-    const data = await res.json();
-    if (data.success != true){
+    const data = await fetchJson(`https://api.donskyblock.xyz/cata/${encodeURIComponent(username)}`);
+    if (!data || typeof data.level !== "number") {
         return 0;
     }
-    const slayer_level = data.level;
-    return slayer_level;
+    return data.level;
 }
 
 
@@ -69,7 +63,7 @@ export const commands = [
     options: [optionString("username", "Minecraft username", true), optionString("slayer", "Which slayer boss (zombie, spider, wolf)", true)],
     async execute(ctx) {
         const username = String(ctx.args?.username);
-        const slayer = String(ctx.args?.slayer);
+        const slayer = String(ctx.args?.slayer).toLowerCase();
         const slayerLevel = await getSlayerLevel(username, slayer);
         const input = `${username}'s ${slayer} slayer level is ${slayerLevel}`;
         const me = await ctx.apis.node.get("/v1/me").catch(() => null);
@@ -86,7 +80,7 @@ export const commands = [
     options: [optionString("username", "Minecraft username", true), optionString("skill", "Which skill", true)],
     async execute(ctx) {
         const username = String(ctx.args?.username);
-        const skill = String(ctx.args?.slayer);
+        const skill = String(ctx.args?.skill).toLowerCase();
         const skillLevel = await getSkillLevel(username, skill);
         const input = `${username}'s ${skill} level is ${skillLevel}`;
         const me = await ctx.apis.node.get("/v1/me").catch(() => null);

@@ -1,0 +1,23 @@
+{
+  "id": "teamspeak-compat",
+  "name": "TeamSpeak Compatibility Layer",
+  "author": "OpenCom Team",
+  "version": "0.1.0",
+  "description": "Official compatibility layer for running TeamSpeak-style extension packs in OpenCom.",
+  "scope": "server",
+  "entry": "index.js",
+  "permissions": ["all"],
+  "configDefaults": {
+    "enabledPackIds": ["teamspeak-core"],
+    "remotePacks": [],
+    "senderName": "TeamSpeak Bridge",
+    "senderAvatarUrl": "",
+    "allowMemberExecution": false,
+    "bridge": {
+      "enabled": false,
+      "baseUrl": "",
+      "authToken": "",
+      "timeoutMs": 8000
+    }
+  }
+}

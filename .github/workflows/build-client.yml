@@ -37,6 +37,10 @@ jobs:
         working-directory: client
         run: npm install
 
+      - name: Verify minimatch security override
+        working-directory: client
+        run: npm run check:minimatch
+
       - name: Build and stage desktop client artifacts
         working-directory: client
         run: ${{ matrix.build_script }}

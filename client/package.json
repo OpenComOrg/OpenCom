@@ -18,7 +18,10 @@
     "build:linux": "npm run sync:web && electron-builder --linux deb tar.gz",
     "build:stage:linux": "node scripts/build-and-stage.mjs linux",
     "build:stage:win": "node scripts/build-and-stage.mjs win",
-    "build:stage:all": "npm run build:stage:linux && npm run build:stage:win"
+    "build:stage:all": "npm run build:stage:linux && npm run build:stage:win",
+    "check:minimatch": "node scripts/check-minimatch.mjs",
+    "audit:runtime": "npm audit --omit=dev",
+    "audit:all": "npm audit"
   },
   "dependencies": {
     "electron-log": "^5.2.4"
@@ -26,6 +29,9 @@
   "devDependencies": {
     "electron": "^40.4.1",
     "electron-builder": "26.8.1"
+  },
+  "overrides": {
+    "minimatch": "file:vendor/minimatch"
   },
   "build": {
     "appId": "online.opencom.client",

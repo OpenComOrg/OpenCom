@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld("opencomDesktopBridge", {
   getSession: () => ipcRenderer.invoke("desktop:session:get"),
   setSession: (payload) => ipcRenderer.invoke("desktop:session:set", payload || {}),
   getDisplaySources: () => ipcRenderer.invoke("desktop:display-sources:get").then((result) => result?.sources || []),
+  pickDisplaySource: () => ipcRenderer.invoke("desktop:display-source:pick").then((result) => result?.sourceId || null),
   prompt: (text, defaultValue = "", title = "OpenCom") =>
     ipcRenderer.invoke("desktop:prompt", { text, defaultValue, title }).then((result) => result?.value ?? null)
 });

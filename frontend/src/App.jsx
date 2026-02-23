@@ -6387,6 +6387,11 @@ export function App() {
         setStatus("Screen sharing started.");
       }
     } catch (error) {
+      const reason = error?.message || "";
+      if (reason === "SCREEN_SOURCE_CANCELLED" || reason === "NotAllowedError") {
+        setStatus("Screen sharing cancelled.");
+        return;
+      }
       const message = `Screen sharing failed: ${error.message || "SCREEN_SHARE_FAILED"}`;
       setStatus(message);
       await alertDialog(message, "Screen Share Error");

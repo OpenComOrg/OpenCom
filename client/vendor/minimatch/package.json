@@ -1,0 +1,14 @@
+{
+  "name": "minimatch",
+  "version": "10.2.2",
+  "description": "Compatibility wrapper for minimatch 10 with callable CommonJS export",
+  "main": "index.js",
+  "license": "BlueOak-1.0.0",
+  "engines": {
+    "node": "18 || 20 || >=22"
+  },
+  "exports": {
+    ".": "./index.js",
+    "./package.json": "./package.json"
+  }
+}

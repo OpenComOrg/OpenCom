@@ -80,6 +80,33 @@ function writeDesktopSession(session) {
   }
 }
 
+function nativeImageToDataUrl(image) {
+  try {
+    if (!image || typeof image.isEmpty !== "function" || image.isEmpty()) return "";
+    return image.toDataURL();
+  } catch {
+    return "";
+  }
+}
+
+async function getDesktopDisplaySources({ includeThumbnails = false } = {}) {
+  const sources = await desktopCapturer.getSources({
+    types: ["screen", "window"],
+    thumbnailSize: includeThumbnails ? { width: 320, height: 180 } : { width: 1, height: 1 },
+    fetchWindowIcons: includeThumbnails
+  });
+
+  return sources.map((source) => ({
+    id: source.id,
+    name: source.name,
+    type: String(source.id || "").startsWith("screen:") ? "screen" : "window",
+    ...(includeThumbnails ? {
+      thumbnailDataUrl: nativeImageToDataUrl(source.thumbnail),
+      appIconDataUrl: nativeImageToDataUrl(source.appIcon)
+    } : {})
+  }));
+}
+
 function showPromptWindow(promptText = "", defaultValue = "", title = "OpenCom") {
   return new Promise((resolve) => {
     const parentWindow = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0] || null;
@@ -151,6 +178,181 @@ function showPromptWindow(promptText = "", defaultValue = "", title = "OpenCom")
   });
 }
 
+function showDisplaySourcePickerWindow(sources = [], title = "Share your screen") {
+  return new Promise((resolve) => {
+    if (!Array.isArray(sources) || sources.length === 0) {
+      resolve(null);
+      return;
+    }
+
+    const parentWindow = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0] || null;
+    const pickerWindow = new BrowserWindow({
+      width: 940,
+      height: 680,
+      minWidth: 760,
+      minHeight: 520,
+      parent: parentWindow || undefined,
+      modal: Boolean(parentWindow),
+      resizable: true,
+      minimizable: false,
+      maximizable: false,
+      show: false,
+      title,
+      autoHideMenuBar: true,
+      webPreferences: {
+        nodeIntegration: true,
+        contextIsolation: false,
+        sandbox: false
+      }
+    });
+
+    const requestId = crypto.randomUUID();
+    const selectChannel = `desktop:display-picker:select:${requestId}`;
+    const cancelChannel = `desktop:display-picker:cancel:${requestId}`;
+    let settled = false;
+
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      ipcMain.removeListener(selectChannel, onSelect);
+      ipcMain.removeListener(cancelChannel, onCancel);
+      resolve(typeof value === "string" && value ? value : null);
+      if (!pickerWindow.isDestroyed()) pickerWindow.close();
+    };
+
+    const onSelect = (_event, value) => {
+      const selectedId = typeof value === "string" ? value : "";
+      const exists = sources.some((source) => source?.id === selectedId);
+      finish(exists ? selectedId : null);
+    };
+    const onCancel = () => finish(null);
+
+    ipcMain.on(selectChannel, onSelect);
+    ipcMain.on(cancelChannel, onCancel);
+    pickerWindow.on("closed", () => finish(null));
+    pickerWindow.webContents.on("did-finish-load", () => pickerWindow.show());
+    pickerWindow.webContents.on("will-navigate", (event) => event.preventDefault());
+    pickerWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+
+    const safeTitle = String(title || "Share your screen").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    const pickerSources = JSON.stringify(
+      sources.map((source) => ({
+        id: String(source?.id || ""),
+        name: String(source?.name || ""),
+        type: source?.type === "window" ? "window" : "screen",
+        thumbnailDataUrl: String(source?.thumbnailDataUrl || ""),
+        appIconDataUrl: String(source?.appIconDataUrl || "")
+      }))
+    ).replace(/</g, "\\u003c");
+
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>${safeTitle}</title><style>
+      :root{color-scheme:dark}
+      body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#0f1729;color:#ebf0ff;margin:0;padding:16px}
+      h1{margin:0 0 8px 0;font-size:18px}
+      p{margin:0 0 14px 0;color:#b7c6ef}
+      .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px;max-height:500px;overflow:auto;padding-right:2px}
+      .card{display:flex;flex-direction:column;gap:8px;text-align:left;padding:0;border:1px solid #2b3d64;border-radius:10px;background:#121e37;color:#eaf0ff;cursor:pointer}
+      .card:hover{border-color:#6e98ff}
+      .card.active{border-color:#6e98ff;box-shadow:0 0 0 2px rgba(110,152,255,0.28)}
+      .thumb{height:118px;object-fit:cover;width:100%;border-radius:9px 9px 0 0;background:#0b1326}
+      .meta{display:flex;align-items:center;gap:8px;padding:0 10px 10px 10px;min-height:56px}
+      .meta img{width:18px;height:18px;border-radius:4px;flex:0 0 auto}
+      .meta b{display:block;font-size:13px;font-weight:600;line-height:1.3}
+      .meta span{display:block;font-size:11px;color:#9eb4e6}
+      .actions{display:flex;justify-content:flex-end;gap:8px;margin-top:14px}
+      button{padding:8px 14px;border-radius:8px;border:1px solid #4f6ca1;background:#2f6deb;color:white;cursor:pointer}
+      button.ghost{background:transparent;color:#c5d4ff}
+      button:disabled{opacity:0.45;cursor:not-allowed}
+    </style></head><body>
+      <h1>${safeTitle}</h1>
+      <p>Select a screen or window to share.</p>
+      <div id="grid" class="grid"></div>
+      <div class="actions">
+        <button class="ghost" id="cancel">Cancel</button>
+        <button id="share" disabled>Share</button>
+      </div>
+      <script>
+        const { ipcRenderer } = require("electron");
+        const selectChannel = ${JSON.stringify(selectChannel)};
+        const cancelChannel = ${JSON.stringify(cancelChannel)};
+        const sources = ${pickerSources};
+        const grid = document.getElementById("grid");
+        const share = document.getElementById("share");
+        let selected = "";
+
+        function createCard(source) {
+          const card = document.createElement("button");
+          card.type = "button";
+          card.className = "card";
+          card.dataset.id = source.id;
+
+          const thumb = document.createElement("img");
+          thumb.className = "thumb";
+          thumb.alt = source.name || "Screen source";
+          if (source.thumbnailDataUrl) thumb.src = source.thumbnailDataUrl;
+          card.appendChild(thumb);
+
+          const meta = document.createElement("div");
+          meta.className = "meta";
+
+          if (source.appIconDataUrl) {
+            const icon = document.createElement("img");
+            icon.src = source.appIconDataUrl;
+            icon.alt = "";
+            meta.appendChild(icon);
+          }
+
+          const labels = document.createElement("div");
+          const name = document.createElement("b");
+          name.textContent = source.name || "Unknown source";
+          const type = document.createElement("span");
+          type.textContent = source.type === "window" ? "Window" : "Screen";
+          labels.appendChild(name);
+          labels.appendChild(type);
+          meta.appendChild(labels);
+          card.appendChild(meta);
+
+          card.addEventListener("click", () => selectSource(source.id));
+          card.addEventListener("dblclick", () => {
+            selectSource(source.id);
+            submit();
+          });
+          return card;
+        }
+
+        function render() {
+          grid.replaceChildren(...sources.map(createCard));
+          if (sources.length > 0) selectSource(sources.find((source) => source.type === "screen")?.id || sources[0].id);
+        }
+
+        function selectSource(sourceId) {
+          selected = sourceId || "";
+          for (const node of grid.querySelectorAll(".card")) {
+            node.classList.toggle("active", node.dataset.id === selected);
+          }
+          share.disabled = !selected;
+        }
+
+        function submit() {
+          if (!selected) return;
+          ipcRenderer.send(selectChannel, selected);
+        }
+
+        share.addEventListener("click", submit);
+        document.getElementById("cancel").addEventListener("click", () => ipcRenderer.send(cancelChannel));
+        window.addEventListener("keydown", (event) => {
+          if (event.key === "Escape") ipcRenderer.send(cancelChannel);
+          if (event.key === "Enter") submit();
+        });
+
+        render();
+      </script>
+    </body></html>`;
+
+    pickerWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+  });
+}
+
 log.initialize();
 log.transports.file.level = "info";
 
@@ -200,7 +402,7 @@ function installMediaHandlers() {
 
   if (typeof ses.setDisplayMediaRequestHandler === "function") {
     ses.setDisplayMediaRequestHandler(
-      async (_request, callback) => {
+      async (request, callback) => {
         try {
           const sources = await desktopCapturer.getSources({
             types: ["screen", "window"],
@@ -209,7 +411,12 @@ function installMediaHandlers() {
           });
           const picked = sources.find((source) => String(source.id || "").startsWith("screen:")) || sources[0];
           if (!picked) return callback({});
-          callback({ video: picked, audio: "loopback" });
+          const wantsAudio = request?.audio === true || (typeof request?.audio === "object" && request.audio !== null);
+          if (wantsAudio) {
+            callback({ video: picked, audio: "loopback" });
+            return;
+          }
+          callback({ video: picked });
         } catch (error) {
           log.error("Display media request failed", error);
           callback({});
@@ -419,18 +626,19 @@ ipcMain.handle("desktop:prompt", async (_event, payload = {}) => {
 });
 
 ipcMain.handle("desktop:display-sources:get", async () => {
-  const sources = await desktopCapturer.getSources({
-    types: ["screen", "window"],
-    thumbnailSize: { width: 480, height: 270 },
-    fetchWindowIcons: true
-  });
-  return {
-    sources: sources.map((source) => ({
-      id: source.id,
-      name: source.name,
-      type: String(source.id || "").startsWith("screen:") ? "screen" : "window"
-    }))
-  };
+  const sources = await getDesktopDisplaySources();
+  return { sources };
+});
+
+ipcMain.handle("desktop:display-source:pick", async () => {
+  try {
+    const sources = await getDesktopDisplaySources({ includeThumbnails: true });
+    const sourceId = await showDisplaySourcePickerWindow(sources, "Share your screen");
+    return { sourceId: sourceId || null };
+  } catch (error) {
+    log.error("Display source picker failed", error);
+    return { sourceId: null };
+  }
 });
 
 app.whenReady().then(() => {

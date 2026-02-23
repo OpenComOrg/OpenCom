@@ -583,6 +583,23 @@ export function createSfuVoiceClient({
     return window.opencomDesktopBridge || null;
   }
 
+  async function pickDesktopDisplaySourceId(sources = []) {
+    if (!Array.isArray(sources) || sources.length === 0) {
+      throw new Error("SCREEN_SOURCE_NOT_FOUND");
+    }
+
+    const bridge = getDesktopBridge();
+    if (typeof bridge?.pickDisplaySource === "function") {
+      const selectedId = await bridge.pickDisplaySource();
+      if (!selectedId) throw new Error("SCREEN_SOURCE_CANCELLED");
+      return selectedId;
+    }
+
+    const preferred = sources.find((source) => source?.type === "screen") || sources[0];
+    if (!preferred?.id) throw new Error("SCREEN_SOURCE_NOT_FOUND");
+    return preferred.id;
+  }
+
   async function getDesktopFallbackDisplayStream() {
     const bridge = getDesktopBridge();
     if (!bridge?.getDisplaySources || !navigator?.mediaDevices?.getUserMedia) {
@@ -593,16 +610,17 @@ export function createSfuVoiceClient({
     if (!Array.isArray(sources) || sources.length === 0) {
       throw new Error("SCREEN_SOURCE_NOT_FOUND");
     }
-    const preferred = sources.find((source) => source?.type === "screen") || sources[0];
-    if (!preferred?.id) throw new Error("SCREEN_SOURCE_NOT_FOUND");
+    const sourceId = await pickDesktopDisplaySourceId(sources);
 
     return navigator.mediaDevices.getUserMedia({
       audio: false,
       video: {
         mandatory: {
           chromeMediaSource: "desktop",
-          chromeMediaSourceId: preferred.id,
-          maxFrameRate: 30
+          chromeMediaSourceId: sourceId,
+          maxFrameRate: 30,
+          maxWidth: 3840,
+          maxHeight: 2160
         }
       }
     });
@@ -893,16 +911,28 @@ export function createSfuVoiceClient({
     }
     if (state.localScreenProducer) return;
     let displayStream = null;
-    if (navigator.mediaDevices?.getDisplayMedia) {
+    const canUseDesktopBridgeCapture = !!getDesktopBridge()?.getDisplaySources && !!navigator?.mediaDevices?.getUserMedia;
+
+    if (canUseDesktopBridgeCapture) {
       try {
-        displayStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+        displayStream = await getDesktopFallbackDisplayStream();
       } catch (error) {
-        displayStream = await getDesktopFallbackDisplayStream().catch(() => {
+        if (error?.message === "SCREEN_SOURCE_CANCELLED") throw error;
+        if (!navigator.mediaDevices?.getDisplayMedia) throw error;
+        displayStream = await navigator.mediaDevices.getDisplayMedia({
+          video: { frameRate: { ideal: 30, max: 60 } },
+          audio: false
+        }).catch(() => {
           throw error;
         });
       }
+    } else if (navigator.mediaDevices?.getDisplayMedia) {
+      displayStream = await navigator.mediaDevices.getDisplayMedia({
+        video: { frameRate: { ideal: 30, max: 60 } },
+        audio: false
+      });
     } else {
-      displayStream = await getDesktopFallbackDisplayStream();
+      throw new Error("SCREEN_SHARE_NOT_SUPPORTED");
     }
     const screenTrack = displayStream.getVideoTracks()[0];
     if (!screenTrack) {

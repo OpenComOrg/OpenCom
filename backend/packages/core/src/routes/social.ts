@@ -18,6 +18,10 @@ const UpdateSocialSettings = z.object({ allowFriendRequests: z.boolean() });
 const DmMessageParams = z.object({ threadId: z.string().min(3), messageId: z.string().min(3) });
 const DmCallSignalParams = z.object({ threadId: z.string().min(3) });
 const DmCallSignalQuery = z.object({ afterId: z.string().min(3).optional() });
+const DmMessagesQuery = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+  before: z.string().datetime().optional()
+});
 const DmCallSignalBody = z.object({
   targetUserId: z.string().min(3),
   type: z.enum(["offer", "answer", "ice", "end"]),
@@ -502,6 +506,7 @@ export async function socialRoutes(
   app.get("/v1/social/dms/:threadId/messages", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
     const userId = req.user.sub as string;
     const { threadId } = z.object({ threadId: z.string().min(3) }).parse(req.params);
+    const { limit, before } = DmMessagesQuery.parse(req.query || {});
 
     const thread = await q<{ id: string }>(
       `SELECT id FROM social_dm_threads WHERE id=:threadId AND (user_a=:userId OR user_b=:userId) LIMIT 1`,
@@ -509,19 +514,33 @@ export async function socialRoutes(
     );
     if (!thread.length) return rep.code(404).send({ error: "THREAD_NOT_FOUND" });
 
-    const rows = await q<{ id: string; sender_user_id: string; content: string; created_at: string; sender_name: string; sender_display_name: string | null; sender_pfp_url: string | null }>(
-      `SELECT m.id, m.sender_user_id, m.content, m.created_at, u.username AS sender_name, u.display_name AS sender_display_name, u.pfp_url AS sender_pfp_url
-       FROM social_dm_messages m
-       JOIN users u ON u.id=m.sender_user_id
-       WHERE m.thread_id=:threadId
-       ORDER BY m.created_at ASC`,
-      { threadId }
-    );
+    const rows = before
+      ? await q<{ id: string; sender_user_id: string; content: string; created_at: string; sender_name: string; sender_display_name: string | null; sender_pfp_url: string | null }>(
+        `SELECT m.id, m.sender_user_id, m.content, m.created_at, u.username AS sender_name, u.display_name AS sender_display_name, u.pfp_url AS sender_pfp_url
+         FROM social_dm_messages m
+         JOIN users u ON u.id=m.sender_user_id
+         WHERE m.thread_id=:threadId
+           AND m.created_at < :before
+         ORDER BY m.created_at DESC
+         LIMIT :limit`,
+        { threadId, before, limit }
+      )
+      : await q<{ id: string; sender_user_id: string; content: string; created_at: string; sender_name: string; sender_display_name: string | null; sender_pfp_url: string | null }>(
+        `SELECT m.id, m.sender_user_id, m.content, m.created_at, u.username AS sender_name, u.display_name AS sender_display_name, u.pfp_url AS sender_pfp_url
+         FROM social_dm_messages m
+         JOIN users u ON u.id=m.sender_user_id
+         WHERE m.thread_id=:threadId
+         ORDER BY m.created_at DESC
+         LIMIT :limit`,
+        { threadId, limit }
+      );
 
-    const attachmentsByMessageId = await getDmMessageAttachmentsByMessageIds(rows.map((row) => row.id));
+    const hasMore = rows.length >= limit;
+    const orderedRows = rows.slice().reverse();
+    const attachmentsByMessageId = await getDmMessageAttachmentsByMessageIds(orderedRows.map((row) => row.id));
 
     return {
-      messages: rows.map((row) => ({
+      messages: orderedRows.map((row) => ({
         id: row.id,
         authorId: row.sender_user_id,
         author: row.sender_display_name || row.sender_name,
@@ -529,7 +548,8 @@ export async function socialRoutes(
         content: row.content,
         createdAt: row.created_at,
         attachments: attachmentsByMessageId.get(row.id) || []
-      }))
+      })),
+      hasMore
     };
   });
 

@@ -371,11 +371,38 @@ function getTrustedOrigins() {
   return origins;
 }
 
+function normalizeOrigin(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  try {
+    const parsed = new URL(raw);
+    if (parsed.protocol === "file:") return "file://";
+    return parsed.origin || "";
+  } catch {
+    if (raw.startsWith("file://")) return "file://";
+    return raw;
+  }
+}
+
 function isTrustedOrigin(value) {
-  const origin = String(value || "").trim();
+  const origin = normalizeOrigin(value);
   if (!origin) return false;
-  if (origin.startsWith("file://")) return true;
+  if (origin === "file://") return true;
   return getTrustedOrigins().has(origin);
+}
+
+function getPermissionRequestOrigin(details = {}, fallback = "") {
+  const candidateValues = [
+    details?.requestingOrigin,
+    details?.securityOrigin,
+    details?.requestingUrl,
+    fallback
+  ];
+  for (const candidate of candidateValues) {
+    const normalized = normalizeOrigin(candidate);
+    if (normalized) return normalized;
+  }
+  return "";
 }
 
 function installMediaHandlers() {
@@ -386,16 +413,18 @@ function installMediaHandlers() {
     "audioCapture",
     "videoCapture",
     "display-capture",
-    "fullscreen"
+    "fullscreen",
+    "speaker-selection"
   ]);
 
-  ses.setPermissionCheckHandler((_webContents, permission, requestingOrigin) => {
-    if (!isTrustedOrigin(requestingOrigin)) return false;
+  ses.setPermissionCheckHandler((_webContents, permission, requestingOrigin, details) => {
+    const origin = getPermissionRequestOrigin(details, requestingOrigin);
+    if (!isTrustedOrigin(origin)) return false;
     return allowedPermissions.has(permission);
   });
 
   ses.setPermissionRequestHandler((_webContents, permission, callback, details) => {
-    const origin = details?.requestingOrigin || "";
+    const origin = getPermissionRequestOrigin(details);
     if (!isTrustedOrigin(origin)) return callback(false);
     return callback(allowedPermissions.has(permission));
   });

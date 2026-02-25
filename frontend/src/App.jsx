@@ -21,6 +21,7 @@ import {
   isBoostGiftPath,
   isInviteJoinPath,
   normalizeAppPath,
+  shouldSkipLandingPage,
   parseBoostGiftCodeFromInput,
   parseInviteCodeFromInput,
   writeAppRoute
@@ -350,6 +351,9 @@ const ACCESS_TOKEN_KEY = "opencom_access_token";
 const REFRESH_TOKEN_KEY = "opencom_refresh_token";
 const PENDING_INVITE_CODE_KEY = "opencom_pending_invite_code";
 const PENDING_INVITE_AUTO_JOIN_KEY = "opencom_pending_invite_auto_join";
+const MESSAGE_PAGE_SIZE = 50;
+const MESSAGE_HISTORY_PREFETCH_REMAINING_COUNT = 10;
+const MESSAGE_HISTORY_PREFETCH_THRESHOLD_PX = MESSAGE_HISTORY_PREFETCH_REMAINING_COUNT * 56;
 
 const BUILTIN_EMOTES = {
   smile: "😄",
@@ -391,6 +395,44 @@ function parsePermissionBits(value) {
   } catch {
     return 0n;
   }
+}
+
+function toIsoTimestamp(value) {
+  if (value == null || value === "") return "";
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toISOString();
+}
+
+function toTimestampMs(value) {
+  const ms = new Date(value || "").getTime();
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+function mergeMessagesChronologically(existing = [], incoming = [], getTimestamp) {
+  const byId = new Map();
+  for (const message of existing || []) {
+    if (!message?.id) continue;
+    byId.set(message.id, message);
+  }
+  for (const message of incoming || []) {
+    if (!message?.id) continue;
+    byId.set(message.id, { ...(byId.get(message.id) || {}), ...message });
+  }
+  return [...byId.values()].sort((a, b) => {
+    const aTime = toTimestampMs(getTimestamp(a));
+    const bTime = toTimestampMs(getTimestamp(b));
+    if (aTime !== bTime) return aTime - bTime;
+    return String(a.id || "").localeCompare(String(b.id || ""));
+  });
+}
+
+function buildPaginatedPath(basePath, { limit = MESSAGE_PAGE_SIZE, before = "" } = {}) {
+  const params = new URLSearchParams();
+  params.set("limit", String(limit));
+  if (before) params.set("before", before);
+  const query = params.toString();
+  return query ? `${basePath}?${query}` : basePath;
 }
 
 function isVoiceDebugEnabled() {
@@ -1435,16 +1477,27 @@ export function App() {
   const previousServerChannelIdRef = useRef("");
   const dmScrollPositionsRef = useRef({});
   const serverScrollPositionsRef = useRef({});
+  const activeServerMessagesRef = useRef([]);
+  const activeDmMessagesRef = useRef([]);
+  const serverHistoryHasMoreByChannelRef = useRef({});
+  const dmHistoryHasMoreByThreadRef = useRef({});
+  const serverHistoryLoadingByChannelRef = useRef({});
+  const dmHistoryLoadingByThreadRef = useRef({});
   const dialogResolverRef = useRef(null);
   const dialogInputRef = useRef(null);
   const activeServerIdRef = useRef("");
   const activeChannelIdRef = useRef("");
   const activeGuildIdRef = useRef("");
+  const activeDmIdRef = useRef("");
   const profileCardDragOffsetRef = useRef({ x: 0, y: 0 });
   const profileCardDragPointerIdRef = useRef(null);
   const memberProfilePopoutRef = useRef(null);
   const downloadMenuRef = useRef(null);
   const preferredDownloadTarget = useMemo(() => getPreferredDownloadTarget(DOWNLOAD_TARGETS), []);
+  const isDesktopRuntime = useMemo(() => {
+    if (typeof window === "undefined") return false;
+    return window.location.protocol === "file:" || shouldSkipLandingPage();
+  }, []);
   const loadedClientExtensionIdsRef = useRef(new Set());
   const desktopSessionLoadedRef = useRef(false);
   const extensionPanelsRef = useRef([]);
@@ -1567,8 +1620,7 @@ export function App() {
 
   useEffect(() => {
     if (!accessToken) return;
-    if (routePath === APP_ROUTE_TERMS) return;
-    if (routePath === APP_ROUTE_CLIENT) return;
+    if (routePath !== APP_ROUTE_LOGIN) return;
     navigateAppRoute(APP_ROUTE_CLIENT, { replace: true });
   }, [accessToken, routePath]);
 
@@ -2023,6 +2075,8 @@ export function App() {
   }, [channels, voiceConnectedChannelId]);
   const activeChannel = useMemo(() => channels.find((channel) => channel.id === activeChannelId) || null, [channels, activeChannelId]);
   const activeDm = useMemo(() => dms.find((dm) => dm.id === activeDmId) || null, [dms, activeDmId]);
+  activeServerMessagesRef.current = messages;
+  activeDmMessagesRef.current = activeDm?.messages || [];
   const installedServerExtensionById = useMemo(
     () => new Map((installedServerExtensions || []).map((item) => [item?.extensionId, item])),
     [installedServerExtensions]
@@ -2757,6 +2811,131 @@ export function App() {
     if (navMode !== "dms") previousDmIdRef.current = "";
   }, [navMode]);
 
+  async function loadOlderServerMessages() {
+    if (navMode !== "servers" || !activeServer || !activeChannelId) return false;
+    const channelKey = `${activeGuildId || ""}:${activeChannelId || ""}`;
+    if (!channelKey) return false;
+    if (serverHistoryLoadingByChannelRef.current[channelKey]) return false;
+    if (serverHistoryHasMoreByChannelRef.current[channelKey] === false) return false;
+
+    const currentMessages = activeServerMessagesRef.current || [];
+    const oldestMessage = currentMessages[0];
+    const before = toIsoTimestamp(oldestMessage?.created_at || oldestMessage?.createdAt);
+    if (!before) {
+      serverHistoryHasMoreByChannelRef.current[channelKey] = false;
+      return false;
+    }
+
+    const container = messagesRef.current;
+    const previousScrollHeight = container?.scrollHeight || 0;
+    const previousScrollTop = container?.scrollTop || 0;
+    const targetChannelId = activeChannelId;
+    const targetGuildId = activeGuildId;
+    const targetServerId = activeServer.id;
+    serverHistoryLoadingByChannelRef.current[channelKey] = true;
+
+    try {
+      const path = buildPaginatedPath(`/v1/channels/${targetChannelId}/messages`, {
+        limit: MESSAGE_PAGE_SIZE,
+        before
+      });
+      const data = await nodeApi(activeServer.baseUrl, path, activeServer.membershipToken);
+      if (
+        activeChannelIdRef.current !== targetChannelId
+        || activeGuildIdRef.current !== targetGuildId
+        || activeServerIdRef.current !== targetServerId
+      ) {
+        return false;
+      }
+
+      const fetched = Array.isArray(data?.messages) ? data.messages : [];
+      const olderMessages = fetched.slice().reverse();
+      const hasMore = data?.hasMore != null ? !!data.hasMore : fetched.length >= MESSAGE_PAGE_SIZE;
+      serverHistoryHasMoreByChannelRef.current[channelKey] = hasMore;
+      if (!olderMessages.length) return false;
+
+      setMessages((current) => mergeMessagesChronologically(
+        current,
+        olderMessages,
+        (message) => message.created_at || message.createdAt
+      ));
+
+      window.requestAnimationFrame(() => {
+        const nextContainer = messagesRef.current;
+        if (!nextContainer) return;
+        const delta = nextContainer.scrollHeight - previousScrollHeight;
+        nextContainer.scrollTop = Math.max(0, previousScrollTop + delta);
+      });
+
+      return true;
+    } catch (error) {
+      setStatus(`Message history fetch failed: ${error.message}`);
+      return false;
+    } finally {
+      serverHistoryLoadingByChannelRef.current[channelKey] = false;
+    }
+  }
+
+  async function loadOlderDmMessages() {
+    if (navMode !== "dms" || !activeDmId || !accessToken) return false;
+    const threadId = activeDmId;
+    if (dmHistoryLoadingByThreadRef.current[threadId]) return false;
+    if (dmHistoryHasMoreByThreadRef.current[threadId] === false) return false;
+
+    const currentMessages = activeDmMessagesRef.current || [];
+    const oldestMessage = currentMessages[0];
+    const before = toIsoTimestamp(oldestMessage?.createdAt || oldestMessage?.created_at);
+    if (!before) {
+      dmHistoryHasMoreByThreadRef.current[threadId] = false;
+      return false;
+    }
+
+    const container = dmMessagesRef.current;
+    const previousScrollHeight = container?.scrollHeight || 0;
+    const previousScrollTop = container?.scrollTop || 0;
+    dmHistoryLoadingByThreadRef.current[threadId] = true;
+
+    try {
+      const path = buildPaginatedPath(`/v1/social/dms/${threadId}/messages`, {
+        limit: MESSAGE_PAGE_SIZE,
+        before
+      });
+      const data = await api(path, { headers: { Authorization: `Bearer ${accessToken}` } });
+      if (activeDmIdRef.current !== threadId) return false;
+
+      const olderMessages = Array.isArray(data?.messages) ? data.messages : [];
+      const hasMore = data?.hasMore != null ? !!data.hasMore : olderMessages.length >= MESSAGE_PAGE_SIZE;
+      dmHistoryHasMoreByThreadRef.current[threadId] = hasMore;
+      if (!olderMessages.length) return false;
+
+      setDms((current) => current.map((item) => {
+        if (item.id !== threadId) return item;
+        return {
+          ...item,
+          messages: mergeMessagesChronologically(
+            item.messages || [],
+            olderMessages,
+            (message) => message.createdAt || message.created_at
+          )
+        };
+      }));
+
+      window.requestAnimationFrame(() => {
+        const nextContainer = dmMessagesRef.current;
+        if (!nextContainer) return;
+        const delta = nextContainer.scrollHeight - previousScrollHeight;
+        nextContainer.scrollTop = Math.max(0, previousScrollTop + delta);
+      });
+
+      return true;
+    } catch (error) {
+      setStatus(`DM history fetch failed: ${error.message}`);
+      return false;
+    } finally {
+      dmHistoryLoadingByThreadRef.current[threadId] = false;
+    }
+  }
+
   // Keep server chat scroll position per channel and only auto-scroll when user is near the bottom.
   useEffect(() => {
     if (!messagesRef.current || navMode !== "servers") return;
@@ -2799,11 +2978,14 @@ export function App() {
       const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 100;
       isServerAtBottomRef.current = isNearBottom;
       serverScrollPositionsRef.current[channelKey] = container.scrollTop;
+      if (container.scrollTop <= MESSAGE_HISTORY_PREFETCH_THRESHOLD_PX) {
+        void loadOlderServerMessages();
+      }
     };
     handleScroll();
     container.addEventListener("scroll", handleScroll, { passive: true });
     return () => container.removeEventListener("scroll", handleScroll);
-  }, [navMode, activeGuildId, activeChannelId]);
+  }, [navMode, activeGuildId, activeChannelId, activeServer]);
 
   // Keep DM scroll position per thread and only auto-scroll when user is near the bottom.
   useEffect(() => {
@@ -2847,11 +3029,14 @@ export function App() {
       const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 100;
       isAtBottomRef.current = isNearBottom;
       dmScrollPositionsRef.current[dmKey] = container.scrollTop;
+      if (container.scrollTop <= MESSAGE_HISTORY_PREFETCH_THRESHOLD_PX) {
+        void loadOlderDmMessages();
+      }
     };
     handleScroll();
     container.addEventListener("scroll", handleScroll, { passive: true });
     return () => container.removeEventListener("scroll", handleScroll);
-  }, [navMode, activeDmId]);
+  }, [navMode, activeDmId, accessToken]);
 
   useEffect(() => {
     if (!remoteScreenShares.length) {
@@ -3717,15 +3902,26 @@ export function App() {
 
   useEffect(() => {
     if (navMode !== "dms" || !activeDmId || !accessToken) return;
+    const threadId = activeDmId;
+    let cancelled = false;
+    dmHistoryLoadingByThreadRef.current[threadId] = false;
 
-    api(`/v1/social/dms/${activeDmId}/messages`, { headers: { Authorization: `Bearer ${accessToken}` } })
+    const path = buildPaginatedPath(`/v1/social/dms/${threadId}/messages`, { limit: MESSAGE_PAGE_SIZE });
+    api(path, { headers: { Authorization: `Bearer ${accessToken}` } })
       .then((data) => {
-        const nextMessages = data.messages || [];
-        setDms((current) => current.map((item) => item.id === activeDmId ? { ...item, messages: nextMessages } : item));
+        if (cancelled || activeDmIdRef.current !== threadId) return;
+        const nextMessages = Array.isArray(data?.messages) ? data.messages : [];
+        const hasMore = data?.hasMore != null ? !!data.hasMore : nextMessages.length >= MESSAGE_PAGE_SIZE;
+        dmHistoryHasMoreByThreadRef.current[threadId] = hasMore;
+        setDms((current) => current.map((item) => item.id === threadId ? { ...item, messages: nextMessages } : item));
       })
       .catch(() => {
         // keep existing local messages as fallback
       });
+
+    return () => {
+      cancelled = true;
+    };
   }, [activeDmId, navMode, accessToken]);
 
   useEffect(() => {
@@ -4134,6 +4330,7 @@ export function App() {
   activeChannelIdRef.current = activeChannelId;
   activeGuildIdRef.current = activeGuildId;
   activeServerIdRef.current = activeServerId;
+  activeDmIdRef.current = activeDmId;
 
   useEffect(() => {
     window.dispatchEvent(new CustomEvent("opencom-voice-state-change", {
@@ -4155,38 +4352,59 @@ export function App() {
     }
 
     let cancelled = false;
+    const channelKey = `${activeGuildId || ""}:${activeChannelId || ""}`;
+    serverHistoryLoadingByChannelRef.current[channelKey] = false;
 
-    const loadChannelMessages = () => nodeApi(activeServer.baseUrl, `/v1/channels/${activeChannelId}/messages`, activeServer.membershipToken)
+    const loadChannelMessages = (mode = "replace") => {
+      const path = buildPaginatedPath(`/v1/channels/${activeChannelId}/messages`, { limit: MESSAGE_PAGE_SIZE });
+      return nodeApi(activeServer.baseUrl, path, activeServer.membershipToken)
       .then((data) => {
         if (cancelled) return;
         setStatus("");
-        setMessages((data.messages || []).slice().reverse());
+        const fetched = Array.isArray(data?.messages) ? data.messages : [];
+        const latestMessages = fetched.slice().reverse();
+        const hasMore = data?.hasMore != null ? !!data.hasMore : fetched.length >= MESSAGE_PAGE_SIZE;
+        serverHistoryHasMoreByChannelRef.current[channelKey] = hasMore;
+        if (mode === "replace") {
+          setMessages(latestMessages);
+          return;
+        }
+        setMessages((current) => mergeMessagesChronologically(
+          current,
+          latestMessages,
+          (message) => message.created_at || message.createdAt
+        ));
       })
       .catch((error) => {
         if (cancelled) return;
         if (error?.message?.startsWith("HTTP_403")) {
           setMessages([]);
+          serverHistoryHasMoreByChannelRef.current[channelKey] = false;
           setStatus("You no longer have access to that channel.");
           setActiveChannelId("");
           return;
         }
         if (error?.message?.startsWith("HTTP_404")) {
           setMessages([]);
+          serverHistoryHasMoreByChannelRef.current[channelKey] = false;
           setStatus("That channel no longer exists. Switching to an available channel.");
           setActiveChannelId("");
           return;
         }
         setStatus(`Message fetch failed: ${error.message}`);
       });
+    };
 
-    loadChannelMessages();
-    const timer = nodeGatewayConnectedForActiveServer ? null : window.setInterval(loadChannelMessages, 2000);
+    loadChannelMessages("replace");
+    const timer = nodeGatewayConnectedForActiveServer ? null : window.setInterval(() => {
+      loadChannelMessages("merge").catch(() => {});
+    }, 2000);
 
     return () => {
       cancelled = true;
       if (timer) window.clearInterval(timer);
     };
-  }, [activeServer, activeChannelId, navMode, nodeGatewayConnectedForActiveServer]);
+  }, [activeServer, activeGuildId, activeChannelId, navMode, nodeGatewayConnectedForActiveServer]);
 
   useEffect(() => {
     if (navMode !== "servers" || !activeServer || !activeChannelId) return;
@@ -4438,8 +4656,18 @@ export function App() {
       });
       const commandResult = result?.result;
       if (result?.postedMessage?.id && activeChannelId) {
-        const data = await nodeApi(activeServer.baseUrl, `/v1/channels/${activeChannelId}/messages`, activeServer.membershipToken);
-        setMessages((data.messages || []).slice().reverse());
+        const path = buildPaginatedPath(`/v1/channels/${activeChannelId}/messages`, { limit: MESSAGE_PAGE_SIZE });
+        const data = await nodeApi(activeServer.baseUrl, path, activeServer.membershipToken);
+        const fetched = Array.isArray(data?.messages) ? data.messages : [];
+        const latestMessages = fetched.slice().reverse();
+        const channelKey = `${activeGuildId || ""}:${activeChannelId || ""}`;
+        const hasMore = data?.hasMore != null ? !!data.hasMore : fetched.length >= MESSAGE_PAGE_SIZE;
+        serverHistoryHasMoreByChannelRef.current[channelKey] = hasMore;
+        setMessages((current) => mergeMessagesChronologically(
+          current,
+          latestMessages,
+          (message) => message.created_at || message.createdAt
+        ));
         setStatus(`Executed /${resolvedCommandName}`);
       } else if (commandResult && typeof commandResult === "object" && (commandResult.content || Array.isArray(commandResult.embeds))) {
         setStatus(`Executed /${resolvedCommandName}`);
@@ -4590,8 +4818,18 @@ export function App() {
         })
       });
 
-      const data = await nodeApi(activeServer.baseUrl, `/v1/channels/${activeChannelId}/messages`, activeServer.membershipToken);
-      setMessages((data.messages || []).slice().reverse());
+      const path = buildPaginatedPath(`/v1/channels/${activeChannelId}/messages`, { limit: MESSAGE_PAGE_SIZE });
+      const data = await nodeApi(activeServer.baseUrl, path, activeServer.membershipToken);
+      const fetched = Array.isArray(data?.messages) ? data.messages : [];
+      const latestMessages = fetched.slice().reverse();
+      const channelKey = `${activeGuildId || ""}:${activeChannelId || ""}`;
+      const hasMore = data?.hasMore != null ? !!data.hasMore : fetched.length >= MESSAGE_PAGE_SIZE;
+      serverHistoryHasMoreByChannelRef.current[channelKey] = hasMore;
+      setMessages((current) => mergeMessagesChronologically(
+        current,
+        latestMessages,
+        (message) => message.created_at || message.createdAt
+      ));
       setReplyTarget(null);
       setPendingAttachments([]);
       if (attachmentInputRef.current) attachmentInputRef.current.value = "";
@@ -4616,11 +4854,25 @@ export function App() {
         })
       });
 
-      const data = await api(`/v1/social/dms/${activeDm.id}/messages`, {
+      const path = buildPaginatedPath(`/v1/social/dms/${activeDm.id}/messages`, { limit: MESSAGE_PAGE_SIZE });
+      const data = await api(path, {
         headers: { Authorization: `Bearer ${accessToken}` }
       });
 
-      setDms((current) => current.map((item) => item.id === activeDm.id ? { ...item, messages: data.messages || [] } : item));
+      const latestMessages = Array.isArray(data?.messages) ? data.messages : [];
+      const hasMore = data?.hasMore != null ? !!data.hasMore : latestMessages.length >= MESSAGE_PAGE_SIZE;
+      dmHistoryHasMoreByThreadRef.current[activeDm.id] = hasMore;
+      setDms((current) => current.map((item) => {
+        if (item.id !== activeDm.id) return item;
+        return {
+          ...item,
+          messages: mergeMessagesChronologically(
+            item.messages || [],
+            latestMessages,
+            (message) => message.createdAt || message.created_at
+          )
+        };
+      }));
       setDmReplyTarget(null);
       setPendingDmAttachments([]);
       if (dmAttachmentInputRef.current) dmAttachmentInputRef.current.value = "";
@@ -7410,6 +7662,16 @@ export function App() {
     setStatus("Logged out.");
   }
 
+  function openAppEntryRoute() {
+    navigateAppRoute(accessToken ? APP_ROUTE_CLIENT : APP_ROUTE_LOGIN);
+  }
+
+  function openPreferredDesktopDownload() {
+    const href = preferredDownloadTarget?.href || DOWNLOAD_TARGETS[0]?.href;
+    if (!href) return;
+    window.open(href, "_blank", "noopener,noreferrer");
+  }
+
   if (routePath === APP_ROUTE_TERMS) {
     return (
       <TermsPage
@@ -7418,20 +7680,22 @@ export function App() {
     );
   }
 
+  if (routePath === APP_ROUTE_HOME) {
+    return (
+      <LandingPage
+        downloadMenuRef={downloadMenuRef}
+        downloadsMenuOpen={downloadsMenuOpen}
+        setDownloadsMenuOpen={setDownloadsMenuOpen}
+        downloadTargets={DOWNLOAD_TARGETS}
+        preferredDownloadTarget={preferredDownloadTarget}
+        onOpenApp={openAppEntryRoute}
+        onOpenClient={openAppEntryRoute}
+        onOpenTerms={() => navigateAppRoute(APP_ROUTE_TERMS)}
+      />
+    );
+  }
+
   if (!accessToken) {
-    if (routePath === APP_ROUTE_HOME) {
-      return (
-        <LandingPage
-          downloadMenuRef={downloadMenuRef}
-          downloadsMenuOpen={downloadsMenuOpen}
-          setDownloadsMenuOpen={setDownloadsMenuOpen}
-          downloadTargets={DOWNLOAD_TARGETS}
-          preferredDownloadTarget={preferredDownloadTarget}
-          onOpenClient={() => navigateAppRoute(APP_ROUTE_LOGIN)}
-          onOpenTerms={() => navigateAppRoute(APP_ROUTE_TERMS)}
-        />
-      );
-    }
     return (
       <AuthShell
         authMode={authMode}
@@ -9186,6 +9450,29 @@ export function App() {
                   <label>Banner URL<input value={profileForm.bannerUrl} onChange={(event) => setProfileForm((current) => ({ ...current, bannerUrl: event.target.value }))} /></label>
                   <label>Upload Banner<input type="file" accept="image/*" onChange={onBannerUpload} /></label>
                   <button onClick={saveProfile}>Save Profile</button>
+
+                  {!isDesktopRuntime && (
+                    <>
+                      <hr style={{ borderColor: "var(--border-subtle)", width: "100%" }} />
+                      <h4>Desktop Client</h4>
+                      <p className="hint">Install the desktop client for the smoothest chat and voice experience.</p>
+                      <div className="row-actions" style={{ width: "100%" }}>
+                        <button type="button" onClick={openPreferredDesktopDownload}>
+                          {preferredDownloadTarget ? `Download ${preferredDownloadTarget.label}` : "Download client"}
+                        </button>
+                        {DOWNLOAD_TARGETS.filter((target) => target.href !== preferredDownloadTarget?.href).map((target) => (
+                          <button
+                            key={target.href}
+                            type="button"
+                            className="ghost"
+                            onClick={() => window.open(target.href, "_blank", "noopener,noreferrer")}
+                          >
+                            {target.label}
+                          </button>
+                        ))}
+                      </div>
+                    </>
+                  )}
 
                   <hr style={{ borderColor: "var(--border-subtle)", width: "100%" }} />
                   <h4>Full Profile Studio</h4>

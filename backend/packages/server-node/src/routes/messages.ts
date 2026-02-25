@@ -248,6 +248,7 @@ export async function messageRoutes(
         { channelId, limit: qs.limit }
       );
     }
+    const hasMore = rows.length >= qs.limit;
     rows = rows.map((r: any) => {
       const mentionMeta = resolveMessageMentions(r.content || "", mentionDirectory);
       let embeds: any[] = [];
@@ -292,7 +293,7 @@ export async function messageRoutes(
       for (const r of rows) r.attachments = byMsg.get(r.id) ?? [];
     }
 
-    return { messages: rows };
+    return { messages: rows, hasMore };
   });
 
   // Send message (requires VIEW_CHANNEL + SEND_MESSAGES)

@@ -1,6 +1,6 @@
 {
   "name": "opencom-client",
-  "version": "0.1.0",
+  "version": "0.1.5",
   "description": "Desktop wrapper for OpenCom frontend",
   "homepage": "https://opencom.online",
   "author": {
@@ -17,7 +17,9 @@
     "start": "npm run sync:web && npm run prepare:vendored-minimatch && electron .",
     "start:remote": "npm run prepare:vendored-minimatch && electron .",
     "build": "npm run sync:web && npm run prepare:vendored-minimatch && electron-builder",
-    "build:win": "npm run sync:web && npm run prepare:vendored-minimatch && electron-builder --win nsis",
+    "build:win": "npm run sync:web && npm run prepare:vendored-minimatch && node scripts/build-win.mjs",
+    "build:win:local": "npm run sync:web && npm run prepare:vendored-minimatch && OPENCOM_WIN_BUILD_MODE=local node scripts/build-win.mjs",
+    "build:win:container": "npm run sync:web && npm run prepare:vendored-minimatch && OPENCOM_WIN_BUILD_MODE=container node scripts/build-win.mjs",
     "build:linux": "npm run sync:web && npm run prepare:vendored-minimatch && node scripts/build-linux.mjs",
     "build:stage:linux": "node scripts/build-and-stage.mjs linux",
     "build:stage:win": "node scripts/build-and-stage.mjs win",

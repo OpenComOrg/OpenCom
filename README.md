@@ -71,6 +71,17 @@ Restore from a portable backup bundle:
 ./scripts/ops/migrate-portability.sh import backups/opencom-backup.tar.gz
 ```
 
+Create an automatic backup now (backs up all configured `*_DATABASE_URL` values and keeps latest 56 by default):
+```bash
+./scripts/ops/auto-backup.sh
+```
+
+Install a cron job to run backups every 6 hours:
+```bash
+./scripts/ops/backup-cron.sh install
+./scripts/ops/backup-cron.sh status
+```
+
 ## Frontend quickstart
 ```bash
 cd frontend

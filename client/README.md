@@ -113,3 +113,20 @@ Direct script entrypoints are also available:
 
 On Arch-based systems, `.deb` packaging may fail if bundled `fpm` cannot load `libcrypt.so.1`.
 `npm run build:linux` now auto-falls back to `tar.gz` in that case. Install `libxcrypt-compat` and rerun to restore `.deb` output.
+
+### Windows build from Linux (no VM)
+
+`npm run build:win` now defaults to containerized packaging on non-Windows hosts, so host Wine is not required.
+It will use Docker first (or Podman if Docker is unavailable), with image `electronuserland/builder:wine`.
+
+```bash
+cd client
+npm run build:win
+```
+
+Optional overrides:
+
+- `npm run build:win:container` force container mode.
+- `npm run build:win:local` force local mode (requires host Wine).
+- `OPENCOM_CONTAINER_ENGINE=podman npm run build:win` force container engine.
+- `OPENCOM_WIN_CONTAINER_IMAGE=<image> npm run build:win` override builder image.

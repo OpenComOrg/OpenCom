@@ -34,6 +34,9 @@ Operations:
 
 ```bash
 ./scripts/ops/update-opencom.sh --pull --backup
+./scripts/ops/auto-backup.sh
+./scripts/ops/backup-cron.sh install
+./scripts/ops/backup-cron.sh status
 ./scripts/ops/tmux-fast-update.sh
 ./scripts/ops/tmux-fast-update.sh --no-restart
 ./scripts/ops/configure-ws.sh --domain ws.opencom.online --ip 127.0.0.1

@@ -50,3 +50,4 @@ Use the same `kid` in both.
 - Run voice-debug node mode: `npm run dev:voice-debug`
 - Core migrations only: `npm run migrate:core`
 - Node migrations only: `npm run migrate:node`
+- Send an interactive SMTP test email: `npm run email:test`

@@ -55,7 +55,7 @@ services:
     command: /bin/sh -lc "npm run migrate:core && npm run start:core"
     ports:
       - "${CORE_HTTP_PORT:-3001}:3001"
-      - "${CORE_GATEWAY_PORT_PUBLIC:-9443}:9443"
+      - "${CORE_GATEWAY_PORT_PUBLIC:-9001}:9001"
     volumes:
       - core_logs:/app/backend/logs
       - core_profiles:/app/backend/storage/profiles

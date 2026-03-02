@@ -24,12 +24,11 @@ services:
     volumes:
       - mariadb_core:/var/lib/mysql
     healthcheck:
-      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u$${MARIADB_USER} -p$${MARIADB_PASSWORD} --silent"]
-      interval: 5s
-      timeout: 5s
-      retries: 30
-      start_period: 20s
-
+      test: ["CMD-SHELL", "mysqladmin ping -uroot -proot --silent"]
+      interval: 2s
+      timeout: 2s
+      retries: 5
+      start_period: 5s
   mariadb-node:
     image: mariadb:11
     restart: unless-stopped
@@ -43,12 +42,11 @@ services:
     volumes:
       - mariadb_node:/var/lib/mysql
     healthcheck:
-      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u$${MARIADB_USER} -p$${MARIADB_PASSWORD} --silent"]
-      interval: 5s
-      timeout: 5s
-      retries: 30
-      start_period: 20s
-
+      test: ["CMD-SHELL", "mysqladmin ping -uroot -proot --silent"]
+      interval: 2s
+      timeout: 2s
+      retries: 5
+      start_period: 5s
   redis:
     image: redis:7
     restart: unless-stopped

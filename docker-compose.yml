@@ -50,8 +50,6 @@ services:
   core:
     <<: *backend-service
     depends_on:
-      mariadb-core:
-        condition: service_healthy
       redis:
         condition: service_healthy
     command: /bin/sh -lc "npm run migrate:core && npm run start:core"
@@ -72,8 +70,6 @@ services:
   node:
     <<: *backend-service
     depends_on:
-      mariadb-node:
-        condition: service_healthy
       core:
         condition: service_healthy
     command: /bin/sh -lc "npm run migrate:node && npm run start:node"

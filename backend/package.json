@@ -10,6 +10,8 @@
     "build": "npm -w @ods/shared run build && npm -w @ods/core run build && npm -w @ods/server-node run build",
     "dev:core": "npm -w @ods/core run dev",
     "dev:node": "npm -w @ods/server-node run dev",
+    "start:core": "node packages/core/dist/index.js",
+    "start:node": "node packages/server-node/dist/index.js",
     "migrate:core": "npm -w @ods/core run migrate",
     "migrate:node": "npm -w @ods/server-node run migrate",
     "dev:voice-debug": "DEBUG_HTTP=1 DEBUG_VOICE=1 LOG_LEVEL=debug npm -w @ods/server-node run dev",

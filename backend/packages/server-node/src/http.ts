@@ -10,6 +10,7 @@ export function buildHttp() {
   const app = Fastify({ logger: false, bodyLimit: 10 * 1024 * 1024, disableRequestLogging: true }); // 10MB limit
   app.register(cors, { origin: true, credentials: true });
   app.register(rateLimit, { max: 300, timeWindow: "1 minute" });
+  app.get("/health", async () => ({ ok: true }));
 
   if (env.DEBUG_HTTP) {
     app.addHook("onRequest", async (req) => {

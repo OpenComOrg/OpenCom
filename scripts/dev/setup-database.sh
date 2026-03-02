@@ -158,9 +158,9 @@ start_docker_if_requested() {
   fi
 
   echo "[db-setup] Starting backend infrastructure with ${COMPOSE_CMD}"
-  pushd "$BACKEND_DIR" >/dev/null
+  pushd "$ROOT_DIR" >/dev/null
   # shellcheck disable=SC2086
-  ${COMPOSE_CMD} up -d
+  ${COMPOSE_CMD} up -d mariadb-core mariadb-node redis minio
   popd >/dev/null
 }
 

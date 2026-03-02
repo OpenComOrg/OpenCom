@@ -40,7 +40,7 @@ scripts\dev\setup.bat all
 What this does:
 - installs backend npm dependencies
 - installs frontend npm dependencies
-- starts backend infra via `docker compose up -d` if docker is installed
+- starts backend infra via `docker compose up -d mariadb-core mariadb-node redis minio` if docker is installed
 
 ### Fully inclusive backend DB setup (env + database + tables)
 For local MariaDB installed on the host (uses `sudo mysql` for provisioning):
@@ -48,10 +48,19 @@ For local MariaDB installed on the host (uses `sudo mysql` for provisioning):
 ./scripts/dev/setup-database.sh --init-env --provision-local-db
 ```
 
-For dockerized MariaDB from `backend/docker-compose.yml`:
+For dockerized MariaDB from `docker-compose.yml`:
 ```bash
 ./scripts/dev/setup-database.sh --init-env --with-docker
 ```
+
+Run the full local stack (core + node + frontend + infra) in Docker:
+```bash
+# compose uses backend/.env + backend/.env.docker
+# and frontend/.env + frontend/.env.docker
+docker compose up -d --build
+```
+
+If a host port is already taken, override mapping defaults (for example `REDIS_PORT=6380`, `CORE_DB_PORT=3309`, `NODE_DB_PORT=3310`, `FRONTEND_PORT=5174`) when running compose.
 
 ## 3) Run services
 ### Linux/macOS

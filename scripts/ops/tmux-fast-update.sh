@@ -21,7 +21,7 @@ Usage: ./scripts/ops/tmux-fast-update.sh [options]
 Updates OpenCom, then performs a fast tmux cutover for session "OpenCom".
 By default:
   1) Pull latest code
-  2) Run update-opencom (install/migrate/build)
+  2) Run update-opencom (Docker rolling update: build/migrate/restart)
   3) Fast restart the app pane in tmux
   4) Attach to the tmux session
 

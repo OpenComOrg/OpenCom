@@ -13,10 +13,20 @@ For a complete endpoint inventory and feature matrix, see:
 
 1. `cp .env.example .env`
 2. Fill required secrets/config (`CORE_JWT_*`, membership JWKs, DB URLs, `REDIS_URL`, admin password)
-3. `docker compose up -d`
-4. `npm install`
-5. `npm run migrate:core && npm run migrate:node`
-6. Start services:
+3. Compose loads env files directly:
+   - backend services: `.env` + `.env.docker`
+   - frontend service: `../frontend/.env` + `../frontend/.env.docker`
+4. From repository root, start full local stack in Docker (core + node + frontend + infra):
+   - `docker compose up -d --build`
+   - If a host port is occupied, override defaults inline:
+     - `REDIS_PORT=6380 CORE_DB_PORT=3309 NODE_DB_PORT=3310 FRONTEND_PORT=5174 docker compose up -d --build`
+
+If you only want infra in Docker and run services on host:
+
+1. `docker compose up -d mariadb-core mariadb-node redis minio`
+2. `npm install`
+3. `npm run migrate:core && npm run migrate:node`
+4. Start services:
    - Core: `npm run dev:core`
    - Node: `npm run dev:node`
 

@@ -60,9 +60,9 @@ setup_backend() {
 
   if COMPOSE_CMD="$(pick_compose)"; then
     echo "[setup] Starting backend infrastructure with ${COMPOSE_CMD}"
-    pushd "$ROOT_DIR/backend" >/dev/null
+    pushd "$ROOT_DIR" >/dev/null
     # shellcheck disable=SC2086
-    ${COMPOSE_CMD} up -d
+    ${COMPOSE_CMD} up -d mariadb-core mariadb-node redis minio
     popd >/dev/null
   else
     echo "[warn] Docker Compose not found (neither 'docker compose' nor 'docker-compose'), skipping infrastructure startup"

@@ -1,11 +1,11 @@
 x-backend-service: &backend-service
   build:
-    context: .
+    context: ./backend
     dockerfile: Dockerfile
   image: opencom-backend-local:latest
   env_file:
-    - .env
-    - .env.docker
+    - ./backend/.env
+    - ./backend/.env.docker
   restart: unless-stopped
   working_dir: /app/backend
   init: true
@@ -60,19 +60,6 @@ services:
       timeout: 3s
       retries: 20
 
-  minio:
-    image: minio/minio:latest
-    restart: unless-stopped
-    command: server /data --console-address ":9001"
-    environment:
-      MINIO_ROOT_USER: minio
-      MINIO_ROOT_PASSWORD: minio123456
-    ports:
-      - "${MINIO_API_PORT:-9000}:9000"
-      - "${MINIO_CONSOLE_PORT:-9001}:9001"
-    volumes:
-      - minio_data:/data
-
   core:
     <<: *backend-service
     depends_on:
@@ -119,12 +106,12 @@ services:
 
   frontend:
     build:
-      context: ../frontend
+      context: ./frontend
       dockerfile: Dockerfile
     image: opencom-frontend-local:latest
     env_file:
-      - ../frontend/.env
-      - ../frontend/.env.docker
+      - ./frontend/.env
+      - ./frontend/.env.docker
     restart: unless-stopped
     init: true
     depends_on:

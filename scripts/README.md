@@ -33,6 +33,7 @@ Docs:
 Operations:
 
 ```bash
+docker compose up -d --build
 ./scripts/ops/update-opencom.sh --pull --backup
 ./scripts/ops/auto-backup.sh
 ./scripts/ops/backup-cron.sh install

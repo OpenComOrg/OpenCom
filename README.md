@@ -42,6 +42,16 @@ If env already exists and DB is ready:
 ./scripts/dev/setup-database.sh
 ```
 
+## Run Full Stack In Docker
+From repository root:
+```bash
+docker compose up -d --build
+```
+
+Compose reads:
+- `backend/.env` and `backend/.env.docker`
+- `frontend/.env` and `frontend/.env.docker`
+
 ## Create a server with explicit owner username
 Use the helper script when you want to assign ownership to a specific existing user:
 ```bash
@@ -50,7 +60,7 @@ Use the helper script when you want to assign ownership to a specific existing u
 
 
 ## Update + backup/restore scripts
-Run a full update flow (deps + migrations + builds):
+Run a full Docker rolling update flow (build -> migrate -> restart core/node/frontend with health checks):
 ```bash
 ./scripts/ops/update-opencom.sh
 ```

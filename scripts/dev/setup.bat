@@ -27,7 +27,7 @@ call npm install || exit /b 1
 where docker >nul 2>nul
 if %ERRORLEVEL%==0 (
   echo [setup] Starting backend infrastructure with docker compose
-  docker compose up -d || exit /b 1
+  docker compose -f "%~dp0..\..\docker-compose.yml" up -d mariadb-core mariadb-node redis minio || exit /b 1
 ) else (
   echo [warn] Docker not found, skipping infrastructure startup
 )

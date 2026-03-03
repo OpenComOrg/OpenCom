@@ -7,12 +7,12 @@ import type { FastifyInstance } from "fastify";
 // 422: Missing callid Paramater
 
 
-export async function CallRoutes(app: FastifyInstance) { 
+export async function CallRoutes(app: FastifyInstance) {
 
     app.post("/call/get_status",  { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
         const userId = req.user.sub as string;
         const body = req.body;
-        
+
         const caller = req.body.caller;
 
         const call_id = req.body.callid;
@@ -34,9 +34,28 @@ export async function CallRoutes(app: FastifyInstance) {
         // this might make up for it, is good enough for right now
         if (existing.length) {
             const status = existing[0].status;
+            return rep.send({'success': true, 'status': status})
         } else {
             return rep.send({'success': false, 'error': true, 'code': 420})
         }
-        return rep.send({'success': true, 'status': status})
+
     });
+
+  app.post("/call/by_id", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
+    const body = req.body
+
+    const target_id = body.id
+    const userId = req.user.sub as string;
+
+
+    if (!userId) {
+      return rep.send({'success': false, 'error': true, 'code': 512})
+    }
+    if (!target_id) {
+      return rep.send({'success': false, 'error': true, 'code': 510})
+    }
+
+
+
+  });
 }

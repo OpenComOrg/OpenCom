@@ -1,7 +1,7 @@
 import { q } from "../db.js";
 import type { FastifyInstance } from "fastify";
 import { ulidLike } from "@ods/shared/ids.js";
-
+import crypto from "crypto";
 // Error Code Syntax for future ref:
 // 420: Database Error
 // 421: Missing caller paramter
@@ -134,20 +134,57 @@ export async function CallRoutes(app: FastifyInstance,   broadcastToUser?: (targ
     }
   });
 
+  // A slightly less fucked version of the orriginal implementation
   async function generate_voice_channel(user1_id: string, user2_id: string) {
-    const token = Math.random().toString(12).substring(2, 10);
-    if (!user1_id) {
-      throw new Error("[WARN]: ID Not providfed")
-    }
-    if (!user2_id) {
-      throw new Error("[WARN]: ID Not providfed")
+    if (!user1_id || !user2_id) {
+      throw new Error("User ID missing");
     }
 
-    const channel_id = '0'
+    // Prevent calling yourself
+    if (user1_id === user2_id) {
+      throw new Error("Cannot call yourself");
+    }
 
-    return channel_id
+    // Check if either user already has an active call
+    const existing = await q(
+      `SELECT id
+       FROM PRIVATE_CALLS
+       WHERE ended_at IS NULL
+         AND (user_1 = :u1 OR user_2 = :u1
+              OR user_1 = :u2 OR user_2 = :u2)
+       LIMIT 1`,
+      { u1: user1_id, u2: user2_id }
+    );
 
-  };
+    if (existing.length) {
+      throw new Error("User already in active call");
+    }
+
+    const call_id = crypto.randomUUID();
+    const channel_id = crypto.randomUUID();
+    const token = crypto.randomBytes(32).toString("hex");
+
+    // Store in DB
+    await q(
+      `INSERT INTO PRIVATE_CALLS
+        (id, user_1, user_2, channel_id, token, created_at, active)
+       VALUES
+        (:id, :u1, :u2, :channel, :token, NOW(), TRUE)`,
+      {
+        id: call_id,
+        u1: user1_id,
+        u2: user2_id,
+        channel: channel_id,
+        token
+      }
+    );
+
+    return {
+      call_id,
+      channel_id,
+      token
+    };
+  }
 
 
   async function find_channel(channelId: any) {
@@ -161,14 +198,57 @@ export async function CallRoutes(app: FastifyInstance,   broadcastToUser?: (targ
   };
 
   app.post("/call/end", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
-    const body = req.body
-
-    const target_id = req.target_id;
     const userId = req.user.sub as string;
 
-    const channel = await find_channel(target_id)
+    if (!userId) {
+      return rep.send({ success: false, error: true, code: 512 });
+    }
 
+    // Find active call where user is involved
+    const calls = await q<{
+      id: string;
+      user_1: string;
+      user_2: string;
+      channel_id: string;
+    }>(
+      `SELECT id, user_1, user_2, channel_id
+       FROM PRIVATE_CALLS
+       WHERE active = TRUE
+         AND (user_1 = :uid OR user_2 = :uid)
+       LIMIT 1`,
+      { uid: userId }
+    );
 
+    if (!calls.length) {
+      return rep.send({ success: false, error: true, code: 404 });
+    }
 
-  })
+    const call = calls[0];
+
+    // Mark call as ended
+    await q(
+      `UPDATE PRIVATE_CALLS
+       SET ended_at = NOW()
+       WHERE id = :id`,
+      { id: call.id }
+    );
+
+    // Notify both users
+    if (broadcastToUser) {
+      const payload = {
+        callId: call.id,
+        channelId: call.channel_id,
+        endedBy: userId,
+        endedAt: new Date().toISOString()
+      };
+
+      await broadcastToUser(call.user_1, "CALL_ENDED", payload);
+      await broadcastToUser(call.user_2, "CALL_ENDED", payload);
+    }
+
+    return rep.send({
+      success: true,
+      message: "Call ended successfully"
+    });
+  });
 }

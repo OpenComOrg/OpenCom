@@ -4,6 +4,7 @@ import { ulidLike } from "@ods/shared/ids.js";
 import crypto from "crypto";
 import { env } from "../env.js";
 import { signMembershipToken } from "../membershipToken.js";
+import { isOfficialAccountUserId } from "../officialAccount.js";
 
 // Error Code Reference:
 // 404: Active call not found
@@ -184,6 +185,9 @@ export async function CallRoutes(
 
     if (!userId) return rep.send({ success: false, error: true, code: 512 });
     if (!target_id) return rep.send({ success: false, error: true, code: 510 });
+    if (await isOfficialAccountUserId(target_id)) {
+      return rep.code(403).send({ success: false, error: true, code: 513, message: "OFFICIAL_ACCOUNT_NO_REPLY" });
+    }
 
     // Verify they are friends
     const rows = await q<{ id: string }>(

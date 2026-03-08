@@ -5,6 +5,7 @@ import { parseBody } from "../validation.js";
 import { env } from "../env.js";
 import { saveProfileImage, saveProfileImageFromBuffer, deleteProfileImage } from "../storage.js";
 import { reconcileBoostBadge } from "../boost.js";
+import { buildOfficialBadgeDetail, isOfficialAccountName, isOfficialBadgeId } from "../officialAccount.js";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -461,8 +462,17 @@ export async function profileRoutes(app: FastifyInstance) {
         detail.bgColor = years >= 2 ? "#d4af37" : "#4f7ecf";
         detail.fgColor = "#ffffff";
       }
+      if (isOfficialBadgeId(badgeId)) {
+        return buildOfficialBadgeDetail(createdAt);
+      }
       return detail;
     });
+
+    const derivedBadgeIds = badges.map((row) => row.badge);
+    const shouldShowOfficialBadge = isOfficialAccountName(u[0].username) || derivedBadgeIds.some((badgeId) => isOfficialBadgeId(badgeId));
+    if (shouldShowOfficialBadge && !badgeDetails.some((badge) => isOfficialBadgeId(String(badge?.id || "")))) {
+      badgeDetails.push(buildOfficialBadgeDetail(null));
+    }
 
     if (isAdmin && !isOwner) {
       badgeDetails.push({
@@ -498,7 +508,12 @@ export async function profileRoutes(app: FastifyInstance) {
       pfpUrl: u[0].pfp_url ?? null,
       bannerUrl: u[0].banner_url ?? null,
       createdAt: u[0].created_at ?? null,
-      badges: badges.map(b => b.badge),
+      badges: Array.from(
+        new Set([
+          ...badges.map((b) => b.badge),
+          ...(shouldShowOfficialBadge ? ["OFFICIAL"] : [])
+        ])
+      ),
       badgeDetails,
       platformRole: isOwner ? "owner" : (isAdmin ? "admin" : "user"),
       platformTitle: isOwner ? "Platform Owner" : (isAdmin ? "Platform Admin" : null),

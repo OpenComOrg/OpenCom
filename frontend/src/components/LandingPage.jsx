@@ -6,7 +6,8 @@ export function LandingPage({
   preferredDownloadTarget,
   onOpenApp,
   onOpenClient,
-  onOpenTerms
+  onOpenTerms,
+  onOpenBlogs
 }) {
   const featureCards = [
     {
@@ -33,7 +34,10 @@ export function LandingPage({
           <img src="logo.png" alt="OpenCom" className="landing-logo" />
           <span className="landing-brand">OpenCom</span>
         </div>
-        <button type="button" className="landing-header-link" onClick={onOpenTerms}>Terms</button>
+        <div className="landing-header-actions">
+          <button type="button" className="landing-header-link" onClick={onOpenBlogs}>Blogs</button>
+          <button type="button" className="landing-header-link" onClick={onOpenTerms}>Terms</button>
+        </div>
       </header>
       <main className="landing-main">
         <section className="landing-hero">
@@ -108,6 +112,7 @@ export function LandingPage({
       <footer className="landing-footer">
         <p>OpenCom. One place for teams, communities, and friends.</p>
         <div className="landing-footer-actions">
+          <button type="button" className="link-btn" onClick={onOpenBlogs}>Blogs</button>
           <button type="button" className="link-btn" onClick={onOpenTerms}>Terms of Service</button>
           <button
             type="button"

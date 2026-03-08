@@ -7,6 +7,8 @@ import {
 import { LandingPage } from "./components/LandingPage";
 import { AuthShell } from "./components/AuthShell";
 import { TermsPage } from "./components/TermsPage";
+import { BlogsPage } from "./components/BlogsPage";
+import { BlogPostPage } from "./components/BlogPostPage";
 import {
   IncomingCallToast,
   ActiveCallBar,
@@ -40,14 +42,18 @@ import { SecuritySettingsSection } from "./components/settings/SecuritySettingsS
 import { DOWNLOAD_TARGETS, getPreferredDownloadTarget } from "./lib/downloads";
 import {
   APP_ROUTE_CLIENT,
+  APP_ROUTE_BLOGS,
   APP_ROUTE_HOME,
   APP_ROUTE_LOGIN,
+  APP_ROUTE_PANEL,
   APP_ROUTE_TERMS,
   buildBoostGiftUrl,
   buildInviteJoinUrl,
+  getBlogSlugFromPath,
   getAppRouteFromLocation,
   getBoostGiftCodeFromCurrentLocation,
   getInviteCodeFromCurrentLocation,
+  isBlogPostPath,
   isBoostGiftPath,
   isInviteJoinPath,
   normalizeAppPath,
@@ -58,6 +64,7 @@ import {
   resolveStaticPageHref,
   writeAppRoute,
 } from "./lib/routing";
+import { AdminApp } from "./admin/AdminApp.jsx";
 
 function resolveCoreApiBase() {
   const fromEnv = String(import.meta.env.VITE_CORE_API_URL || "").trim();
@@ -10541,10 +10548,48 @@ export function App() {
     navigateAppRoute(accessToken ? APP_ROUTE_CLIENT : APP_ROUTE_LOGIN);
   }
 
+  function openBlogsRoute() {
+    navigateAppRoute(APP_ROUTE_BLOGS);
+  }
+
+  function openBlogPostRoute(slug) {
+    if (!slug) return;
+    navigateAppRoute(`${APP_ROUTE_BLOGS}/${slug}`);
+  }
+
   function openPreferredDesktopDownload() {
     const href = preferredDownloadTarget?.href || DOWNLOAD_TARGETS[0]?.href;
     if (!href) return;
     window.open(href, "_blank", "noopener,noreferrer");
+  }
+
+  if (routePath === APP_ROUTE_PANEL) {
+    return <AdminApp />;
+  }
+
+  if (routePath === APP_ROUTE_BLOGS) {
+    return (
+      <BlogsPage
+        coreApi={CORE_API}
+        onOpenHome={() => navigateAppRoute(APP_ROUTE_HOME)}
+        onOpenTerms={() => navigateAppRoute(APP_ROUTE_TERMS)}
+        onOpenApp={openAppEntryRoute}
+        onOpenPost={openBlogPostRoute}
+      />
+    );
+  }
+
+  if (isBlogPostPath(routePath)) {
+    return (
+      <BlogPostPage
+        coreApi={CORE_API}
+        slug={getBlogSlugFromPath(routePath)}
+        onOpenHome={() => navigateAppRoute(APP_ROUTE_HOME)}
+        onOpenBlogs={openBlogsRoute}
+        onOpenTerms={() => navigateAppRoute(APP_ROUTE_TERMS)}
+        onOpenApp={openAppEntryRoute}
+      />
+    );
   }
 
   if (routePath === APP_ROUTE_TERMS) {
@@ -10568,6 +10613,7 @@ export function App() {
         onOpenApp={openAppEntryRoute}
         onOpenClient={openAppEntryRoute}
         onOpenTerms={() => navigateAppRoute(APP_ROUTE_TERMS)}
+        onOpenBlogs={openBlogsRoute}
       />
     );
   }

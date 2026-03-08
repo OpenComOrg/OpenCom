@@ -4,6 +4,75 @@ import { resolveStaticPageHref } from "../lib/routing";
 const CORE_API = import.meta.env.VITE_CORE_API_URL || "https://api.opencom.online";
 
 const KNOWN_BADGES = ["OFFICIAL", "PLATFORM_ADMIN", "PLATFORM_FOUNDER"];
+const PANEL_PERMISSION_OPTIONS = [
+  {
+    id: "moderate_users",
+    label: "Moderate users",
+    description: "Ban and unban accounts from the platform panel.",
+  },
+  {
+    id: "manage_badges",
+    label: "Manage badges",
+    description: "Assign or remove platform badges.",
+  },
+  {
+    id: "manage_boosts",
+    label: "Manage boosts",
+    description: "Grant and revoke manual OpenCom Boost access.",
+  },
+  {
+    id: "send_official_messages",
+    label: "Official messages",
+    description: "Send platform announcements from the official account.",
+  },
+  {
+    id: "manage_blogs",
+    label: "Manage blogs",
+    description: "Create, edit, publish, and delete blog posts.",
+  },
+];
+
+const STAFF_TEMPLATES = [
+  {
+    id: "moderator",
+    title: "Moderator",
+    permissions: ["moderate_users"],
+  },
+  {
+    id: "creator",
+    title: "Blog Creator",
+    permissions: ["manage_blogs"],
+  },
+  {
+    id: "operations",
+    title: "Operations",
+    permissions: ["manage_badges", "manage_boosts"],
+  },
+  {
+    id: "community-lead",
+    title: "Community Lead",
+    permissions: ["moderate_users", "send_official_messages", "manage_blogs"],
+  },
+];
+
+const EMPTY_BLOG_DRAFT = {
+  id: "",
+  title: "",
+  slug: "",
+  summary: "",
+  coverImageUrl: "",
+  content: "## Intro\n\nWrite the update here.\n",
+  status: "draft",
+};
+
+function slugifyBlogTitle(value = "") {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 96);
+}
 
 async function api(path, token, panelPassword, options = {}) {
   const hasBody = options.body !== undefined && options.body !== null;
@@ -34,7 +103,13 @@ export function AdminApp() {
   const [autoUnlockChecking, setAutoUnlockChecking] = useState(false);
   const [status, setStatus] = useState("");
   const [statusType, setStatusType] = useState("info"); // info | success | error
-  const [adminOverview, setAdminOverview] = useState({ founder: null, admins: [], activeBoostGrants: 0 });
+  const [adminOverview, setAdminOverview] = useState({
+    founder: null,
+    admins: [],
+    activeBoostGrants: 0,
+    staffAssignmentsCount: 0,
+    publishedBlogsCount: 0,
+  });
   const [tab, setTab] = useState("overview");
   const [query, setQuery] = useState("");
   const [users, setUsers] = useState([]);
@@ -58,6 +133,18 @@ export function AdminApp() {
   const [officialQueuedUsers, setOfficialQueuedUsers] = useState([]);
   const [officialSending, setOfficialSending] = useState(false);
   const [officialReport, setOfficialReport] = useState(null);
+  const [staffAssignments, setStaffAssignments] = useState([]);
+  const [staffLoading, setStaffLoading] = useState(false);
+  const [staffBusy, setStaffBusy] = useState(false);
+  const [staffUserId, setStaffUserId] = useState("");
+  const [staffLevelKey, setStaffLevelKey] = useState("moderator");
+  const [staffTitle, setStaffTitle] = useState("Moderator");
+  const [staffNotes, setStaffNotes] = useState("");
+  const [staffPermissions, setStaffPermissions] = useState(["moderate_users"]);
+  const [blogPosts, setBlogPosts] = useState([]);
+  const [blogLoading, setBlogLoading] = useState(false);
+  const [blogBusy, setBlogBusy] = useState(false);
+  const [blogForm, setBlogForm] = useState(EMPTY_BLOG_DRAFT);
 
   function showStatus(message, type = "info") {
     setStatus(message);
@@ -66,12 +153,13 @@ export function AdminApp() {
 
   useEffect(() => {
     if (panelPassword) sessionStorage.setItem("opencom_admin_panel_password", panelPassword);
+    else sessionStorage.removeItem("opencom_admin_panel_password");
   }, [panelPassword]);
 
   useEffect(() => {
     if (!token) return;
     loadAdminStatus();
-  }, [token]);
+  }, [token, panelPassword]);
 
   useEffect(() => {
     if (!token || panelPassword || autoUnlockDisabled) return;
@@ -82,9 +170,9 @@ export function AdminApp() {
         const data = await api("/v1/me/admin-status", token, "");
         if (cancelled) return;
         setAdminStatus(data);
-        const canAutoUnlock = data?.isPlatformAdmin === true || data?.isPlatformOwner === true;
+        const canAutoUnlock = data?.canAccessPanel === true;
         setAutoPlatformUnlock(canAutoUnlock);
-        if (canAutoUnlock) showStatus("Auto-unlocked as platform staff.", "success");
+        if (canAutoUnlock) showStatus("Auto-unlocked from your panel permissions.", "success");
       } catch {
         if (cancelled) return;
         setAutoPlatformUnlock(false);
@@ -98,19 +186,74 @@ export function AdminApp() {
   }, [token, panelPassword, autoUnlockDisabled]);
 
   const isPanelUnlocked = !!panelPassword || autoPlatformUnlock;
+  const panelPermissions = adminStatus?.permissions || [];
+  const hasPasswordAccess = !!panelPassword.trim();
+  const canManageStaff =
+    hasPasswordAccess ||
+    adminStatus?.isPlatformAdmin === true ||
+    adminStatus?.isPlatformOwner === true;
+  const canModerateUsers =
+    hasPasswordAccess ||
+    adminStatus?.isPlatformAdmin === true ||
+    adminStatus?.isPlatformOwner === true ||
+    panelPermissions.includes("moderate_users");
+  const canManageBadges =
+    hasPasswordAccess ||
+    adminStatus?.isPlatformAdmin === true ||
+    adminStatus?.isPlatformOwner === true ||
+    panelPermissions.includes("manage_badges");
+  const canManageBoosts =
+    hasPasswordAccess ||
+    adminStatus?.isPlatformAdmin === true ||
+    adminStatus?.isPlatformOwner === true ||
+    panelPermissions.includes("manage_boosts");
+  const canSendOfficialMessages =
+    hasPasswordAccess ||
+    adminStatus?.isPlatformAdmin === true ||
+    adminStatus?.isPlatformOwner === true ||
+    panelPermissions.includes("send_official_messages");
+  const canManageBlogs =
+    hasPasswordAccess ||
+    adminStatus?.isPlatformAdmin === true ||
+    adminStatus?.isPlatformOwner === true ||
+    panelPermissions.includes("manage_blogs");
 
   useEffect(() => {
     if (!isPanelUnlocked || !token) return;
     loadOverview();
-    loadOfficialStatus();
-  }, [isPanelUnlocked, token]);
+  }, [isPanelUnlocked, token, panelPassword]);
+
+  useEffect(() => {
+    if (!isPanelUnlocked || !token) return;
+    if (tab === "official" && canSendOfficialMessages) {
+      loadOfficialStatus();
+    }
+    if (tab === "staff" && canManageStaff) {
+      loadStaffAssignments();
+    }
+    if (tab === "blogs" && canManageBlogs) {
+      loadBlogs();
+    }
+  }, [
+    tab,
+    token,
+    panelPassword,
+    isPanelUnlocked,
+    canManageStaff,
+    canSendOfficialMessages,
+    canManageBlogs,
+  ]);
 
   async function loadAdminStatus() {
     try {
       const data = await api("/v1/me/admin-status", token, panelPassword);
       setAdminStatus(data);
+      if (!panelPassword) {
+        setAutoPlatformUnlock(data?.canAccessPanel === true);
+      }
     } catch {
       setAdminStatus(null);
+      if (!panelPassword) setAutoPlatformUnlock(false);
     }
   }
 
@@ -131,6 +274,199 @@ export function AdminApp() {
     } catch (e) {
       setOfficialStatus(null);
       showStatus(`Official messaging status failed: ${e.message}`, "error");
+    }
+  }
+
+  async function loadStaffAssignments() {
+    setStaffLoading(true);
+    try {
+      const data = await api("/v1/admin/staff", token, panelPassword);
+      setStaffAssignments(Array.isArray(data.staff) ? data.staff : []);
+    } catch (e) {
+      setStaffAssignments([]);
+      showStatus(`Staff assignments failed: ${e.message}`, "error");
+    } finally {
+      setStaffLoading(false);
+    }
+  }
+
+  function applyStaffTemplate(template) {
+    setStaffLevelKey(template.id);
+    setStaffTitle(template.title);
+    setStaffPermissions(template.permissions);
+  }
+
+  function editStaffAssignment(assignment) {
+    setStaffUserId(assignment.userId || "");
+    setStaffLevelKey(assignment.levelKey || "custom");
+    setStaffTitle(assignment.title || "Staff");
+    setStaffNotes(assignment.notes || "");
+    setStaffPermissions(Array.isArray(assignment.permissions) ? assignment.permissions : []);
+    setTab("staff");
+  }
+
+  function toggleStaffPermission(permissionId) {
+    setStaffPermissions((current) => {
+      if (current.includes(permissionId)) {
+        return current.filter((value) => value !== permissionId);
+      }
+      return [...current, permissionId];
+    });
+  }
+
+  async function saveStaffAssignment() {
+    if (!staffUserId.trim()) {
+      showStatus("Enter a user ID to assign panel permissions.", "info");
+      return;
+    }
+    if (staffPermissions.length === 0) {
+      showStatus("Select at least one panel permission.", "info");
+      return;
+    }
+
+    setStaffBusy(true);
+    try {
+      await api(`/v1/admin/staff/${encodeURIComponent(staffUserId.trim())}`, token, panelPassword, {
+        method: "PUT",
+        body: JSON.stringify({
+          levelKey: staffLevelKey.trim() || "custom",
+          title: staffTitle.trim() || "Staff",
+          permissions: staffPermissions,
+          notes: staffNotes.trim() || undefined,
+        }),
+      });
+      await loadStaffAssignments();
+      await loadAdminStatus();
+      await loadOverview();
+      showStatus("Staff assignment saved.", "success");
+    } catch (e) {
+      showStatus(e.message || "Failed to save staff assignment.", "error");
+    } finally {
+      setStaffBusy(false);
+    }
+  }
+
+  async function removeStaffAssignment(userId = staffUserId) {
+    const targetUserId = String(userId || "").trim();
+    if (!targetUserId) {
+      showStatus("Enter a user ID to remove.", "info");
+      return;
+    }
+    const confirmed = window.confirm("Remove this panel staff assignment?");
+    if (!confirmed) return;
+
+    setStaffBusy(true);
+    try {
+      await api(`/v1/admin/staff/${encodeURIComponent(targetUserId)}`, token, panelPassword, {
+        method: "DELETE",
+      });
+      if (targetUserId === staffUserId) {
+        setStaffUserId("");
+        setStaffNotes("");
+        applyStaffTemplate(STAFF_TEMPLATES[0]);
+      }
+      await loadStaffAssignments();
+      await loadAdminStatus();
+      await loadOverview();
+      showStatus("Staff assignment removed.", "success");
+    } catch (e) {
+      showStatus(e.message || "Failed to remove staff assignment.", "error");
+    } finally {
+      setStaffBusy(false);
+    }
+  }
+
+  async function loadBlogs() {
+    setBlogLoading(true);
+    try {
+      const data = await api("/v1/admin/blogs", token, panelPassword);
+      const posts = Array.isArray(data.posts) ? data.posts : [];
+      setBlogPosts(posts);
+      if (!blogForm.id && posts[0]) {
+        openBlogEditor(posts[0]);
+      }
+    } catch (e) {
+      setBlogPosts([]);
+      showStatus(`Blog loading failed: ${e.message}`, "error");
+    } finally {
+      setBlogLoading(false);
+    }
+  }
+
+  function startNewBlogDraft() {
+    setBlogForm({ ...EMPTY_BLOG_DRAFT });
+  }
+
+  function openBlogEditor(post) {
+    setBlogForm({
+      id: post.id || "",
+      title: post.title || "",
+      slug: post.slug || "",
+      summary: post.summary || "",
+      coverImageUrl: post.coverImageUrl || "",
+      content: post.content || "",
+      status: post.status || "draft",
+    });
+  }
+
+  async function saveBlogPost() {
+    if (!blogForm.title.trim() || !blogForm.summary.trim() || !blogForm.content.trim()) {
+      showStatus("Title, summary, and content are required for blog posts.", "info");
+      return;
+    }
+
+    const payload = {
+      ...blogForm,
+      slug: slugifyBlogTitle(blogForm.slug || blogForm.title),
+    };
+    if (!payload.slug) {
+      showStatus("Provide a title or slug for the blog post.", "info");
+      return;
+    }
+
+    setBlogBusy(true);
+    try {
+      const method = payload.id ? "PUT" : "POST";
+      const path = payload.id
+        ? `/v1/admin/blogs/${encodeURIComponent(payload.id)}`
+        : "/v1/admin/blogs";
+      const data = await api(path, token, panelPassword, {
+        method,
+        body: JSON.stringify(payload),
+      });
+      const savedPost = data.post || null;
+      if (savedPost) openBlogEditor(savedPost);
+      await loadBlogs();
+      await loadOverview();
+      showStatus(payload.id ? "Blog post updated." : "Blog post created.", "success");
+    } catch (e) {
+      showStatus(e.message || "Failed to save blog post.", "error");
+    } finally {
+      setBlogBusy(false);
+    }
+  }
+
+  async function deleteBlogPost() {
+    if (!blogForm.id) {
+      showStatus("Select a saved post before deleting it.", "info");
+      return;
+    }
+    const confirmed = window.confirm("Delete this blog post permanently?");
+    if (!confirmed) return;
+
+    setBlogBusy(true);
+    try {
+      await api(`/v1/admin/blogs/${encodeURIComponent(blogForm.id)}`, token, panelPassword, {
+        method: "DELETE",
+      });
+      startNewBlogDraft();
+      await loadBlogs();
+      await loadOverview();
+      showStatus("Blog post deleted.", "success");
+    } catch (e) {
+      showStatus(e.message || "Failed to delete blog post.", "error");
+    } finally {
+      setBlogBusy(false);
     }
   }
 
@@ -421,15 +757,41 @@ export function AdminApp() {
     }
   }
 
+  const isOwner = adminStatus?.isPlatformOwner === true;
+  const tabs = [
+    { id: "overview", label: "Overview" },
+    { id: "users", label: "Users & moderation" },
+    canManageStaff ? { id: "staff", label: "Staff & permissions" } : null,
+    canSendOfficialMessages ? { id: "official", label: "Official Messages" } : null,
+    canManageBadges ? { id: "badges", label: "Badges" } : null,
+    canManageBoosts ? { id: "boost", label: "Boost Grants" } : null,
+    canManageBlogs ? { id: "blogs", label: "Blogs" } : null,
+  ].filter(Boolean);
+
+  useEffect(() => {
+    if (!tabs.some((item) => item.id === tab)) {
+      setTab("overview");
+    }
+  }, [tab, tabs]);
+
+  const roleLabel =
+    adminStatus?.platformRole === "owner"
+      ? "Owner"
+      : adminStatus?.platformRole === "admin"
+        ? "Admin"
+        : adminStatus?.platformRole === "staff"
+          ? "Staff"
+          : "Viewer";
+
   if (!isPanelUnlocked) {
     return (
       <div className="admin-unlock">
         <div className="admin-unlock-card">
-          <h1>OpenCom Platform Admin</h1>
+          <h1>OpenCom Control Panel</h1>
           <p className="admin-unlock-desc">
             {autoUnlockChecking
-              ? "Checking your account for platform admin access..."
-              : "Enter the server-configured admin panel password to continue."}
+              ? "Checking your account for panel access..."
+              : "Enter the server-configured panel password or use an account with panel permissions."}
           </p>
           <input
             type="password"
@@ -457,23 +819,14 @@ export function AdminApp() {
     );
   }
 
-  const isOwner = adminStatus?.isPlatformOwner === true;
-  const tabs = [
-    { id: "overview", label: "Overview" },
-    { id: "users", label: "Users & admins" },
-    { id: "official", label: "Official Messages" },
-    { id: "badges", label: "Badges" },
-    { id: "boost", label: "Boost Grants" }
-  ];
-
   return (
     <div className="admin-panel">
       <header className="admin-header">
-        <h1>OpenCom Platform Admin</h1>
+        <h1>OpenCom Control Panel</h1>
         <div className="admin-header-meta">
           {adminStatus && (
             <span className="admin-role-badge" title="Your platform role">
-              {adminStatus.platformRole === "owner" ? "Owner" : adminStatus.platformRole === "admin" ? "Admin" : "—"}
+              {roleLabel}
             </span>
           )}
           <a href={resolveStaticPageHref("server-admin.html")} target="_blank" rel="noopener noreferrer" className="admin-link-out">Server Admin →</a>
@@ -514,7 +867,7 @@ export function AdminApp() {
                 {adminOverview.founder?.id ? (
                   <p><strong>{adminOverview.founder.username || "—"}</strong><br /><code>{adminOverview.founder.id}</code></p>
                 ) : (
-                  <p className="text-dim">Not set. Use Users & admins to set founder.</p>
+                  <p className="text-dim">Not set. Use Users & moderation to set founder.</p>
                 )}
               </div>
               <div className="admin-card">
@@ -533,6 +886,16 @@ export function AdminApp() {
                 <p><strong>{adminOverview.activeBoostGrants ?? 0}</strong> active grant(s)</p>
                 <p className="text-dim">Use Boost Grants tab for temporary/permanent access controls.</p>
               </div>
+              <div className="admin-card">
+                <h3>Panel staff</h3>
+                <p><strong>{adminOverview.staffAssignmentsCount ?? 0}</strong> assignment(s)</p>
+                <p className="text-dim">Granular panel access for moderation, blogs, boosts, and badges.</p>
+              </div>
+              <div className="admin-card">
+                <h3>Published blogs</h3>
+                <p><strong>{adminOverview.publishedBlogsCount ?? 0}</strong> live post(s)</p>
+                <p className="text-dim">Create drafts and publish them from the Blogs tab.</p>
+              </div>
             </div>
             <button type="button" onClick={loadOverview}>Refresh overview</button>
           </section>
@@ -540,8 +903,8 @@ export function AdminApp() {
 
         {tab === "users" && (
           <section className="admin-section">
-            <h2>User search & admin actions</h2>
-            <p className="admin-hint">Search by username or email, then set founder/admin, ban or unban accounts, delete accounts, or manage badges/boost.</p>
+            <h2>User search & platform actions</h2>
+            <p className="admin-hint">Search by username or email, then apply the actions your panel permissions allow.</p>
             <div className="admin-search-row">
               <input placeholder="Username or email" value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => e.key === "Enter" && searchUsers()} />
               <button type="button" onClick={searchUsers} disabled={searching}>{searching ? "Searching…" : "Search"}</button>
@@ -571,27 +934,49 @@ export function AdminApp() {
                         <td><code>{u.id}</code></td>
                         <td>{u.isBanned ? <span className="text-dim">Banned</span> : <span className="text-dim">Active</span>}</td>
                         <td>
-                          <button
-                            type="button"
-                            className="btn-sm"
-                            onClick={() => {
-                              queueOfficialRecipient(u);
-                              setTab("official");
-                            }}
-                            disabled={userActionBusyId === u.id || officialQueuedUsers.some((user) => user.id === u.id)}
-                          >
-                            {officialQueuedUsers.some((user) => user.id === u.id) ? "Queued" : "Queue"}
-                          </button>
+                          {canSendOfficialMessages && (
+                            <button
+                              type="button"
+                              className="btn-sm"
+                              onClick={() => {
+                                queueOfficialRecipient(u);
+                                setTab("official");
+                              }}
+                              disabled={userActionBusyId === u.id || officialQueuedUsers.some((user) => user.id === u.id)}
+                            >
+                              {officialQueuedUsers.some((user) => user.id === u.id) ? "Queued" : "Queue"}
+                            </button>
+                          )}
+                          {canManageStaff && (
+                            <button
+                              type="button"
+                              className="btn-sm"
+                              onClick={() => {
+                                const assignment = staffAssignments.find((item) => item.userId === u.id);
+                                if (assignment) {
+                                  editStaffAssignment(assignment);
+                                } else {
+                                  setStaffUserId(u.id);
+                                  setStaffNotes("");
+                                  applyStaffTemplate(STAFF_TEMPLATES[0]);
+                                  setTab("staff");
+                                }
+                              }}
+                              disabled={userActionBusyId === u.id}
+                            >
+                              Staff
+                            </button>
+                          )}
                           {isOwner && <button type="button" className="btn-sm" onClick={() => setFounder(u.id)} disabled={userActionBusyId === u.id}>Set founder</button>}
                           {isOwner && <button type="button" className="btn-sm" onClick={() => setAdmin(u.id, true)} disabled={userActionBusyId === u.id}>Make admin</button>}
                           {isOwner && <button type="button" className="btn-sm danger" onClick={() => setAdmin(u.id, false)} disabled={userActionBusyId === u.id}>Remove admin</button>}
-                          <button type="button" className="btn-sm" onClick={() => { inspectUser(u.id); setTab("badges"); }} disabled={userActionBusyId === u.id}>Badges</button>
-                          <button type="button" className="btn-sm" onClick={() => { setBoostUserId(u.id); loadBoostState(u.id); setTab("boost"); }} disabled={userActionBusyId === u.id}>Boost</button>
-                          {u.isBanned ? (
+                          {canManageBadges && <button type="button" className="btn-sm" onClick={() => { inspectUser(u.id); setTab("badges"); }} disabled={userActionBusyId === u.id}>Badges</button>}
+                          {canManageBoosts && <button type="button" className="btn-sm" onClick={() => { setBoostUserId(u.id); loadBoostState(u.id); setTab("boost"); }} disabled={userActionBusyId === u.id}>Boost</button>}
+                          {canModerateUsers && (u.isBanned ? (
                             <button type="button" className="btn-sm" onClick={() => setAccountBan(u.id, false)} disabled={userActionBusyId === u.id}>Unban</button>
                           ) : (
                             <button type="button" className="btn-sm danger" onClick={() => setAccountBan(u.id, true)} disabled={userActionBusyId === u.id}>Ban</button>
-                          )}
+                          ))}
                           {isOwner && (
                             <button type="button" className="btn-sm danger" onClick={() => deleteUserAccount(u.id)} disabled={userActionBusyId === u.id}>
                               Delete account
@@ -605,6 +990,108 @@ export function AdminApp() {
               ) : (
                 <p className="text-dim">Run a search to see users.</p>
               )}
+            </div>
+          </section>
+        )}
+
+        {tab === "staff" && (
+          <section className="admin-section">
+            <h2>Staff roles & panel permissions</h2>
+            <p className="admin-hint">Assign focused panel access without making someone a full platform admin.</p>
+
+            <div className="admin-cards">
+              <div className="admin-card">
+                <h3>Active assignments</h3>
+                <p><strong>{staffAssignments.length}</strong> staff member(s)</p>
+                <p className="text-dim">Owners and platform admins already have full access and do not need a staff assignment.</p>
+              </div>
+              <div className="admin-card">
+                <h3>Quick templates</h3>
+                <div className="admin-template-grid">
+                  {STAFF_TEMPLATES.map((template) => (
+                    <button
+                      key={template.id}
+                      type="button"
+                      className="admin-template-btn"
+                      onClick={() => applyStaffTemplate(template)}
+                    >
+                      <strong>{template.title}</strong>
+                      <span>{template.permissions.join(", ")}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="admin-official-grid">
+              <div className="admin-card">
+                <h3>Edit assignment</h3>
+                <div className="admin-user-pick-row">
+                  <input placeholder="User ID" value={staffUserId} onChange={(e) => setStaffUserId(e.target.value)} />
+                  <button type="button" className="btn-sm" onClick={loadStaffAssignments} disabled={staffLoading}>
+                    {staffLoading ? "Refreshing…" : "Refresh list"}
+                  </button>
+                </div>
+
+                <div className="admin-badge-form">
+                  <input placeholder="Level key" value={staffLevelKey} onChange={(e) => setStaffLevelKey(e.target.value)} />
+                  <input placeholder="Display title" value={staffTitle} onChange={(e) => setStaffTitle(e.target.value)} />
+                </div>
+
+                <textarea
+                  className="admin-official-textarea"
+                  placeholder="Internal notes for this staff assignment"
+                  value={staffNotes}
+                  onChange={(e) => setStaffNotes(e.target.value)}
+                />
+
+                <div className="admin-permission-grid">
+                  {PANEL_PERMISSION_OPTIONS.map((permission) => (
+                    <label key={permission.id} className="admin-permission-card">
+                      <input
+                        type="checkbox"
+                        checked={staffPermissions.includes(permission.id)}
+                        onChange={() => toggleStaffPermission(permission.id)}
+                      />
+                      <strong>{permission.label}</strong>
+                      <span>{permission.description}</span>
+                    </label>
+                  ))}
+                </div>
+
+                <div className="admin-badge-actions">
+                  <button type="button" onClick={saveStaffAssignment} disabled={staffBusy}>
+                    {staffBusy ? "Saving…" : "Save assignment"}
+                  </button>
+                  <button type="button" className="danger" onClick={() => removeStaffAssignment()} disabled={staffBusy}>
+                    Remove assignment
+                  </button>
+                </div>
+              </div>
+
+              <div className="admin-card">
+                <h3>Current team</h3>
+                {staffLoading ? (
+                  <p className="text-dim">Loading staff assignments…</p>
+                ) : staffAssignments.length === 0 ? (
+                  <p className="text-dim">No panel staff assigned yet.</p>
+                ) : (
+                  <div className="admin-staff-list">
+                    {staffAssignments.map((assignment) => (
+                      <button
+                        key={assignment.userId}
+                        type="button"
+                        className="admin-staff-row"
+                        onClick={() => editStaffAssignment(assignment)}
+                      >
+                        <strong>{assignment.username}</strong>
+                        <span>{assignment.title}</span>
+                        <small>{assignment.permissions.join(", ")}</small>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
           </section>
         )}
@@ -903,6 +1390,138 @@ export function AdminApp() {
                   </table>
                 </div>
               )}
+            </div>
+          </section>
+        )}
+
+        {tab === "blogs" && (
+          <section className="admin-section">
+            <h2>Blog creator portal</h2>
+            <p className="admin-hint">Draft posts here, then publish them straight to `opencom.online/blogs/{blog-name}`.</p>
+
+            <div className="admin-blog-layout">
+              <div className="admin-card">
+                <div className="admin-role-toolbar">
+                  <div>
+                    <h3>Posts</h3>
+                    <p className="text-dim">Published posts are public immediately. Drafts stay private inside the panel.</p>
+                  </div>
+                  <div className="admin-badge-actions">
+                    <button type="button" onClick={startNewBlogDraft}>New draft</button>
+                    <button type="button" className="btn-sm" onClick={loadBlogs} disabled={blogLoading}>
+                      {blogLoading ? "Refreshing…" : "Refresh"}
+                    </button>
+                  </div>
+                </div>
+
+                {blogPosts.length === 0 ? (
+                  <p className="text-dim">No blog posts yet.</p>
+                ) : (
+                  <div className="admin-blog-list">
+                    {blogPosts.map((post) => (
+                      <button
+                        key={post.id}
+                        type="button"
+                        className={`admin-blog-row ${blogForm.id === post.id ? "active" : ""}`}
+                        onClick={() => openBlogEditor(post)}
+                      >
+                        <strong>{post.title}</strong>
+                        <span>{post.status === "published" ? "Published" : "Draft"}</span>
+                        <small>{post.slug}</small>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="admin-card">
+                <h3>{blogForm.id ? "Edit post" : "Create post"}</h3>
+                <div className="admin-badge-form admin-blog-form-grid">
+                  <input
+                    placeholder="Title"
+                    value={blogForm.title}
+                    onChange={(e) =>
+                      setBlogForm((current) => ({ ...current, title: e.target.value }))
+                    }
+                  />
+                  <div className="admin-inline-field">
+                    <input
+                      placeholder="Slug"
+                      value={blogForm.slug}
+                      onChange={(e) =>
+                        setBlogForm((current) => ({ ...current, slug: e.target.value }))
+                      }
+                    />
+                    <button
+                      type="button"
+                      className="btn-sm"
+                      onClick={() =>
+                        setBlogForm((current) => ({
+                          ...current,
+                          slug: slugifyBlogTitle(current.title),
+                        }))
+                      }
+                    >
+                      Use title
+                    </button>
+                  </div>
+                  <input
+                    placeholder="Cover image URL (optional)"
+                    value={blogForm.coverImageUrl}
+                    onChange={(e) =>
+                      setBlogForm((current) => ({
+                        ...current,
+                        coverImageUrl: e.target.value,
+                      }))
+                    }
+                  />
+                  <select
+                    value={blogForm.status}
+                    onChange={(e) =>
+                      setBlogForm((current) => ({ ...current, status: e.target.value }))
+                    }
+                  >
+                    <option value="draft">Draft</option>
+                    <option value="published">Published</option>
+                  </select>
+                </div>
+
+                <textarea
+                  className="admin-official-textarea admin-blog-summary"
+                  placeholder="Summary"
+                  value={blogForm.summary}
+                  onChange={(e) =>
+                    setBlogForm((current) => ({ ...current, summary: e.target.value }))
+                  }
+                />
+
+                <textarea
+                  className="admin-blog-editor"
+                  placeholder="Write the post body here. Basic headings, bullet lists, quotes, and code fences are supported."
+                  value={blogForm.content}
+                  onChange={(e) =>
+                    setBlogForm((current) => ({ ...current, content: e.target.value }))
+                  }
+                />
+
+                <div className="admin-badge-actions">
+                  <button type="button" onClick={saveBlogPost} disabled={blogBusy}>
+                    {blogBusy ? "Saving…" : blogForm.id ? "Save changes" : "Create post"}
+                  </button>
+                  {blogForm.slug && blogForm.status === "published" && (
+                    <button
+                      type="button"
+                      className="btn-sm"
+                      onClick={() => window.open(`/blogs/${blogForm.slug}`, "_blank", "noopener,noreferrer")}
+                    >
+                      Open public post
+                    </button>
+                  )}
+                  <button type="button" className="danger" onClick={deleteBlogPost} disabled={blogBusy || !blogForm.id}>
+                    Delete
+                  </button>
+                </div>
+              </div>
             </div>
           </section>
         )}

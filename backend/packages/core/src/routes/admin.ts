@@ -5,34 +5,22 @@ import { parseBody } from "../validation.js";
 import { getActiveManualBoostGrant, reconcileBoostBadge } from "../boost.js";
 import { buildOfficialBadgeDetail, ensureSocialDmThread, getOfficialAccount, isOfficialAccountName, isOfficialBadgeId } from "../officialAccount.js";
 import { ulidLike } from "@ods/shared/ids.js";
+import {
+  PLATFORM_PANEL_PERMISSIONS,
+  getLegacyPlatformRole,
+  getPlatformAccess,
+  getPlatformStaffAssignment,
+  listPlatformStaffAssignments,
+  requestHasPanelPassword,
+  requirePanelAccess,
+  requirePanelPermission,
+  serializePlatformPermissions,
+} from "../platformStaff.js";
 
 const PLATFORM_ADMIN_BADGE = "PLATFORM_ADMIN";
 const PLATFORM_FOUNDER_BADGE = "PLATFORM_FOUNDER";
 const BOOST_GRANT_TYPE = z.enum(["permanent", "temporary"]);
-
-type PlatformRole = "user" | "admin" | "owner";
 type BroadcastToUser = (targetUserId: string, t: string, d: any) => Promise<void>;
-
-async function getPlatformRole(userId: string): Promise<PlatformRole> {
-  const founder = await q<{ founder_user_id: string | null }>(
-    `SELECT founder_user_id FROM platform_config WHERE id=1`
-  );
-  if (founder.length && founder[0].founder_user_id === userId) return "owner";
-
-  const admin = await q<{ user_id: string }>(
-    `SELECT user_id FROM platform_admins WHERE user_id=:userId`,
-    { userId }
-  );
-  if (admin.length) return "admin";
-
-  return "user";
-}
-
-async function requirePlatformStaff(userId: string) {
-  const role = await getPlatformRole(userId);
-  if (role !== "admin" && role !== "owner") throw new Error("FORBIDDEN");
-  return role;
-}
 
 async function setBadge(userId: string, badge: string, enabled: boolean) {
   if (enabled) {
@@ -64,12 +52,19 @@ function uniqueTrimmedStrings(values: string[] | undefined) {
   );
 }
 
+const PANEL_PERMISSION_ENUM = z.enum(PLATFORM_PANEL_PERMISSIONS);
+
+const staffAssignmentBodySchema = z.object({
+  levelKey: z.string().trim().min(2).max(32),
+  title: z.string().trim().min(2).max(96),
+  permissions: z.array(PANEL_PERMISSION_ENUM).min(1).max(PLATFORM_PANEL_PERMISSIONS.length),
+  notes: z.string().trim().max(255).optional(),
+});
+
 export async function adminRoutes(app: FastifyInstance, broadcastToUser?: BroadcastToUser) {
   app.get("/v1/admin/overview", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
-    const actorId = req.user.sub as string;
-
     try {
-      await requirePlatformStaff(actorId);
+      await requirePanelAccess(req);
     } catch {
       return rep.code(403).send({ error: "FORBIDDEN" });
     }
@@ -95,18 +90,29 @@ export async function adminRoutes(app: FastifyInstance, broadcastToUser?: Broadc
          AND (expires_at IS NULL OR expires_at > NOW())`
     );
 
+    const staffAssignments = await q<{ count: number }>(
+      `SELECT COUNT(*) AS count FROM platform_staff_assignments`
+    );
+
+    const publishedBlogs = await q<{ count: number }>(
+      `SELECT COUNT(*) AS count
+       FROM blog_posts
+       WHERE status='published'
+         AND published_at IS NOT NULL`
+    );
+
     return {
       founder: founder[0]?.id ? founder[0] : null,
       admins,
-      activeBoostGrants: Number(activeBoostGrants[0]?.count || 0)
+      activeBoostGrants: Number(activeBoostGrants[0]?.count || 0),
+      staffAssignmentsCount: Number(staffAssignments[0]?.count || 0),
+      publishedBlogsCount: Number(publishedBlogs[0]?.count || 0)
     };
   });
 
   app.get("/v1/admin/users", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
-    const actorId = req.user.sub as string;
-
     try {
-      await requirePlatformStaff(actorId);
+      await requirePanelAccess(req);
     } catch {
       return rep.code(403).send({ error: "FORBIDDEN" });
     }
@@ -127,10 +133,8 @@ export async function adminRoutes(app: FastifyInstance, broadcastToUser?: Broadc
   });
 
   app.get("/v1/admin/users/:userId/detail", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
-    const actorId = req.user.sub as string;
-
     try {
-      await requirePlatformStaff(actorId);
+      await requirePanelAccess(req);
     } catch {
       return rep.code(403).send({ error: "FORBIDDEN" });
     }
@@ -164,7 +168,7 @@ export async function adminRoutes(app: FastifyInstance, broadcastToUser?: Broadc
 
   app.post("/v1/admin/users/:userId/platform-admin", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
     const actorId = req.user.sub as string;
-    const actorRole = await getPlatformRole(actorId);
+    const actorRole = await getLegacyPlatformRole(actorId);
     if (actorRole !== "owner") return rep.code(403).send({ error: "ONLY_OWNER" });
 
     const { userId } = z.object({ userId: z.string().min(3) }).parse(req.params);
@@ -191,7 +195,7 @@ export async function adminRoutes(app: FastifyInstance, broadcastToUser?: Broadc
 
   app.post("/v1/admin/founder", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
     const actorId = req.user.sub as string;
-    const actorRole = await getPlatformRole(actorId);
+    const actorRole = await getLegacyPlatformRole(actorId);
     if (actorRole !== "owner") return rep.code(403).send({ error: "ONLY_OWNER" });
 
     const { userId } = parseBody(z.object({ userId: z.string().min(3) }), req.body);
@@ -226,19 +230,18 @@ export async function adminRoutes(app: FastifyInstance, broadcastToUser?: Broadc
   });
 
   app.post("/v1/admin/users/:userId/badges", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
-    const actorId = req.user.sub as string;
-
     try {
-      await requirePlatformStaff(actorId);
+      await requirePanelPermission(req, "manage_badges");
     } catch {
       return rep.code(403).send({ error: "FORBIDDEN" });
     }
 
+    const actorId = req.user.sub as string;
     const { userId } = z.object({ userId: z.string().min(3) }).parse(req.params);
     const body = parseBody(z.object({ badge: z.string().min(2).max(64), enabled: z.boolean() }), req.body);
 
     if (body.badge === PLATFORM_FOUNDER_BADGE) {
-      const role = await getPlatformRole(actorId);
+      const role = await getLegacyPlatformRole(actorId);
       if (role !== "owner") return rep.code(403).send({ error: "ONLY_OWNER" });
     }
 
@@ -249,7 +252,7 @@ export async function adminRoutes(app: FastifyInstance, broadcastToUser?: Broadc
   app.post("/v1/admin/users/:userId/account-ban", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
     const actorId = req.user.sub as string;
     try {
-      await requirePlatformStaff(actorId);
+      await requirePanelPermission(req, "moderate_users");
     } catch {
       return rep.code(403).send({ error: "FORBIDDEN" });
     }
@@ -292,9 +295,8 @@ export async function adminRoutes(app: FastifyInstance, broadcastToUser?: Broadc
   });
 
   app.delete("/v1/admin/users/:userId/account-ban", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
-    const actorId = req.user.sub as string;
     try {
-      await requirePlatformStaff(actorId);
+      await requirePanelPermission(req, "moderate_users");
     } catch {
       return rep.code(403).send({ error: "FORBIDDEN" });
     }
@@ -306,7 +308,7 @@ export async function adminRoutes(app: FastifyInstance, broadcastToUser?: Broadc
 
   app.delete("/v1/admin/users/:userId/account", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
     const actorId = req.user.sub as string;
-    const actorRole = await getPlatformRole(actorId);
+    const actorRole = await getLegacyPlatformRole(actorId);
     if (actorRole !== "owner") return rep.code(403).send({ error: "ONLY_OWNER" });
 
     const { userId } = z.object({ userId: z.string().min(3) }).parse(req.params);
@@ -325,9 +327,8 @@ export async function adminRoutes(app: FastifyInstance, broadcastToUser?: Broadc
   });
 
   app.get("/v1/admin/users/:userId/boost", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
-    const actorId = req.user.sub as string;
     try {
-      await requirePlatformStaff(actorId);
+      await requirePanelPermission(req, "manage_boosts");
     } catch {
       return rep.code(403).send({ error: "FORBIDDEN" });
     }
@@ -359,7 +360,7 @@ export async function adminRoutes(app: FastifyInstance, broadcastToUser?: Broadc
   app.post("/v1/admin/users/:userId/boost/grant", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
     const actorId = req.user.sub as string;
     try {
-      await requirePlatformStaff(actorId);
+      await requirePanelPermission(req, "manage_boosts");
     } catch {
       return rep.code(403).send({ error: "FORBIDDEN" });
     }
@@ -420,7 +421,7 @@ export async function adminRoutes(app: FastifyInstance, broadcastToUser?: Broadc
   app.post("/v1/admin/users/:userId/boost/revoke", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
     const actorId = req.user.sub as string;
     try {
-      await requirePlatformStaff(actorId);
+      await requirePanelPermission(req, "manage_boosts");
     } catch {
       return rep.code(403).send({ error: "FORBIDDEN" });
     }
@@ -443,9 +444,8 @@ export async function adminRoutes(app: FastifyInstance, broadcastToUser?: Broadc
   });
 
   app.get("/v1/admin/official-messages/status", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
-    const actorId = req.user.sub as string;
     try {
-      await requirePlatformStaff(actorId);
+      await requirePanelPermission(req, "send_official_messages");
     } catch {
       return rep.code(403).send({ error: "FORBIDDEN" });
     }
@@ -477,13 +477,13 @@ export async function adminRoutes(app: FastifyInstance, broadcastToUser?: Broadc
   });
 
   app.post("/v1/admin/official-messages/send", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
-    const actorId = req.user.sub as string;
     try {
-      await requirePlatformStaff(actorId);
+      await requirePanelPermission(req, "send_official_messages");
     } catch {
       return rep.code(403).send({ error: "FORBIDDEN" });
     }
 
+    const actorId = req.user.sub as string;
     const body = parseBody(
       z.object({
         recipientMode: z.enum(["all", "selected"]),
@@ -592,13 +592,81 @@ export async function adminRoutes(app: FastifyInstance, broadcastToUser?: Broadc
     };
   });
 
+  app.get("/v1/admin/staff", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
+    const actorId = req.user.sub as string;
+    const access = await getPlatformAccess(actorId);
+    if (!access.isPlatformOwner && !access.isPlatformAdmin && !requestHasPanelPassword(req)) {
+      return rep.code(403).send({ error: "FORBIDDEN" });
+    }
+
+    const staff = await listPlatformStaffAssignments();
+    return { staff };
+  });
+
+  app.put("/v1/admin/staff/:userId", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
+    const actorId = req.user.sub as string;
+    const access = await getPlatformAccess(actorId);
+    if (!access.isPlatformOwner && !access.isPlatformAdmin && !requestHasPanelPassword(req)) {
+      return rep.code(403).send({ error: "FORBIDDEN" });
+    }
+
+    const { userId } = z.object({ userId: z.string().min(3) }).parse(req.params);
+    const body = parseBody(staffAssignmentBodySchema, req.body);
+    const legacyRole = await getLegacyPlatformRole(userId);
+    if (legacyRole === "owner" || legacyRole === "admin") {
+      return rep.code(400).send({ error: "LEGACY_PLATFORM_ROLE_ALREADY_HAS_FULL_ACCESS" });
+    }
+
+    const target = await q<{ id: string }>(`SELECT id FROM users WHERE id=:userId`, { userId });
+    if (!target.length) return rep.code(404).send({ error: "USER_NOT_FOUND" });
+
+    await q(
+      `INSERT INTO platform_staff_assignments (user_id, level_key, title, permissions_json, notes, assigned_by)
+       VALUES (:userId, :levelKey, :title, :permissionsJson, :notes, :actorId)
+       ON DUPLICATE KEY UPDATE
+         level_key=VALUES(level_key),
+         title=VALUES(title),
+         permissions_json=VALUES(permissions_json),
+         notes=VALUES(notes),
+         assigned_by=VALUES(assigned_by)`,
+      {
+        userId,
+        levelKey: body.levelKey,
+        title: body.title,
+        permissionsJson: serializePlatformPermissions(body.permissions),
+        notes: body.notes || null,
+        actorId,
+      }
+    );
+
+    return {
+      ok: true,
+      assignment: await getPlatformStaffAssignment(userId)
+    };
+  });
+
+  app.delete("/v1/admin/staff/:userId", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
+    const actorId = req.user.sub as string;
+    const access = await getPlatformAccess(actorId);
+    if (!access.isPlatformOwner && !access.isPlatformAdmin && !requestHasPanelPassword(req)) {
+      return rep.code(403).send({ error: "FORBIDDEN" });
+    }
+
+    const { userId } = z.object({ userId: z.string().min(3) }).parse(req.params);
+    await q(`DELETE FROM platform_staff_assignments WHERE user_id=:userId`, { userId });
+    return { ok: true, removedUserId: userId };
+  });
+
   app.get("/v1/me/admin-status", { preHandler: [app.authenticate] } as any, async (req: any) => {
     const userId = req.user.sub as string;
-    const role = await getPlatformRole(userId);
+    const access = await getPlatformAccess(userId);
     return {
-      platformRole: role,
-      isPlatformAdmin: role === "admin" || role === "owner",
-      isPlatformOwner: role === "owner"
+      platformRole: access.platformRole,
+      isPlatformAdmin: access.isPlatformAdmin,
+      isPlatformOwner: access.isPlatformOwner,
+      canAccessPanel: access.canAccessPanel || requestHasPanelPassword(req),
+      permissions: access.permissions,
+      staffAssignment: access.staffAssignment
     };
   });
 }

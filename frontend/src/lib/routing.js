@@ -2,9 +2,23 @@ export const APP_ROUTE_HOME = "/";
 export const APP_ROUTE_LOGIN = "/login";
 export const APP_ROUTE_CLIENT = "/app";
 export const APP_ROUTE_TERMS = "/terms";
+export const APP_ROUTE_BLOGS = "/blogs";
+export const APP_ROUTE_PANEL = "/panel";
 
 const INVITE_CODE_RE = /^[a-zA-Z0-9_-]{3,32}$/;
 const GIFT_CODE_RE = /^[a-zA-Z0-9_-]{8,96}$/;
+const BLOG_SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+export function isBlogPostPath(pathname = "") {
+  return /^\/blogs\/[a-z0-9]+(?:-[a-z0-9]+)*\/?$/.test(pathname || "");
+}
+
+export function getBlogSlugFromPath(pathname = "") {
+  const match = String(pathname || "").match(
+    /^\/blogs\/([a-z0-9]+(?:-[a-z0-9]+)*)\/?$/,
+  );
+  return match?.[1] || "";
+}
 
 export function isInviteJoinPath(pathname = "") {
   return /^\/join\/[a-zA-Z0-9_-]{3,32}\/?$/.test(pathname || "");
@@ -25,6 +39,14 @@ export function normalizeAppPath(pathname = "") {
   if (normalized === APP_ROUTE_LOGIN) return APP_ROUTE_LOGIN;
   if (normalized === APP_ROUTE_CLIENT) return APP_ROUTE_CLIENT;
   if (normalized === APP_ROUTE_TERMS) return APP_ROUTE_TERMS;
+  if (normalized === APP_ROUTE_BLOGS) return APP_ROUTE_BLOGS;
+  if (normalized === APP_ROUTE_PANEL) return APP_ROUTE_PANEL;
+  if (normalized.startsWith(`${APP_ROUTE_BLOGS}/`)) {
+    const slug = getBlogSlugFromPath(normalized);
+    return slug && BLOG_SLUG_RE.test(slug)
+      ? `${APP_ROUTE_BLOGS}/${slug}`
+      : APP_ROUTE_BLOGS;
+  }
   return APP_ROUTE_HOME;
 }
 

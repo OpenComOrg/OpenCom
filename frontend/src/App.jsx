@@ -21,6 +21,8 @@ import { ProfileStudioPage } from "./components/app/ProfileStudioPage";
 import { VoiceShareOverlay } from "./components/app/VoiceShareOverlay";
 import { AppContextMenus } from "./components/app/AppContextMenus";
 import { AddServerModal } from "./components/app/AddServerModal";
+import { FavouriteMediaModal } from "./components/app/FavouriteMediaModal";
+import { MediaViewerModal } from "./components/app/MediaViewerModal";
 import { MemberProfilePopout } from "./components/app/MemberProfilePopout";
 import { FullProfileViewerModal } from "./components/app/FullProfileViewerModal";
 import { AppDialogModal } from "./components/app/AppDialogModal";
@@ -1513,6 +1515,38 @@ function extractHttpUrls(value = "") {
   return [...out];
 }
 
+function normalizeFavouriteMediaUrl(value = "") {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  try {
+    const parsed = new URL(raw);
+    parsed.hash = "";
+    return parsed.toString();
+  } catch {
+    return raw;
+  }
+}
+
+function buildFavouriteMediaKey(sourceKind = "", sourceUrl = "") {
+  const normalizedKind = String(sourceKind || "").trim();
+  const normalizedUrl = normalizeFavouriteMediaUrl(sourceUrl);
+  if (!normalizedKind || !normalizedUrl) return "";
+  return `${normalizedKind}:${normalizedUrl}`;
+}
+
+function guessFileNameFromUrl(value = "") {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  try {
+    const parsed = new URL(raw);
+    const lastSegment = (parsed.pathname || "").split("/").filter(Boolean).pop();
+    return lastSegment ? decodeURIComponent(lastSegment) : "";
+  } catch {
+    const lastSegment = raw.split("/").filter(Boolean).pop();
+    return lastSegment ? decodeURIComponent(lastSegment) : "";
+  }
+}
+
 export function App() {
   const voiceDebugEnabled = isVoiceDebugEnabled();
   const voiceDebug = (message, context = {}) => {
@@ -1745,6 +1779,16 @@ export function App() {
   const [boostGiftSent, setBoostGiftSent] = useState([]);
   const [linkPreviewByUrl, setLinkPreviewByUrl] = useState({});
   const [attachmentPreviewUrlById, setAttachmentPreviewUrlById] = useState({});
+  const [favouriteMedia, setFavouriteMedia] = useState([]);
+  const [favouriteMediaLoading, setFavouriteMediaLoading] = useState(false);
+  const [favouriteMediaModalOpen, setFavouriteMediaModalOpen] = useState(false);
+  const [favouriteMediaQuery, setFavouriteMediaQuery] = useState("");
+  const [favouriteMediaBusyById, setFavouriteMediaBusyById] = useState({});
+  const [favouriteMediaInsertBusyId, setFavouriteMediaInsertBusyId] =
+    useState("");
+  const [favouriteMediaPreviewUrlById, setFavouriteMediaPreviewUrlById] =
+    useState({});
+  const [expandedMedia, setExpandedMedia] = useState(null);
   const [addServerModalOpen, setAddServerModalOpen] = useState(false);
   const [addServerTab, setAddServerTab] = useState("create");
   const [serverContextMenu, setServerContextMenu] = useState(null);
@@ -2010,6 +2054,8 @@ export function App() {
   const linkPreviewFetchInFlightRef = useRef(new Set());
   const attachmentPreviewFetchInFlightRef = useRef(new Set());
   const attachmentPreviewUrlByIdRef = useRef({});
+  const favouriteMediaPreviewFetchInFlightRef = useRef(new Set());
+  const favouriteMediaPreviewUrlByIdRef = useRef({});
   const autoJoinInviteAttemptRef = useRef("");
   const previousDmIdRef = useRef("");
   const previousServerChannelIdRef = useRef("");
@@ -2154,6 +2200,20 @@ export function App() {
   useEffect(() => {
     attachmentPreviewUrlByIdRef.current = attachmentPreviewUrlById || {};
   }, [attachmentPreviewUrlById]);
+
+  useEffect(() => {
+    favouriteMediaPreviewUrlByIdRef.current = favouriteMediaPreviewUrlById || {};
+  }, [favouriteMediaPreviewUrlById]);
+
+  useEffect(() => {
+    if (!accessToken) {
+      setFavouriteMedia([]);
+      setFavouriteMediaModalOpen(false);
+      setFavouriteMediaQuery("");
+      return;
+    }
+    loadFavouriteMedia().catch(() => {});
+  }, [accessToken]);
 
   useEffect(() => {
     const onPopState = () => setRoutePath(getAppRouteFromLocation());
@@ -3319,6 +3379,30 @@ export function App() {
       customUrl: typeof pref.customUrl === "string" ? pref.customUrl : "",
     };
   }, [activeServerId, serverVoiceGatewayPrefs]);
+  const favouriteMediaByKey = useMemo(() => {
+    const byKey = new Map();
+    for (const item of favouriteMedia) {
+      const key = buildFavouriteMediaKey(item?.sourceKind, item?.sourceUrl);
+      if (!key) continue;
+      byKey.set(key, item);
+    }
+    return byKey;
+  }, [favouriteMedia]);
+  const filteredFavouriteMedia = useMemo(() => {
+    const query = String(favouriteMediaQuery || "")
+      .trim()
+      .toLowerCase();
+    if (!query) return favouriteMedia;
+    return favouriteMedia.filter((item) =>
+      [
+        item?.fileName,
+        item?.title,
+        item?.contentType,
+        item?.pageUrl,
+        item?.sourceUrl,
+      ].some((value) => String(value || "").toLowerCase().includes(query)),
+    );
+  }, [favouriteMedia, favouriteMediaQuery]);
 
   async function refreshSocialData(token = accessToken) {
     if (!token) return;
@@ -5157,6 +5241,55 @@ export function App() {
   ]);
 
   useEffect(() => {
+    if (!favouriteMediaModalOpen) return;
+    const candidates = favouriteMedia.filter((item) => {
+      if (!item?.id) return false;
+      if (item.sourceKind === "external_url") return false;
+      if (favouriteMediaPreviewUrlById[item.id]) return false;
+      if (favouriteMediaPreviewFetchInFlightRef.current.has(item.id))
+        return false;
+      return true;
+    });
+
+    for (const item of candidates) {
+      const request = resolveFavouriteMediaRequest(item);
+      if (!request?.requestUrl) continue;
+      favouriteMediaPreviewFetchInFlightRef.current.add(item.id);
+      fetch(request.requestUrl, {
+        headers: request.headers,
+      })
+        .then((response) => (response.ok ? response.blob() : null))
+        .then((blob) => {
+          if (!blob) return;
+          if (
+            !isImageMimeType(blob.type || item.contentType || "") &&
+            !isLikelyImageUrl(item.sourceUrl)
+          )
+            return;
+          const objectUrl = URL.createObjectURL(blob);
+          setFavouriteMediaPreviewUrlById((current) => {
+            const existing = current[item.id];
+            if (existing) URL.revokeObjectURL(objectUrl);
+            return existing ? current : { ...current, [item.id]: objectUrl };
+          });
+        })
+        .catch(() => {})
+        .finally(() => {
+          favouriteMediaPreviewFetchInFlightRef.current.delete(item.id);
+        });
+    }
+  }, [
+    favouriteMediaModalOpen,
+    favouriteMedia,
+    favouriteMediaPreviewUrlById,
+    accessToken,
+    activeServer?.baseUrl,
+    activeServer?.membershipToken,
+    activeServerId,
+    servers,
+  ]);
+
+  useEffect(() => {
     const old = attachmentPreviewUrlByIdRef.current || {};
     Object.values(old).forEach((url) => {
       try {
@@ -5168,6 +5301,20 @@ export function App() {
   }, [activeServerId]);
 
   useEffect(() => {
+    if (favouriteMediaModalOpen) return;
+    const urls = favouriteMediaPreviewUrlByIdRef.current || {};
+    if (!Object.keys(urls).length) return;
+    Object.values(urls).forEach((url) => {
+      try {
+        URL.revokeObjectURL(url);
+      } catch {}
+    });
+    favouriteMediaPreviewFetchInFlightRef.current.clear();
+    favouriteMediaPreviewUrlByIdRef.current = {};
+    setFavouriteMediaPreviewUrlById({});
+  }, [favouriteMediaModalOpen]);
+
+  useEffect(() => {
     return () => {
       const urls = attachmentPreviewUrlByIdRef.current || {};
       Object.values(urls).forEach((url) => {
@@ -5175,6 +5322,13 @@ export function App() {
           URL.revokeObjectURL(url);
         } catch {}
       });
+      const favouriteUrls = favouriteMediaPreviewUrlByIdRef.current || {};
+      Object.values(favouriteUrls).forEach((url) => {
+        try {
+          URL.revokeObjectURL(url);
+        } catch {}
+      });
+      favouriteMediaPreviewFetchInFlightRef.current.clear();
     };
   }, []);
 
@@ -6265,6 +6419,243 @@ export function App() {
     }
 
     return true;
+  }
+
+  async function loadFavouriteMedia() {
+    if (!accessToken) {
+      setFavouriteMedia([]);
+      return;
+    }
+    setFavouriteMediaLoading(true);
+    try {
+      const data = await api("/v1/social/favourites/media", {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      setFavouriteMedia(Array.isArray(data?.favourites) ? data.favourites : []);
+    } catch (error) {
+      setStatus(`Could not load favourites: ${error.message}`);
+    } finally {
+      setFavouriteMediaLoading(false);
+    }
+  }
+
+  function openFavouriteMediaPicker() {
+    setFavouriteMediaModalOpen(true);
+    loadFavouriteMedia().catch(() => {});
+  }
+
+  function buildFavouriteMediaDraftFromAttachment(attachment, messageId = "") {
+    const sourceUrl = String(attachment?.url || "").trim();
+    if (!sourceUrl) return null;
+    const isDmAttachment = /\/v1\/social\/dms\/attachments\//.test(sourceUrl);
+    return {
+      sourceKind: isDmAttachment ? "dm_attachment" : "server_attachment",
+      sourceUrl,
+      title: attachment?.fileName || "Image",
+      fileName: attachment?.fileName || "",
+      contentType: attachment?.contentType || "",
+      serverId: isDmAttachment ? "" : activeServerId || "",
+      threadId: isDmAttachment ? activeDmId || "" : "",
+      messageId: messageId || "",
+    };
+  }
+
+  function buildFavouriteMediaDraftFromEmbed(embed) {
+    const preview = getLinkPreviewForUrl(embed?.url);
+    const imageUrl = String(embed?.imageUrl || preview?.imageUrl || "").trim();
+    const fallbackImageUrl =
+      !imageUrl && isLikelyImageUrl(embed?.url) ? String(embed.url) : "";
+    const resolvedImageUrl = imageUrl || fallbackImageUrl;
+    if (!resolvedImageUrl) return null;
+    return {
+      sourceKind: "external_url",
+      sourceUrl: resolvedImageUrl,
+      pageUrl: embed?.url || preview?.url || resolvedImageUrl,
+      title: embed?.title || preview?.title || guessFileNameFromUrl(resolvedImageUrl),
+      fileName: guessFileNameFromUrl(resolvedImageUrl),
+      contentType: "",
+      serverId: "",
+      threadId: "",
+      messageId: "",
+    };
+  }
+
+  function resolveFavouriteMediaRequest(item) {
+    const sourceUrl = String(item?.sourceUrl || "").trim();
+    if (!sourceUrl) return null;
+
+    if (item?.sourceKind === "dm_attachment") {
+      if (!accessToken) return null;
+      return {
+        requestUrl: sourceUrl.startsWith("http")
+          ? sourceUrl
+          : `${CORE_API}${sourceUrl.startsWith("/") ? "" : "/"}${sourceUrl}`,
+        headers: { Authorization: `Bearer ${accessToken}` },
+      };
+    }
+
+    if (item?.sourceKind === "server_attachment") {
+      const targetServerId = String(item?.serverId || "").trim();
+      const currentServer =
+        targetServerId && activeServerId === targetServerId ? activeServer : null;
+      const matchedServer =
+        currentServer ||
+        (serversRef.current || []).find((server) => server.id === targetServerId) ||
+        null;
+      const baseUrl = normalizeServerBaseUrl(matchedServer?.baseUrl || "");
+      const membershipToken = matchedServer?.membershipToken || "";
+      if (!baseUrl || !membershipToken) return null;
+      return {
+        requestUrl: sourceUrl.startsWith("http")
+          ? sourceUrl
+          : `${baseUrl}${sourceUrl.startsWith("/") ? "" : "/"}${sourceUrl}`,
+        headers: { Authorization: `Bearer ${membershipToken}` },
+      };
+    }
+
+    return {
+      requestUrl: sourceUrl,
+      headers: {},
+    };
+  }
+
+  async function fetchFavouriteMediaBlob(item) {
+    const request = resolveFavouriteMediaRequest(item);
+    if (!request?.requestUrl) throw new Error("MEDIA_UNAVAILABLE");
+    const response = await fetch(request.requestUrl, {
+      headers: request.headers,
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.error || `HTTP_${response.status}`);
+    }
+    return response.blob();
+  }
+
+  function buildFavouriteMediaFile(item, blob) {
+    const blobType =
+      blob?.type || item?.contentType || "application/octet-stream";
+    const baseName = String(
+      item?.fileName ||
+        guessFileNameFromUrl(item?.sourceUrl) ||
+        item?.title ||
+        "",
+    )
+      .trim()
+      .replace(/[\\/:*?"<>|]+/g, "_");
+    const fileName =
+      baseName || `favourite-${Date.now()}${extensionForMimeType(blobType)}`;
+    return new File([blob], fileName, {
+      type: blobType,
+    });
+  }
+
+  function appendTextToActiveComposer(text, scope) {
+    const value = String(text || "").trim();
+    if (!value) return;
+    if (scope === "dm") {
+      setDmText((current) =>
+        current.trimEnd() ? `${current.trimEnd()} ${value}` : value,
+      );
+      dmComposerInputRef.current?.focus();
+      return;
+    }
+    setMessageText((current) =>
+      current.trimEnd() ? `${current.trimEnd()} ${value}` : value,
+    );
+    composerInputRef.current?.focus();
+  }
+
+  async function insertFavouriteMedia(item) {
+    if (!item?.id) return;
+    const scope = navMode === "dms" ? "dm" : navMode === "servers" ? "server" : "";
+    if (!scope) {
+      setStatus("Open a channel or DM to send saved media.");
+      return;
+    }
+    if (scope === "server" && (!activeServer || !activeChannelId)) {
+      setStatus("Select a server channel first.");
+      return;
+    }
+    if (scope === "dm" && (!activeDm || activeDm?.isNoReply)) {
+      setStatus(
+        activeDm?.isNoReply
+          ? "This official account does not accept replies."
+          : "Select a DM first.",
+      );
+      return;
+    }
+
+    setFavouriteMediaInsertBusyId(item.id);
+    try {
+      if (item.sourceKind === "external_url") {
+        appendTextToActiveComposer(item.sourceUrl, scope);
+        setStatus("Added saved media to the composer.");
+      } else {
+        const blob = await fetchFavouriteMediaBlob(item);
+        const file = buildFavouriteMediaFile(item, blob);
+        await uploadAttachments([file], "favourites", scope);
+      }
+      setFavouriteMediaModalOpen(false);
+    } catch (error) {
+      setStatus(`Could not add favourite: ${error.message}`);
+    } finally {
+      setFavouriteMediaInsertBusyId("");
+    }
+  }
+
+  async function toggleFavouriteMedia(draft) {
+    const key = buildFavouriteMediaKey(draft?.sourceKind, draft?.sourceUrl);
+    if (!accessToken || !key) return;
+
+    const existing = favouriteMediaByKey.get(key) || null;
+    const busyKey = existing?.id || key;
+    if (favouriteMediaBusyById[busyKey]) return;
+
+    setFavouriteMediaBusyById((current) => ({ ...current, [busyKey]: true }));
+    try {
+      if (existing?.id) {
+        await api(`/v1/social/favourites/media/${existing.id}`, {
+          method: "DELETE",
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
+        setFavouriteMedia((current) =>
+          current.filter((item) => item.id !== existing.id),
+        );
+        setStatus("Removed from favourites.");
+      } else {
+        const data = await api("/v1/social/favourites/media", {
+          method: "POST",
+          headers: { Authorization: `Bearer ${accessToken}` },
+          body: JSON.stringify(draft),
+        });
+        const favourite = data?.favourite;
+        if (favourite?.id) {
+          setFavouriteMedia((current) => {
+            const favouriteKey = buildFavouriteMediaKey(
+              favourite.sourceKind,
+              favourite.sourceUrl,
+            );
+            const filtered = current.filter(
+              (item) =>
+                item.id !== favourite.id &&
+                buildFavouriteMediaKey(item?.sourceKind, item?.sourceUrl) !==
+                  favouriteKey,
+            );
+            return [favourite, ...filtered];
+          });
+        }
+        setStatus("Saved to favourites.");
+      }
+    } catch (error) {
+      setStatus(`Could not update favourites: ${error.message}`);
+    } finally {
+      setFavouriteMediaBusyById((current) => {
+        const next = { ...current };
+        delete next[busyKey];
+        return next;
+      });
+    }
   }
 
   async function uploadServerAttachment(file) {
@@ -10327,6 +10718,62 @@ export function App() {
     return out;
   }
 
+  function onMediaCardKeyDown(event, onOpen) {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    onOpen();
+  }
+
+  function openExpandedMediaFromEmbed(embed) {
+    const draft = buildFavouriteMediaDraftFromEmbed(embed);
+    const imageUrl = String(draft?.sourceUrl || "").trim();
+    if (!imageUrl) return;
+    setExpandedMedia({
+      src: imageUrl,
+      title: embed?.title || draft?.fileName || "Image",
+      subtitle: embed?.pageUrl || embed?.url || "",
+      openHref: embed?.url || draft?.pageUrl || imageUrl,
+    });
+  }
+
+  function openExpandedMediaFromAttachment(attachment) {
+    const imagePreviewUrl = attachmentPreviewUrlById[attachment?.id] || "";
+    const directUrl = String(attachment?.url || "");
+    const directImageUrl = isLikelyImageUrl(directUrl) ? directUrl : "";
+    const imageUrl = imagePreviewUrl || directImageUrl;
+    if (!imageUrl) return;
+    setExpandedMedia({
+      src: imageUrl,
+      title: attachment?.fileName || "Image",
+      subtitle: attachment?.contentType || "",
+      openHref: "",
+    });
+  }
+
+  function renderFavouriteMediaButton(draft) {
+    const key = buildFavouriteMediaKey(draft?.sourceKind, draft?.sourceUrl);
+    if (!key) return null;
+    const favourite = favouriteMediaByKey.get(key) || null;
+    const busyKey = favourite?.id || key;
+    const busy = !!favouriteMediaBusyById[busyKey];
+
+    return (
+      <button
+        type="button"
+        className={`message-media-favourite-btn ${favourite ? "active" : ""}`}
+        onClick={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          toggleFavouriteMedia(draft);
+        }}
+        disabled={busy}
+        title={favourite ? "Remove from favourites" : "Save to favourites"}
+      >
+        ★
+      </button>
+    );
+  }
+
   function formatInviteEstablishedDate(value) {
     if (!value) return "";
     try {
@@ -10425,25 +10872,37 @@ export function App() {
       !imageUrl && isLikelyImageUrl(embed?.url) ? String(embed.url) : "";
     const resolvedImageUrl = imageUrl || fallbackImageUrl;
     if (resolvedImageUrl) {
+      const favouriteDraft = buildFavouriteMediaDraftFromEmbed({
+        ...embed,
+        imageUrl: resolvedImageUrl,
+      });
       return (
-        <a
+        <div
           key={key}
-          className="message-image-link-embed"
-          href={embed.url}
-          target="_blank"
-          rel="noreferrer"
+          className="message-media-card-wrap"
           onContextMenu={(event) => event.stopPropagation()}
         >
-          <img
-            src={resolvedImageUrl}
-            alt={embed.title || "Image"}
-            loading="lazy"
-          />
-          <div className="message-image-link-meta">
-            <strong>{embed.title || "Image"}</strong>
-            <p>{embed.url}</p>
+          <div
+            className="message-image-link-embed message-media-card-surface"
+            role="button"
+            tabIndex={0}
+            onClick={() => openExpandedMediaFromEmbed(embed)}
+            onKeyDown={(event) =>
+              onMediaCardKeyDown(event, () => openExpandedMediaFromEmbed(embed))
+            }
+          >
+            <img
+              src={resolvedImageUrl}
+              alt={embed.title || "Image"}
+              loading="lazy"
+            />
+            <div className="message-image-link-meta">
+              <strong>{embed.title || "Image"}</strong>
+              <p>{embed.url}</p>
+            </div>
           </div>
-        </a>
+          {renderFavouriteMediaButton(favouriteDraft)}
+        </div>
       );
     }
 
@@ -10472,25 +10931,39 @@ export function App() {
       isImageMimeType(attachment?.contentType || "") || Boolean(imageUrl);
 
     if (isImage && imageUrl) {
+      const favouriteDraft = buildFavouriteMediaDraftFromAttachment(attachment);
       return (
         <div
           key={key}
-          className="message-image-attachment"
+          className="message-media-card-wrap"
           title="Right-click image to save"
           onContextMenu={(event) => {
             // Keep native browser image context menu (Save image as...) instead of message menu.
             event.stopPropagation();
           }}
         >
-          <img
-            src={imageUrl}
-            alt={attachment?.fileName || "Image attachment"}
-            loading="lazy"
-          />
-          <div className="message-image-attachment-meta">
-            <strong>{attachment?.fileName || "Image"}</strong>
-            <p>{attachment?.contentType || "image"}</p>
+          <div
+            className="message-image-attachment message-media-card-surface"
+            role="button"
+            tabIndex={0}
+            onClick={() => openExpandedMediaFromAttachment(attachment)}
+            onKeyDown={(event) =>
+              onMediaCardKeyDown(event, () =>
+                openExpandedMediaFromAttachment(attachment),
+              )
+            }
+          >
+            <img
+              src={imageUrl}
+              alt={attachment?.fileName || "Image attachment"}
+              loading="lazy"
+            />
+            <div className="message-image-attachment-meta">
+              <strong>{attachment?.fileName || "Image"}</strong>
+              <p>{attachment?.contentType || "image"}</p>
+            </div>
           </div>
+          {renderFavouriteMediaButton(favouriteDraft)}
         </div>
       );
     }
@@ -11742,6 +12215,17 @@ export function App() {
                   className="ghost composer-icon"
                   onClick={(event) => {
                     event.stopPropagation();
+                    openFavouriteMediaPicker();
+                  }}
+                  title="Open favourites"
+                  disabled={!activeChannelId}
+                >
+                  ★
+                </button>
+                <button
+                  className="ghost composer-icon"
+                  onClick={(event) => {
+                    event.stopPropagation();
                     setShowEmotePicker((current) => !current);
                   }}
                   title="Open emotes"
@@ -12177,6 +12661,17 @@ export function App() {
                 />
               </div>
               <button
+                className="ghost composer-icon"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  openFavouriteMediaPicker();
+                }}
+                title="Open favourites"
+                disabled={!activeDm || activeDm?.isNoReply}
+              >
+                ★
+              </button>
+              <button
                 className="send-btn"
                 onClick={sendDm}
                 disabled={
@@ -12391,6 +12886,25 @@ export function App() {
         resolveDialog={resolveDialog}
         setDialogModal={setDialogModal}
         dialogInputRef={dialogInputRef}
+      />
+
+      <FavouriteMediaModal
+        open={favouriteMediaModalOpen}
+        onClose={() => setFavouriteMediaModalOpen(false)}
+        favourites={filteredFavouriteMedia}
+        loading={favouriteMediaLoading}
+        query={favouriteMediaQuery}
+        setQuery={setFavouriteMediaQuery}
+        previewUrlById={favouriteMediaPreviewUrlById}
+        onSelect={insertFavouriteMedia}
+        onRemove={toggleFavouriteMedia}
+        removeBusyById={favouriteMediaBusyById}
+        insertBusyId={favouriteMediaInsertBusyId}
+      />
+
+      <MediaViewerModal
+        media={expandedMedia}
+        onClose={() => setExpandedMedia(null)}
       />
 
       <BoostUpsellModal

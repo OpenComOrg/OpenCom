@@ -46,7 +46,7 @@ await jwksRoutes(app);
 await profileRoutes(app);
 await inviteRoutes(app);
 await presenceRoutes(app);
-await adminRoutes(app);
+await adminRoutes(app, gw.broadcastToUser);
 await dmRoutes(app, gw.broadcastDM);
 await socialRoutes(app, gw.broadcastCallSignal, gw.broadcastToUser);
 await nodeSyncRoutes(app);

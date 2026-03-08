@@ -3,12 +3,15 @@ import { z } from "zod";
 import { q } from "../db.js";
 import { parseBody } from "../validation.js";
 import { getActiveManualBoostGrant, reconcileBoostBadge } from "../boost.js";
+import { buildOfficialBadgeDetail, ensureSocialDmThread, getOfficialAccount, isOfficialAccountName, isOfficialBadgeId } from "../officialAccount.js";
+import { ulidLike } from "@ods/shared/ids.js";
 
 const PLATFORM_ADMIN_BADGE = "PLATFORM_ADMIN";
 const PLATFORM_FOUNDER_BADGE = "PLATFORM_FOUNDER";
 const BOOST_GRANT_TYPE = z.enum(["permanent", "temporary"]);
 
 type PlatformRole = "user" | "admin" | "owner";
+type BroadcastToUser = (targetUserId: string, t: string, d: any) => Promise<void>;
 
 async function getPlatformRole(userId: string): Promise<PlatformRole> {
   const founder = await q<{ founder_user_id: string | null }>(
@@ -51,7 +54,17 @@ function toMySqlDateTime(value: Date) {
   return value.toISOString().slice(0, 19).replace("T", " ");
 }
 
-export async function adminRoutes(app: FastifyInstance) {
+function uniqueTrimmedStrings(values: string[] | undefined) {
+  return Array.from(
+    new Set(
+      (values || [])
+        .map((value) => String(value || "").trim())
+        .filter(Boolean)
+    )
+  );
+}
+
+export async function adminRoutes(app: FastifyInstance, broadcastToUser?: BroadcastToUser) {
   app.get("/v1/admin/overview", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
     const actorId = req.user.sub as string;
 
@@ -133,14 +146,19 @@ export async function adminRoutes(app: FastifyInstance) {
     );
     if (!userRows.length) return rep.code(404).send({ error: "USER_NOT_FOUND" });
 
-    const badges = await q<{ badge: string; created_at: string }>(
+    const badges = await q<{ badge: string; created_at: string | null }>(
       `SELECT badge,created_at FROM user_badges WHERE user_id=:userId ORDER BY created_at DESC`,
       { userId }
     );
 
+    const derivedBadges = [...badges];
+    if (isOfficialAccountName(userRows[0].username) && !derivedBadges.some((badge) => isOfficialBadgeId(badge.badge))) {
+      derivedBadges.unshift({ badge: "OFFICIAL", created_at: null });
+    }
+
     return {
       user: userRows[0],
-      badges
+      badges: derivedBadges
     };
   });
 
@@ -421,6 +439,156 @@ export async function adminRoutes(app: FastifyInstance) {
       ok: true,
       boostActive: entitlement.active,
       boostSource: entitlement.source
+    };
+  });
+
+  app.get("/v1/admin/official-messages/status", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
+    const actorId = req.user.sub as string;
+    try {
+      await requirePlatformStaff(actorId);
+    } catch {
+      return rep.code(403).send({ error: "FORBIDDEN" });
+    }
+
+    const officialAccount = await getOfficialAccount();
+    const totalReachableRows = await q<{ count: number }>(
+      `SELECT COUNT(*) AS count
+       FROM users u
+       LEFT JOIN account_bans ab ON ab.user_id=u.id
+       WHERE ab.user_id IS NULL
+         AND LOWER(u.username)<>LOWER(:username)`,
+      { username: "opencom" }
+    );
+
+    return {
+      officialAccount: officialAccount
+        ? {
+            id: officialAccount.id,
+            username: officialAccount.username,
+            displayName: officialAccount.display_name,
+            email: officialAccount.email || null,
+            pfpUrl: officialAccount.pfp_url || null,
+            badgeDetails: [buildOfficialBadgeDetail()],
+            isNoReply: true
+          }
+        : null,
+      reachableUserCount: Number(totalReachableRows[0]?.count || 0)
+    };
+  });
+
+  app.post("/v1/admin/official-messages/send", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
+    const actorId = req.user.sub as string;
+    try {
+      await requirePlatformStaff(actorId);
+    } catch {
+      return rep.code(403).send({ error: "FORBIDDEN" });
+    }
+
+    const body = parseBody(
+      z.object({
+        recipientMode: z.enum(["all", "selected"]),
+        userIds: z.array(z.string().min(3)).max(5000).optional(),
+        content: z.string().trim().min(1).max(4000)
+      }),
+      req.body
+    );
+
+    const officialAccount = await getOfficialAccount();
+    if (!officialAccount) return rep.code(404).send({ error: "OFFICIAL_ACCOUNT_NOT_FOUND" });
+
+    let recipients: Array<{ id: string; username: string; display_name: string | null; pfp_url: string | null }> = [];
+    let skippedUserIds: string[] = [];
+
+    if (body.recipientMode === "all") {
+      recipients = await q<{ id: string; username: string; display_name: string | null; pfp_url: string | null }>(
+        `SELECT u.id,u.username,u.display_name,u.pfp_url
+         FROM users u
+         LEFT JOIN account_bans ab ON ab.user_id=u.id
+         WHERE ab.user_id IS NULL
+           AND u.id<>:senderId
+         ORDER BY u.created_at DESC`,
+        { senderId: officialAccount.id }
+      );
+    } else {
+      const requestedIds = uniqueTrimmedStrings(body.userIds).filter((userId) => userId !== officialAccount.id);
+      if (!requestedIds.length) return rep.code(400).send({ error: "RECIPIENTS_REQUIRED" });
+      const params: Record<string, string> = { senderId: officialAccount.id };
+      const inList = requestedIds
+        .map((userId, index) => {
+          params[`u${index}`] = userId;
+          return `:u${index}`;
+        })
+        .join(",");
+
+      recipients = await q<{ id: string; username: string; display_name: string | null; pfp_url: string | null }>(
+        `SELECT u.id,u.username,u.display_name,u.pfp_url
+         FROM users u
+         LEFT JOIN account_bans ab ON ab.user_id=u.id
+         WHERE ab.user_id IS NULL
+           AND u.id<>:senderId
+           AND u.id IN (${inList})`,
+        params
+      );
+      const foundIds = new Set(recipients.map((user) => user.id));
+      skippedUserIds = requestedIds.filter((userId) => !foundIds.has(userId));
+    }
+
+    if (!recipients.length) return rep.code(400).send({ error: "NO_ELIGIBLE_RECIPIENTS" });
+
+    const senderBadgeDetails = [buildOfficialBadgeDetail()];
+    const senderName = officialAccount.display_name || officialAccount.username;
+    const summaryRecipients: Array<{ id: string; username: string; displayName: string | null; threadId: string }> = [];
+
+    for (const recipient of recipients) {
+      const threadId = await ensureSocialDmThread(officialAccount.id, recipient.id);
+      const messageId = ulidLike();
+      await q(
+        `INSERT INTO social_dm_messages (id,thread_id,sender_user_id,content)
+         VALUES (:id,:threadId,:senderId,:content)`,
+        {
+          id: messageId,
+          threadId,
+          senderId: officialAccount.id,
+          content: body.content
+        }
+      );
+      await q(`UPDATE social_dm_threads SET last_message_at=NOW() WHERE id=:threadId`, { threadId });
+
+      if (summaryRecipients.length < 50) {
+        summaryRecipients.push({
+          id: recipient.id,
+          username: recipient.username,
+          displayName: recipient.display_name,
+          threadId
+        });
+      }
+
+      if (broadcastToUser) {
+        const createdAt = new Date().toISOString();
+        await broadcastToUser(recipient.id, "SOCIAL_DM_MESSAGE_CREATE", {
+          threadId,
+          message: {
+            id: messageId,
+            authorId: officialAccount.id,
+            author: senderName,
+            pfp_url: officialAccount.pfp_url ?? null,
+            content: body.content,
+            createdAt,
+            attachments: [],
+            badgeDetails: senderBadgeDetails,
+            isOfficial: true,
+            isNoReply: true
+          }
+        });
+      }
+    }
+
+    return {
+      ok: true,
+      recipientMode: body.recipientMode,
+      sentCount: recipients.length,
+      skippedUserIds,
+      recipients: summaryRecipients
     };
   });
 

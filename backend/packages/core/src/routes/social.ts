@@ -4,6 +4,7 @@ import { ulidLike } from "@ods/shared/ids.js";
 import { q } from "../db.js";
 import { parseBody } from "../validation.js";
 import { env } from "../env.js";
+import { buildOfficialBadgeDetail, ensureSocialDmThread, getDmCounterpartyMeta, isOfficialAccountName, isOfficialAccountUserId } from "../officialAccount.js";
 import fs from "node:fs";
 import path from "node:path";
 import { ensureDir, randomId } from "../storage.js";
@@ -27,10 +28,6 @@ const DmCallSignalBody = z.object({
   type: z.enum(["offer", "answer", "ice", "end"]),
   payload: z.any().optional()
 });
-
-function sortPair(a: string, b: string) {
-  return a < b ? [a, b] as const : [b, a] as const;
-}
 
 function toMariaTimestamp(d: Date) {
   return d.toISOString().slice(0, 19).replace("T", " ");
@@ -81,20 +78,7 @@ async function createFriendshipPair(userId: string, friendId: string) {
 }
 
 async function ensureThread(userId: string, friendId: string): Promise<string> {
-  const [userA, userB] = sortPair(userId, friendId);
-  const existing = await q<{ id: string }>(
-    `SELECT id FROM social_dm_threads WHERE user_a=:userA AND user_b=:userB LIMIT 1`,
-    { userA, userB }
-  );
-
-  if (existing.length) return existing[0].id;
-
-  const id = ulidLike();
-  await q(
-    `INSERT INTO social_dm_threads (id,user_a,user_b) VALUES (:id,:userA,:userB)`,
-    { id, userA, userB }
-  );
-  return id;
+  return ensureSocialDmThread(userId, friendId);
 }
 
 export async function socialRoutes(
@@ -165,6 +149,9 @@ export async function socialRoutes(
 
     if (!target.length) return rep.code(404).send({ error: "USER_NOT_FOUND" });
     if (target[0].id === userId) return rep.code(400).send({ error: "CANNOT_FRIEND_SELF" });
+    if (isOfficialAccountName(target[0].username)) {
+      return rep.code(403).send({ error: "OFFICIAL_ACCOUNT_NO_REPLY" });
+    }
 
     const friendId = target[0].id;
 
@@ -374,6 +361,14 @@ export async function socialRoutes(
 
     return {
       dms: rows.map((row) => ({
+        ...(() => {
+          const isOfficial = isOfficialAccountName(row.other_username);
+          return {
+            badgeDetails: isOfficial ? [buildOfficialBadgeDetail()] : [],
+            isOfficial,
+            isNoReply: isOfficial
+          };
+        })(),
         id: row.id,
         participantId: row.other_user_id,
         name: row.other_display_name || row.other_username,
@@ -392,6 +387,9 @@ export async function socialRoutes(
       { threadId, userId }
     );
     if (!thread.length) return rep.code(404).send({ error: "THREAD_NOT_FOUND" });
+
+    const counterparty = await getDmCounterpartyMeta(threadId, userId);
+    if (counterparty?.isNoReply) return rep.code(403).send({ error: "OFFICIAL_ACCOUNT_NO_REPLY" });
 
     let filePart: any = null;
     for await (const part of req.parts()) {
@@ -541,6 +539,14 @@ export async function socialRoutes(
 
     return {
       messages: orderedRows.map((row) => ({
+        ...(() => {
+          const isOfficial = isOfficialAccountName(row.sender_name);
+          return {
+            badgeDetails: isOfficial ? [buildOfficialBadgeDetail()] : [],
+            isOfficial,
+            isNoReply: isOfficial
+          };
+        })(),
         id: row.id,
         authorId: row.sender_user_id,
         author: row.sender_display_name || row.sender_name,
@@ -564,6 +570,9 @@ export async function socialRoutes(
     );
 
     if (!thread.length) return rep.code(404).send({ error: "THREAD_NOT_FOUND" });
+
+    const counterparty = await getDmCounterpartyMeta(threadId, userId);
+    if (counterparty?.isNoReply) return rep.code(403).send({ error: "OFFICIAL_ACCOUNT_NO_REPLY" });
 
     const id = ulidLike();
     const attachmentIds = body.attachmentIds || [];
@@ -642,6 +651,7 @@ export async function socialRoutes(
       );
       const otherUserId = thread[0].user_a === userId ? thread[0].user_b : thread[0].user_a;
       const createdAt = new Date().toISOString();
+      const isOfficial = isOfficialAccountName(sender[0]?.username || "");
       const payload = {
         threadId,
         message: {
@@ -651,7 +661,10 @@ export async function socialRoutes(
           pfp_url: sender[0]?.pfp_url ?? null,
           content: finalContent,
           createdAt,
-          attachments: resolvedAttachments
+          attachments: resolvedAttachments,
+          badgeDetails: isOfficial ? [buildOfficialBadgeDetail()] : [],
+          isOfficial,
+          isNoReply: isOfficial
         }
       };
       await broadcastToUser(userId, "SOCIAL_DM_MESSAGE_CREATE", payload);
@@ -700,6 +713,11 @@ export async function socialRoutes(
       { threadId, userId }
     );
     if (!thread.length) return rep.code(404).send({ error: "THREAD_NOT_FOUND" });
+
+    const counterparty = await getDmCounterpartyMeta(threadId, userId);
+    if (counterparty?.isNoReply || await isOfficialAccountUserId(body.targetUserId)) {
+      return rep.code(403).send({ error: "OFFICIAL_ACCOUNT_NO_REPLY" });
+    }
 
     const otherUserId = thread[0].user_a === userId ? thread[0].user_b : thread[0].user_a;
     if (body.targetUserId !== otherUserId) return rep.code(400).send({ error: "INVALID_TARGET" });

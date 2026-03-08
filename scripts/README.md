@@ -42,6 +42,7 @@ docker compose up -d --build
 ./scripts/ops/tmux-fast-update.sh --no-restart
 ./scripts/ops/configure-ws.sh --domain ws.opencom.online --ip 127.0.0.1
 ./scripts/ops/server-admin.sh search-users --query alice
+node ./scripts/send-opencom-message.mjs --message "Scheduled maintenance starts at 22:00 UTC." --all
 ./scripts/verify-user-email.sh alice
 ./scripts/ops/status-monitor.sh --watch 120
 ./scripts/ops/status-incident.sh add "API outage" "Investigating elevated 5xx." major investigating

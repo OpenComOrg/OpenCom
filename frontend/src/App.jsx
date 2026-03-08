@@ -4279,6 +4279,14 @@ export function App() {
                 if (already(existing.messages || [])) return current;
                 next[idx] = {
                   ...existing,
+                  badgeDetails:
+                    existing.badgeDetails && existing.badgeDetails.length > 0
+                      ? existing.badgeDetails
+                      : incoming.badgeDetails || [],
+                  isOfficial:
+                    existing.isOfficial === true || incoming.isOfficial === true,
+                  isNoReply:
+                    existing.isNoReply === true || incoming.isNoReply === true,
                   messages: [...(existing.messages || []), incoming],
                 };
                 return next;
@@ -4294,6 +4302,9 @@ export function App() {
                     incoming.authorId === me?.id
                       ? "Unknown"
                       : incoming.author || "Unknown",
+                  badgeDetails: incoming.badgeDetails || [],
+                  isOfficial: incoming.isOfficial === true,
+                  isNoReply: incoming.isNoReply === true,
                   messages: [incoming],
                 },
                 ...next,
@@ -6298,6 +6309,11 @@ export function App() {
     const isDmScope = scope === "dm";
     const pending = isDmScope ? pendingDmAttachments : pendingAttachments;
 
+    if (isDmScope && activeDm?.isNoReply) {
+      setStatus("The OpenCom official account is no-reply.");
+      return;
+    }
+
     const availableSlots = Math.max(0, 10 - pending.length);
     if (!availableSlots) {
       setStatus("You can attach up to 10 files per message.");
@@ -6441,6 +6457,10 @@ export function App() {
   async function sendDm() {
     if (!activeDm || (!dmText.trim() && pendingDmAttachments.length === 0))
       return;
+    if (activeDm.isNoReply) {
+      setStatus("The OpenCom official account is no-reply.");
+      return;
+    }
 
     const content = `${dmReplyTarget ? `> replying to ${dmReplyTarget.author}: ${dmReplyTarget.content}\n` : ""}${dmText.trim()}`;
     setDmText("");
@@ -9817,6 +9837,13 @@ export function App() {
         bgColor: "#2d6cdf",
         fgColor: "#ffffff",
       };
+    if (id === "official")
+      return {
+        icon: "✓",
+        name: "OFFICIAL",
+        bgColor: "#1292ff",
+        fgColor: "#ffffff",
+      };
     if (id === "boost")
       return {
         icon: "➕",
@@ -9830,6 +9857,28 @@ export function App() {
       bgColor: badge?.bgColor || "#3a4f72",
       fgColor: badge?.fgColor || "#ffffff",
     };
+  }
+
+  function isOfficialBadge(badge) {
+    const id = String(badge?.id || badge || "")
+      .trim()
+      .toLowerCase();
+    return id === "official";
+  }
+
+  function hasOfficialBadge(badges = []) {
+    return Array.isArray(badges) && badges.some((badge) => isOfficialBadge(badge));
+  }
+
+  function renderOfficialBadge(badges = [], extraClassName = "") {
+    if (!hasOfficialBadge(badges)) return null;
+    const className = ["official-badge", extraClassName].filter(Boolean).join(" ");
+    return (
+      <span className={className} title="Official OpenCom account">
+        <span className="official-badge__tick">✓</span>
+        <span className="official-badge__label">OFFICIAL</span>
+      </span>
+    );
   }
 
   function getFullProfileFontFamily(preset) {
@@ -10860,15 +10909,18 @@ export function App() {
                   size: 28,
                 })}
                 <span className="channel-hash">@</span>
-                <span
-                  style={{
-                    flex: 1,
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                  }}
-                >
-                  {dm.name}
-                </span>
+                <div className="dm-sidebar-meta">
+                  <div className="dm-sidebar-name-row">
+                    <span className="dm-sidebar-name">{dm.name}</span>
+                    {renderOfficialBadge(
+                      dm.badgeDetails,
+                      "official-badge--compact",
+                    )}
+                  </div>
+                  {dm.isNoReply && (
+                    <small className="dm-sidebar-note">No replies</small>
+                  )}
+                </div>
               </button>
             ))}
             {!dms.length && (
@@ -11782,9 +11834,23 @@ export function App() {
         {navMode === "dms" && (
           <section className="chat-main">
             <header className="chat-header dm-header-actions">
-              <h3>{activeDm ? `@ ${activeDm.name}` : "Direct Messages"}</h3>
+              <div className="dm-header-meta">
+                <h3>{activeDm ? `@ ${activeDm.name}` : "Direct Messages"}</h3>
+                {activeDm && (
+                  <div className="dm-header-subline">
+                    {renderOfficialBadge(activeDm.badgeDetails)}
+                    {activeDm.isNoReply && (
+                      <span className="dm-readonly-note">
+                        Official announcements only
+                      </span>
+                    )}
+                  </div>
+                )}
+              </div>
               <div className="chat-actions">
-                {activeDm?.participantId && !activePrivateCall && (
+                {activeDm?.participantId &&
+                  !activePrivateCall &&
+                  !activeDm?.isNoReply && (
                   <button
                     className="icon-btn ghost"
                     title={`Call ${activeDm.name}`}
@@ -11862,29 +11928,35 @@ export function App() {
                         </div>
                         <div className="msg-body">
                           <strong className="msg-author">
-                            <button
-                              className="name-btn"
-                              onClick={(event) =>
-                                openMemberProfile(
-                                  {
+                            <span className="dm-author-row">
+                              <button
+                                className="name-btn"
+                                onClick={(event) =>
+                                  openMemberProfile(
+                                    {
+                                      id: group.authorId,
+                                      username: group.author,
+                                      status: getPresence(group.authorId),
+                                      pfp_url: group.pfpUrl,
+                                    },
+                                    { x: event.clientX, y: event.clientY },
+                                  )
+                                }
+                                onContextMenu={(event) =>
+                                  openMemberContextMenu(event, {
                                     id: group.authorId,
                                     username: group.author,
-                                    status: getPresence(group.authorId),
                                     pfp_url: group.pfpUrl,
-                                  },
-                                  { x: event.clientX, y: event.clientY },
-                                )
-                              }
-                              onContextMenu={(event) =>
-                                openMemberContextMenu(event, {
-                                  id: group.authorId,
-                                  username: group.author,
-                                  pfp_url: group.pfpUrl,
-                                })
-                              }
-                            >
-                              {group.author}
-                            </button>
+                                  })
+                                }
+                              >
+                                {group.author}
+                              </button>
+                              {renderOfficialBadge(
+                                group.messages?.[0]?.badgeDetails,
+                                "official-badge--compact",
+                              )}
+                            </span>
                             <span className="msg-time">
                               {formatMessageTime(group.firstMessageTime)}
                             </span>
@@ -11969,6 +12041,14 @@ export function App() {
                 </button>
               </div>
             )}
+            {activeDm?.isNoReply && (
+              <div className="reply-banner dm-readonly-banner">
+                <span>
+                  `opencom` is a no-reply official account. You can read its
+                  messages, but you cannot reply.
+                </span>
+              </div>
+            )}
             <footer
               className="composer dm-composer"
               onClick={() => dmComposerInputRef.current?.focus()}
@@ -11980,6 +12060,7 @@ export function App() {
                   dmAttachmentInputRef.current?.click();
                 }}
                 title="Attach files"
+                disabled={!activeDm || activeDm?.isNoReply}
               >
                 ＋
               </button>
@@ -12027,7 +12108,11 @@ export function App() {
                   ref={dmComposerInputRef}
                   value={dmText}
                   onChange={(event) => setDmText(event.target.value)}
-                  placeholder={`Message ${activeDm?.name || "friend"}`}
+                  placeholder={
+                    activeDm?.isNoReply
+                      ? "This official account does not accept replies"
+                      : `Message ${activeDm?.name || "friend"}`
+                  }
                   onPaste={(event) => {
                     const files = extractFilesFromClipboardData(
                       event.clipboardData,
@@ -12042,6 +12127,7 @@ export function App() {
                       sendDm();
                     }
                   }}
+                  disabled={!activeDm || activeDm?.isNoReply}
                 />
               </div>
               <button
@@ -12049,6 +12135,7 @@ export function App() {
                 onClick={sendDm}
                 disabled={
                   !activeDm ||
+                  activeDm?.isNoReply ||
                   (!dmText.trim() && pendingDmAttachments.length === 0)
                 }
               >

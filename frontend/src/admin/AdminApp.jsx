@@ -3,7 +3,7 @@ import { resolveStaticPageHref } from "../lib/routing";
 
 const CORE_API = import.meta.env.VITE_CORE_API_URL || "https://api.opencom.online";
 
-const KNOWN_BADGES = ["PLATFORM_ADMIN", "PLATFORM_FOUNDER"];
+const KNOWN_BADGES = ["OFFICIAL", "PLATFORM_ADMIN", "PLATFORM_FOUNDER"];
 
 async function api(path, token, panelPassword, options = {}) {
   const hasBody = options.body !== undefined && options.body !== null;
@@ -52,6 +52,12 @@ export function AdminApp() {
   const [boostLoading, setBoostLoading] = useState(false);
   const [adminStatus, setAdminStatus] = useState(null); // { platformRole, isPlatformAdmin, isPlatformOwner }
   const [unlockInput, setUnlockInput] = useState("");
+  const [officialStatus, setOfficialStatus] = useState(null);
+  const [officialMessage, setOfficialMessage] = useState("");
+  const [officialRecipientMode, setOfficialRecipientMode] = useState("selected");
+  const [officialQueuedUsers, setOfficialQueuedUsers] = useState([]);
+  const [officialSending, setOfficialSending] = useState(false);
+  const [officialReport, setOfficialReport] = useState(null);
 
   function showStatus(message, type = "info") {
     setStatus(message);
@@ -96,6 +102,7 @@ export function AdminApp() {
   useEffect(() => {
     if (!isPanelUnlocked || !token) return;
     loadOverview();
+    loadOfficialStatus();
   }, [isPanelUnlocked, token]);
 
   async function loadAdminStatus() {
@@ -114,6 +121,16 @@ export function AdminApp() {
       showStatus("Overview loaded.", "success");
     } catch (e) {
       showStatus(`Overview failed: ${e.message}`, "error");
+    }
+  }
+
+  async function loadOfficialStatus() {
+    try {
+      const data = await api("/v1/admin/official-messages/status", token, panelPassword);
+      setOfficialStatus(data);
+    } catch (e) {
+      setOfficialStatus(null);
+      showStatus(`Official messaging status failed: ${e.message}`, "error");
     }
   }
 
@@ -343,6 +360,67 @@ export function AdminApp() {
     }
   }
 
+  function queueOfficialRecipient(user) {
+    if (!user?.id) return;
+    setOfficialQueuedUsers((current) => {
+      if (current.some((item) => item.id === user.id)) return current;
+      return [
+        ...current,
+        {
+          id: user.id,
+          username: user.username || "Unknown",
+          email: user.email || null
+        }
+      ];
+    });
+  }
+
+  function removeOfficialRecipient(userId) {
+    setOfficialQueuedUsers((current) => current.filter((item) => item.id !== userId));
+  }
+
+  async function sendOfficialMessage() {
+    const trimmedMessage = officialMessage.trim();
+    if (!trimmedMessage) {
+      showStatus("Write a message first.", "info");
+      return;
+    }
+    if (officialRecipientMode === "selected" && officialQueuedUsers.length === 0) {
+      showStatus("Queue at least one user or switch to Everyone.", "info");
+      return;
+    }
+
+    const confirmed = window.confirm(
+      officialRecipientMode === "all"
+        ? "Send this official message to every eligible user?"
+        : `Send this official message to ${officialQueuedUsers.length} selected user(s)?`
+    );
+    if (!confirmed) return;
+
+    setOfficialSending(true);
+    try {
+      const data = await api("/v1/admin/official-messages/send", token, panelPassword, {
+        method: "POST",
+        body: JSON.stringify({
+          recipientMode: officialRecipientMode,
+          userIds: officialRecipientMode === "selected" ? officialQueuedUsers.map((user) => user.id) : undefined,
+          content: trimmedMessage
+        })
+      });
+      setOfficialReport(data);
+      setOfficialMessage("");
+      if (officialRecipientMode === "selected") {
+        setOfficialQueuedUsers((current) => current.filter((user) => (data.skippedUserIds || []).includes(user.id)));
+      }
+      await loadOfficialStatus();
+      showStatus(`Official message sent to ${data.sentCount || 0} user(s).`, "success");
+    } catch (e) {
+      showStatus(e.message || "Failed to send official message.", "error");
+    } finally {
+      setOfficialSending(false);
+    }
+  }
+
   if (!isPanelUnlocked) {
     return (
       <div className="admin-unlock">
@@ -383,6 +461,7 @@ export function AdminApp() {
   const tabs = [
     { id: "overview", label: "Overview" },
     { id: "users", label: "Users & admins" },
+    { id: "official", label: "Official Messages" },
     { id: "badges", label: "Badges" },
     { id: "boost", label: "Boost Grants" }
   ];
@@ -482,11 +561,27 @@ export function AdminApp() {
                   <tbody>
                     {users.map((u) => (
                       <tr key={u.id}>
-                        <td><strong>{u.username || "—"}</strong></td>
+                        <td>
+                          <strong>{u.username || "—"}</strong>
+                          {String(u.username || "").trim().toLowerCase() === "opencom" && (
+                            <span className="admin-inline-badge">OFFICIAL</span>
+                          )}
+                        </td>
                         <td>{u.email || "—"}</td>
                         <td><code>{u.id}</code></td>
                         <td>{u.isBanned ? <span className="text-dim">Banned</span> : <span className="text-dim">Active</span>}</td>
                         <td>
+                          <button
+                            type="button"
+                            className="btn-sm"
+                            onClick={() => {
+                              queueOfficialRecipient(u);
+                              setTab("official");
+                            }}
+                            disabled={userActionBusyId === u.id || officialQueuedUsers.some((user) => user.id === u.id)}
+                          >
+                            {officialQueuedUsers.some((user) => user.id === u.id) ? "Queued" : "Queue"}
+                          </button>
                           {isOwner && <button type="button" className="btn-sm" onClick={() => setFounder(u.id)} disabled={userActionBusyId === u.id}>Set founder</button>}
                           {isOwner && <button type="button" className="btn-sm" onClick={() => setAdmin(u.id, true)} disabled={userActionBusyId === u.id}>Make admin</button>}
                           {isOwner && <button type="button" className="btn-sm danger" onClick={() => setAdmin(u.id, false)} disabled={userActionBusyId === u.id}>Remove admin</button>}
@@ -509,6 +604,146 @@ export function AdminApp() {
                 </table>
               ) : (
                 <p className="text-dim">Run a search to see users.</p>
+              )}
+            </div>
+          </section>
+        )}
+
+        {tab === "official" && (
+          <section className="admin-section">
+            <h2>Official messages</h2>
+            <p className="admin-hint">Send platform announcements from the `opencom` no-reply account to a selected audience or everyone at once.</p>
+
+            <div className="admin-cards">
+              <div className="admin-card admin-card-accent">
+                <h3>Official sender</h3>
+                {officialStatus?.officialAccount ? (
+                  <div className="admin-official-account">
+                    <p>
+                      <strong>{officialStatus.officialAccount.displayName || officialStatus.officialAccount.username}</strong>
+                      <span className="admin-inline-badge">OFFICIAL</span>
+                    </p>
+                    <code>{officialStatus.officialAccount.id}</code>
+                    <p className="text-dim">No-reply enabled. Replies are blocked in the DM composer.</p>
+                  </div>
+                ) : (
+                  <p className="text-dim">The `opencom` user was not found. Create that account first.</p>
+                )}
+              </div>
+
+              <div className="admin-card">
+                <h3>Reach</h3>
+                <p><strong>{officialStatus?.reachableUserCount ?? 0}</strong> eligible users</p>
+                <p className="text-dim">Banned accounts and the `opencom` account itself are excluded.</p>
+              </div>
+
+              <div className="admin-card">
+                <h3>Queued recipients</h3>
+                <p><strong>{officialQueuedUsers.length}</strong> selected user(s)</p>
+                <p className="text-dim">Use the Users tab to queue specific people, or switch the audience to Everyone.</p>
+              </div>
+            </div>
+
+            <div className="admin-official-grid">
+              <div className="admin-card">
+                <h3>Audience</h3>
+                <div className="admin-boost-mode">
+                  <label>
+                    <input
+                      type="radio"
+                      name="official-recipient-mode"
+                      checked={officialRecipientMode === "selected"}
+                      onChange={() => setOfficialRecipientMode("selected")}
+                    />
+                    <span>Selected users</span>
+                  </label>
+                  <label>
+                    <input
+                      type="radio"
+                      name="official-recipient-mode"
+                      checked={officialRecipientMode === "all"}
+                      onChange={() => setOfficialRecipientMode("all")}
+                    />
+                    <span>Everyone</span>
+                  </label>
+                </div>
+
+                <textarea
+                  className="admin-official-textarea"
+                  placeholder="Write the announcement as the OpenCom official account…"
+                  value={officialMessage}
+                  onChange={(e) => setOfficialMessage(e.target.value)}
+                />
+
+                <div className="admin-badge-actions">
+                  <button
+                    type="button"
+                    onClick={sendOfficialMessage}
+                    disabled={officialSending || !officialStatus?.officialAccount}
+                  >
+                    {officialSending ? "Sending…" : "Send official message"}
+                  </button>
+                  <button type="button" className="btn-sm" onClick={loadOfficialStatus}>
+                    Refresh status
+                  </button>
+                </div>
+              </div>
+
+              <div className="admin-card">
+                <h3>Selected users</h3>
+                {officialQueuedUsers.length === 0 ? (
+                  <p className="text-dim">No users queued yet.</p>
+                ) : (
+                  <div className="admin-official-recipient-list">
+                    {officialQueuedUsers.map((user) => (
+                      <button
+                        key={user.id}
+                        type="button"
+                        className="admin-official-recipient"
+                        onClick={() => removeOfficialRecipient(user.id)}
+                        title="Remove from selected recipients"
+                      >
+                        <strong>{user.username}</strong>
+                        <span>{user.email || user.id}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="admin-card">
+              <h3>Last send result</h3>
+              {!officialReport ? (
+                <p className="text-dim">No official message has been sent in this session.</p>
+              ) : (
+                <div className="admin-official-report">
+                  <p><strong>Mode:</strong> {officialReport.recipientMode}</p>
+                  <p><strong>Sent:</strong> {officialReport.sentCount || 0}</p>
+                  <p><strong>Skipped:</strong> {(officialReport.skippedUserIds || []).length}</p>
+                  {(officialReport.recipients || []).length > 0 && (
+                    <div className="admin-users-table-wrap">
+                      <table className="admin-table">
+                        <thead>
+                          <tr>
+                            <th>User</th>
+                            <th>User ID</th>
+                            <th>Thread ID</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {(officialReport.recipients || []).map((recipient) => (
+                            <tr key={`${recipient.id}-${recipient.threadId}`}>
+                              <td>{recipient.displayName || recipient.username}</td>
+                              <td><code>{recipient.id}</code></td>
+                              <td><code>{recipient.threadId}</code></td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
               )}
             </div>
           </section>

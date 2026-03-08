@@ -104,7 +104,10 @@ export function MemberProfilePopout({
                           borderColor: display.bgColor,
                         }}
                       >
-                        {display.icon}
+                        {String(display.name || "").toUpperCase() ===
+                        "OFFICIAL"
+                          ? `${display.icon} ${display.name}`
+                          : display.icon}
                       </span>
                     );
                   })}

@@ -415,6 +415,15 @@ function AppContent() {
   const [authStatus, setAuthStatus] = useState("");
   const pendingDeepLinkRef = useRef<DeepLinkTarget | null>(null);
 
+  const getApiErrorCode = useCallback((error: unknown) => {
+    const raw = error instanceof Error ? error.message : String(error || "");
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed.error === "string") return parsed.error;
+    } catch {}
+    return raw || "UNKNOWN_ERROR";
+  }, []);
+
   // ── Derived ──────────────────────────────────────────────────────────────────
   const gatewayWsUrl = httpToCoreGatewayWs(coreApiUrl);
 
@@ -502,20 +511,78 @@ function AppContent() {
       password: string,
       mode: "login" | "register",
     ) => {
-      if (mode === "register") {
-        await api.register(email, username, password);
+      try {
+        setAuthStatus(mode === "register" ? "Creating account..." : "Signing in...");
+        if (mode === "register") {
+          await api.register(email, username, password);
+        }
+        const login = await api.login(email, password);
+        await setTokens({
+          accessToken: login.accessToken,
+          refreshToken: login.refreshToken,
+        });
+        setMe({ id: login.user.id, username: login.user.username });
+        setAuthStatus("");
+        await refreshServers();
+        // Load full profile after sign in
+        refreshMyProfile().catch(() => {});
+      } catch (error: unknown) {
+        const code = getApiErrorCode(error);
+        if (code === "EMAIL_NOT_VERIFIED") {
+          setAuthStatus("Check your email and verify your account before logging in.");
+          return;
+        }
+        if (code === "SMTP_NOT_CONFIGURED") {
+          setAuthStatus("SMTP is not configured on the API server.");
+          return;
+        }
+        if (code === "SMTP_AUTH_FAILED") {
+          setAuthStatus("SMTP authentication failed.");
+          return;
+        }
+        if (code === "SMTP_CONNECTION_FAILED") {
+          setAuthStatus("Could not connect to the SMTP server.");
+          return;
+        }
+        if (code === "INVALID_CREDENTIALS") {
+          setAuthStatus("Invalid email or password.");
+          return;
+        }
+        setAuthStatus(code);
       }
-      const login = await api.login(email, password);
-      await setTokens({
-        accessToken: login.accessToken,
-        refreshToken: login.refreshToken,
-      });
-      setMe({ id: login.user.id, username: login.user.username });
-      await refreshServers();
-      // Load full profile after sign in
-      refreshMyProfile().catch(() => {});
     },
-    [api, setTokens, setMe, refreshServers, refreshMyProfile],
+    [api, getApiErrorCode, setTokens, setMe, refreshServers, refreshMyProfile],
+  );
+
+  const handleForgotPassword = useCallback(
+    async (email: string) => {
+      const normalizedEmail = String(email || "").trim();
+      if (!normalizedEmail) {
+        setAuthStatus("Enter your email first.");
+        return;
+      }
+      try {
+        setAuthStatus("Sending reset link...");
+        await api.forgotPassword(normalizedEmail);
+        setAuthStatus("If the account exists, a password reset link has been sent.");
+      } catch (error: unknown) {
+        const code = getApiErrorCode(error);
+        if (code === "SMTP_NOT_CONFIGURED") {
+          setAuthStatus("SMTP is not configured on the API server.");
+          return;
+        }
+        if (code === "SMTP_AUTH_FAILED") {
+          setAuthStatus("SMTP authentication failed.");
+          return;
+        }
+        if (code === "SMTP_CONNECTION_FAILED") {
+          setAuthStatus("Could not connect to the SMTP server.");
+          return;
+        }
+        setAuthStatus(code);
+      }
+    },
+    [api, getApiErrorCode],
   );
 
   // ── Deep link handling ────────────────────────────────────────────────────────
@@ -684,7 +751,7 @@ function AppContent() {
     return (
       <View style={{ flex: 1, backgroundColor: colors.background }}>
         <StatusBar style="light" />
-        <AuthScreen onLogin={handleAuth} status={authStatus} />
+        <AuthScreen onLogin={handleAuth} onForgotPassword={handleForgotPassword} status={authStatus} />
       </View>
     );
   }

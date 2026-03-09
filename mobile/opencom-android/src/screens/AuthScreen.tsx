@@ -6,10 +6,11 @@ type AuthMode = "login" | "register";
 
 type AuthScreenProps = {
   onLogin: (email: string, username: string, password: string, mode: AuthMode) => Promise<void>;
+  onForgotPassword: (email: string) => Promise<void>;
   status: string;
 };
 
-export function AuthScreen({ onLogin, status }: AuthScreenProps) {
+export function AuthScreen({ onLogin, onForgotPassword, status }: AuthScreenProps) {
   const [mode, setMode] = useState<AuthMode>("login");
   const [email, setEmail] = useState("");
   const [username, setUsername] = useState("");
@@ -26,6 +27,16 @@ export function AuthScreen({ onLogin, status }: AuthScreenProps) {
       setWorking(false);
     }
   }, [email, username, password, mode, onLogin]);
+
+  const handleForgotPassword = useCallback(async () => {
+    if (!email.trim() || working) return;
+    setWorking(true);
+    try {
+      await onForgotPassword(email.trim());
+    } finally {
+      setWorking(false);
+    }
+  }, [email, working, onForgotPassword]);
 
   return (
     <KeyboardAvoidingView
@@ -108,6 +119,16 @@ export function AuthScreen({ onLogin, status }: AuthScreenProps) {
             )}
           </Pressable>
 
+          {mode === "login" && (
+            <Pressable
+              style={styles.linkBtn}
+              onPress={handleForgotPassword}
+              disabled={working}
+            >
+              <Text style={styles.linkText}>Forgot password?</Text>
+            </Pressable>
+          )}
+
           {status ? <Text style={styles.status}>{status}</Text> : null}
         </View>
       </ScrollView>
@@ -166,5 +187,14 @@ const styles = StyleSheet.create({
   },
   primaryBtnDisabled: { opacity: 0.7 },
   primaryBtnText: { color: "#fff", fontWeight: "700", fontSize: 16 },
+  linkBtn: {
+    alignSelf: "center",
+    paddingVertical: spacing.md,
+  },
+  linkText: {
+    color: colors.brand,
+    fontWeight: "600",
+    fontSize: 14,
+  },
   status: { color: colors.textDim, fontSize: 13, marginTop: spacing.md, textAlign: "center" }
 });

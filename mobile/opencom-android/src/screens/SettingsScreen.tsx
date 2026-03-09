@@ -522,6 +522,7 @@ function AccountTab({ onLogout }: { onLogout: () => void }) {
   const [newPw, setNewPw] = useState("");
   const [confirmPw, setConfirmPw] = useState("");
   const [changingPw, setChangingPw] = useState(false);
+  const [sendingResetLink, setSendingResetLink] = useState(false);
   const [pwStatus, setPwStatus] = useState("");
 
   const handleChangePassword = useCallback(async () => {
@@ -557,6 +558,30 @@ function AccountTab({ onLogout }: { onLogout: () => void }) {
       { text: "Log Out", style: "destructive", onPress: onLogout },
     ]);
   }, [onLogout]);
+
+  const handleSendResetLink = useCallback(async () => {
+    const email = String(myProfile?.email || "").trim();
+    if (!email) {
+      setPwStatus("Email address unavailable.");
+      return;
+    }
+    setSendingResetLink(true);
+    setPwStatus("");
+    try {
+      await api.forgotPassword(email);
+      setPwStatus("If the account exists, a password reset link has been sent.");
+    } catch (e: unknown) {
+      const raw = e instanceof Error ? e.message : "Failed to send reset link.";
+      try {
+        const parsed = JSON.parse(raw);
+        setPwStatus(typeof parsed?.error === "string" ? parsed.error : raw);
+      } catch {
+        setPwStatus(raw);
+      }
+    } finally {
+      setSendingResetLink(false);
+    }
+  }, [api, myProfile?.email]);
 
   return (
     <ScrollView contentContainerStyle={styles.tabContent}>
@@ -623,6 +648,17 @@ function AccountTab({ onLogout }: { onLogout: () => void }) {
                 <ActivityIndicator size="small" color="#fff" />
               ) : (
                 <Text style={styles.saveBtnText}>Update Password</Text>
+              )}
+            </Pressable>
+            <Pressable
+              style={[styles.saveBtn, sendingResetLink && styles.saveBtnDisabled]}
+              onPress={handleSendResetLink}
+              disabled={sendingResetLink}
+            >
+              {sendingResetLink ? (
+                <ActivityIndicator size="small" color="#fff" />
+              ) : (
+                <Text style={styles.saveBtnText}>Email Reset Link</Text>
               )}
             </Pressable>
           </View>

@@ -41,7 +41,7 @@ function formatExpiry(iso: string | null | undefined): string {
 }
 
 function buildJoinUrl(code: string): string {
-  return `https://opencom.online/invite/${code}`;
+  return `https://opencom.online/join/${code}`;
 }
 
 // ─── Invite card ──────────────────────────────────────────────────────────────

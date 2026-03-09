@@ -47,6 +47,9 @@ export function BillingSettingsSection({
           {boostStatus.currentPeriodEnd
             ? ` · Renews ${new Date(boostStatus.currentPeriodEnd).toLocaleDateString()}`
             : ""}
+          {!boostStatus.currentPeriodEnd && boostStatus.trialActive && boostStatus.trialEndsAt
+            ? ` · Trial ends ${new Date(boostStatus.trialEndsAt).toLocaleDateString()}`
+            : ""}
         </p>
       )}
       {boostStatus && !boostStatus.stripeConfigured && (

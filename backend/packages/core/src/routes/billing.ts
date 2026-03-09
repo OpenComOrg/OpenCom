@@ -5,6 +5,7 @@ import { reconcileBoostBadge } from "../boost.js";
 import { z } from "zod";
 import crypto from "node:crypto";
 import { ulidLike } from "@ods/shared/ids.js";
+import { revokeCustomInvitesForOwnerLossOfBoost } from "../customInvites.js";
 
 const OPENCOM_BOOST_MONTHLY_GBP = 10;
 const OPENCOM_BOOST_GIFT_MONTHLY_PENCE = 1000;
@@ -102,12 +103,16 @@ async function syncBoostBadgeFromStripe(userId: string) {
 
   if (!stripeCustomerId) {
     const reconciled = await reconcileBoostBadge(userId);
+    if (!reconciled.active) await revokeCustomInvitesForOwnerLossOfBoost(userId);
     return {
       active: reconciled.active,
       source: reconciled.source,
       status: "not_configured",
       currentPeriodEnd: null as string | null,
-      manualExpiresAt: reconciled.expiresAt
+      manualExpiresAt: reconciled.manualExpiresAt,
+      trialActive: reconciled.trialActive,
+      trialStartsAt: reconciled.trialStartsAt,
+      trialEndsAt: reconciled.trialEndsAt
     };
   }
 
@@ -142,24 +147,32 @@ async function syncBoostBadgeFromStripe(userId: string) {
     );
 
     const reconciled = await reconcileBoostBadge(userId);
+    if (!reconciled.active) await revokeCustomInvitesForOwnerLossOfBoost(userId);
     return {
       active: reconciled.active,
       source: reconciled.source,
       status: activeSub.status,
       currentPeriodEnd: currentPeriodEndIso,
-      manualExpiresAt: reconciled.expiresAt
+      manualExpiresAt: reconciled.manualExpiresAt,
+      trialActive: reconciled.trialActive,
+      trialStartsAt: reconciled.trialStartsAt,
+      trialEndsAt: reconciled.trialEndsAt
     };
   }
 
   await q(`UPDATE user_subscriptions SET status='canceled', stripe_subscription_id=NULL, current_period_end=NULL WHERE user_id=:userId`, { userId });
 
   const reconciled = await reconcileBoostBadge(userId);
+  if (!reconciled.active) await revokeCustomInvitesForOwnerLossOfBoost(userId);
   return {
     active: reconciled.active,
     source: reconciled.source,
     status: "canceled",
     currentPeriodEnd: null as string | null,
-    manualExpiresAt: reconciled.expiresAt
+    manualExpiresAt: reconciled.manualExpiresAt,
+    trialActive: reconciled.trialActive,
+    trialStartsAt: reconciled.trialStartsAt,
+    trialEndsAt: reconciled.trialEndsAt
   };
 }
 
@@ -169,6 +182,7 @@ export async function billingRoutes(app: FastifyInstance) {
 
     if (!stripeConfigured()) {
       const reconciled = await reconcileBoostBadge(userId);
+      if (!reconciled.active) await revokeCustomInvitesForOwnerLossOfBoost(userId);
       return {
         plan: "opencom_boost",
         priceGbpMonthly: OPENCOM_BOOST_MONTHLY_GBP,
@@ -176,7 +190,10 @@ export async function billingRoutes(app: FastifyInstance) {
         unlimitedServers: true,
         active: reconciled.active,
         source: reconciled.source,
-        manualExpiresAt: reconciled.expiresAt,
+        manualExpiresAt: reconciled.manualExpiresAt,
+        trialActive: reconciled.trialActive,
+        trialStartsAt: reconciled.trialStartsAt,
+        trialEndsAt: reconciled.trialEndsAt,
         stripeConfigured: false
       };
     }
@@ -192,6 +209,9 @@ export async function billingRoutes(app: FastifyInstance) {
       status: sync.status,
       currentPeriodEnd: sync.currentPeriodEnd,
       manualExpiresAt: sync.manualExpiresAt,
+      trialActive: sync.trialActive,
+      trialStartsAt: sync.trialStartsAt,
+      trialEndsAt: sync.trialEndsAt,
       stripeConfigured: true
     };
   });

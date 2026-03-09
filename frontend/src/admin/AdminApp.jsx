@@ -74,6 +74,29 @@ function slugifyBlogTitle(value = "") {
     .slice(0, 96);
 }
 
+function formatDateTimeInputValue(value = "") {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const pad = (part) => String(part).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function parseDateTimeInputValue(value = "") {
+  const trimmed = String(value || "").trim();
+  if (!trimmed) return null;
+  const date = new Date(trimmed);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toISOString();
+}
+
+function formatAdminDateTime(value = "") {
+  if (!value) return "Not set";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString();
+}
+
 async function api(path, token, panelPassword, options = {}) {
   const hasBody = options.body !== undefined && options.body !== null;
   const trimmedPanelPassword = typeof panelPassword === "string" ? panelPassword.trim() : "";
@@ -125,6 +148,11 @@ export function AdminApp() {
   const [boostReason, setBoostReason] = useState("");
   const [boostState, setBoostState] = useState(null);
   const [boostLoading, setBoostLoading] = useState(false);
+  const [boostTrialState, setBoostTrialState] = useState(null);
+  const [boostTrialStartsAt, setBoostTrialStartsAt] = useState("");
+  const [boostTrialEndsAt, setBoostTrialEndsAt] = useState("");
+  const [boostTrialLoading, setBoostTrialLoading] = useState(false);
+  const [boostTrialSaving, setBoostTrialSaving] = useState(false);
   const [adminStatus, setAdminStatus] = useState(null); // { platformRole, isPlatformAdmin, isPlatformOwner }
   const [unlockInput, setUnlockInput] = useState("");
   const [officialStatus, setOfficialStatus] = useState(null);
@@ -228,6 +256,9 @@ export function AdminApp() {
     if (tab === "official" && canSendOfficialMessages) {
       loadOfficialStatus();
     }
+    if (tab === "boost" && canManageBoosts) {
+      loadBoostTrialWindow();
+    }
     if (tab === "staff" && canManageStaff) {
       loadStaffAssignments();
     }
@@ -240,6 +271,7 @@ export function AdminApp() {
     panelPassword,
     isPanelUnlocked,
     canManageStaff,
+    canManageBoosts,
     canSendOfficialMessages,
     canManageBlogs,
   ]);
@@ -652,6 +684,68 @@ export function AdminApp() {
       showStatus(e.message || "Failed to load boost state.", "error");
     } finally {
       setBoostLoading(false);
+    }
+  }
+
+  function applyBoostTrialState(data) {
+    setBoostTrialState(data || null);
+    setBoostTrialStartsAt(formatDateTimeInputValue(data?.startsAt || ""));
+    setBoostTrialEndsAt(formatDateTimeInputValue(data?.endsAt || ""));
+  }
+
+  async function loadBoostTrialWindow() {
+    setBoostTrialLoading(true);
+    try {
+      const data = await api("/v1/admin/boost/trial", token, panelPassword);
+      applyBoostTrialState(data);
+    } catch (e) {
+      setBoostTrialState(null);
+      showStatus(e.message || "Failed to load boost trial window.", "error");
+    } finally {
+      setBoostTrialLoading(false);
+    }
+  }
+
+  async function saveBoostTrialWindow() {
+    const startsAt = parseDateTimeInputValue(boostTrialStartsAt);
+    const endsAt = parseDateTimeInputValue(boostTrialEndsAt);
+    if (Boolean(startsAt) !== Boolean(endsAt)) {
+      showStatus("Set both trial dates or clear both of them.", "info");
+      return;
+    }
+    if (startsAt && endsAt && new Date(endsAt).getTime() <= new Date(startsAt).getTime()) {
+      showStatus("Trial end must be after the start date.", "info");
+      return;
+    }
+
+    setBoostTrialSaving(true);
+    try {
+      const data = await api("/v1/admin/boost/trial", token, panelPassword, {
+        method: "PUT",
+        body: JSON.stringify({ startsAt, endsAt })
+      });
+      applyBoostTrialState(data);
+      showStatus(data.configured ? "Boost trial window saved." : "Boost trial window cleared.", "success");
+    } catch (e) {
+      showStatus(e.message || "Failed to save boost trial window.", "error");
+    } finally {
+      setBoostTrialSaving(false);
+    }
+  }
+
+  async function clearBoostTrialWindow() {
+    setBoostTrialSaving(true);
+    try {
+      const data = await api("/v1/admin/boost/trial", token, panelPassword, {
+        method: "PUT",
+        body: JSON.stringify({ startsAt: null, endsAt: null })
+      });
+      applyBoostTrialState(data);
+      showStatus("Boost trial window cleared.", "success");
+    } catch (e) {
+      showStatus(e.message || "Failed to clear boost trial window.", "error");
+    } finally {
+      setBoostTrialSaving(false);
     }
   }
 
@@ -1296,6 +1390,45 @@ export function AdminApp() {
           <section className="admin-section">
             <h2>Boost grants</h2>
             <p className="admin-hint">Grant permanent or temporary boost without fighting Stripe sync. Manual grants are audited and revocable.</p>
+            <div className="admin-card">
+              <h3>Global Boost trial</h3>
+              <p className="text-dim">Anyone without active OpenCom Boost gets temporary access for this window, including new sign-ups that land inside it.</p>
+              <div className="admin-badge-form">
+                <input
+                  type="datetime-local"
+                  value={boostTrialStartsAt}
+                  onChange={(e) => setBoostTrialStartsAt(e.target.value)}
+                />
+                <input
+                  type="datetime-local"
+                  value={boostTrialEndsAt}
+                  onChange={(e) => setBoostTrialEndsAt(e.target.value)}
+                />
+              </div>
+              <div className="admin-badge-actions">
+                <button type="button" onClick={saveBoostTrialWindow} disabled={boostTrialSaving}>
+                  {boostTrialSaving ? "Saving…" : "Save trial window"}
+                </button>
+                <button type="button" className="danger" onClick={clearBoostTrialWindow} disabled={boostTrialSaving}>
+                  Clear trial window
+                </button>
+                <button type="button" onClick={loadBoostTrialWindow} disabled={boostTrialLoading}>
+                  {boostTrialLoading ? "Refreshing…" : "Refresh"}
+                </button>
+              </div>
+              {boostTrialLoading ? (
+                <p className="text-dim">Loading trial window…</p>
+              ) : boostTrialState ? (
+                <div className="admin-boost-state">
+                  <p><strong>Configured:</strong> {boostTrialState.configured ? "Yes" : "No"}</p>
+                  <p><strong>Live now:</strong> {boostTrialState.active ? "Yes" : "No"}</p>
+                  <p><strong>Starts:</strong> {formatAdminDateTime(boostTrialState.startsAt)}</p>
+                  <p><strong>Ends:</strong> {formatAdminDateTime(boostTrialState.endsAt)}</p>
+                </div>
+              ) : (
+                <p className="text-dim">No trial window loaded.</p>
+              )}
+            </div>
             <div className="admin-boost-grid">
               <div className="admin-card">
                 <h3>Target user</h3>
@@ -1346,6 +1479,13 @@ export function AdminApp() {
                   <div className="admin-boost-state">
                     <p><strong>Status:</strong> {boostState.boostActive ? "Active" : "Inactive"}</p>
                     <p><strong>Source:</strong> {boostState.boostSource || "none"}</p>
+                    {boostState.globalTrialWindow?.configured && (
+                      <>
+                        <p><strong>Global trial live:</strong> {boostState.globalTrialWindow.active ? "Yes" : "No"}</p>
+                        <p><strong>Trial starts:</strong> {formatAdminDateTime(boostState.globalTrialWindow.startsAt)}</p>
+                        <p><strong>Trial ends:</strong> {formatAdminDateTime(boostState.globalTrialWindow.endsAt)}</p>
+                      </>
+                    )}
                     {boostState.activeGrant && (
                       <>
                         <p><strong>Grant type:</strong> {boostState.activeGrant.grant_type}</p>

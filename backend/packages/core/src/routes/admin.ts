@@ -2,7 +2,7 @@ import { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { q } from "../db.js";
 import { parseBody } from "../validation.js";
-import { getActiveManualBoostGrant, reconcileBoostBadge } from "../boost.js";
+import { getActiveManualBoostGrant, getBoostTrialWindow, reconcileBoostBadge } from "../boost.js";
 import { buildOfficialBadgeDetail, ensureSocialDmThread, getOfficialAccount, isOfficialAccountName, isOfficialBadgeId } from "../officialAccount.js";
 import { ulidLike } from "@ods/shared/ids.js";
 import {
@@ -20,6 +20,10 @@ import {
 const PLATFORM_ADMIN_BADGE = "PLATFORM_ADMIN";
 const PLATFORM_FOUNDER_BADGE = "PLATFORM_FOUNDER";
 const BOOST_GRANT_TYPE = z.enum(["permanent", "temporary"]);
+const BOOST_TRIAL_WINDOW_BODY = z.object({
+  startsAt: z.string().datetime().nullable(),
+  endsAt: z.string().datetime().nullable()
+});
 type BroadcastToUser = (targetUserId: string, t: string, d: any) => Promise<void>;
 
 async function setBadge(userId: string, badge: string, enabled: boolean) {
@@ -338,6 +342,7 @@ export async function adminRoutes(app: FastifyInstance, broadcastToUser?: Broadc
     if (!target.length) return rep.code(404).send({ error: "USER_NOT_FOUND" });
 
     const entitlement = await reconcileBoostBadge(userId);
+    const trialWindow = await getBoostTrialWindow();
     const activeGrant = await getActiveManualBoostGrant(userId);
     const recentGrants = await q<any>(
       `SELECT id,grant_type,reason,created_at,expires_at,revoked_at,granted_by,revoked_by
@@ -352,8 +357,73 @@ export async function adminRoutes(app: FastifyInstance, broadcastToUser?: Broadc
       userId,
       boostActive: entitlement.active,
       boostSource: entitlement.source,
+      trialActive: entitlement.trialActive,
+      trialStartsAt: entitlement.trialStartsAt,
+      trialEndsAt: entitlement.trialEndsAt,
+      globalTrialWindow: {
+        startsAt: trialWindow.startsAt,
+        endsAt: trialWindow.endsAt,
+        active: trialWindow.active,
+        configured: Boolean(trialWindow.startsAt && trialWindow.endsAt)
+      },
       activeGrant,
       recentGrants
+    };
+  });
+
+  app.get("/v1/admin/boost/trial", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
+    try {
+      await requirePanelPermission(req, "manage_boosts");
+    } catch {
+      return rep.code(403).send({ error: "FORBIDDEN" });
+    }
+
+    const trialWindow = await getBoostTrialWindow();
+    return {
+      startsAt: trialWindow.startsAt,
+      endsAt: trialWindow.endsAt,
+      active: trialWindow.active,
+      configured: Boolean(trialWindow.startsAt && trialWindow.endsAt)
+    };
+  });
+
+  app.put("/v1/admin/boost/trial", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
+    try {
+      await requirePanelPermission(req, "manage_boosts");
+    } catch {
+      return rep.code(403).send({ error: "FORBIDDEN" });
+    }
+
+    const body = parseBody(BOOST_TRIAL_WINDOW_BODY, req.body);
+    if (Boolean(body.startsAt) !== Boolean(body.endsAt)) {
+      return rep.code(400).send({ error: "TRIAL_REQUIRES_BOTH_DATES" });
+    }
+
+    const startsAtDate = body.startsAt ? new Date(body.startsAt) : null;
+    const endsAtDate = body.endsAt ? new Date(body.endsAt) : null;
+    if (startsAtDate && endsAtDate && endsAtDate.getTime() <= startsAtDate.getTime()) {
+      return rep.code(400).send({ error: "TRIAL_END_MUST_BE_AFTER_START" });
+    }
+
+    await q(`INSERT INTO platform_config (id, founder_user_id) VALUES (1, NULL) ON DUPLICATE KEY UPDATE id=id`);
+    await q(
+      `UPDATE platform_config
+       SET boost_trial_starts_at=:startsAt,
+           boost_trial_ends_at=:endsAt
+       WHERE id=1`,
+      {
+        startsAt: startsAtDate ? toMySqlDateTime(startsAtDate) : null,
+        endsAt: endsAtDate ? toMySqlDateTime(endsAtDate) : null
+      }
+    );
+
+    const trialWindow = await getBoostTrialWindow();
+    return {
+      ok: true,
+      startsAt: trialWindow.startsAt,
+      endsAt: trialWindow.endsAt,
+      active: trialWindow.active,
+      configured: Boolean(trialWindow.startsAt && trialWindow.endsAt)
     };
   });
 

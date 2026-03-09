@@ -4,6 +4,7 @@ import { ulidLike } from "@ods/shared/ids.js";
 import { q } from "../db.js";
 import { parseBody } from "../validation.js";
 import { env } from "../env.js";
+import { reconcileBoostBadge } from "../boost.js";
 import { buildOfficialBadgeDetail, ensureSocialDmThread, getDmCounterpartyMeta, isOfficialAccountName, isOfficialAccountUserId } from "../officialAccount.js";
 import fs from "node:fs";
 import path from "node:path";
@@ -402,12 +403,9 @@ export async function socialRoutes(
     }
     if (!filePart) return rep.code(400).send({ error: "FILE_REQUIRED" });
 
-    const hasBoost = !!(await q<{ user_id: string }>(
-      `SELECT user_id FROM user_badges WHERE user_id=:userId AND badge='boost' LIMIT 1`,
-      { userId }
-    )).length;
-    const tier = hasBoost ? "boost" : "default";
-    const maxUploadBytes = hasBoost ? env.ATTACHMENT_BOOST_MAX_BYTES : env.ATTACHMENT_MAX_BYTES;
+    const entitlement = await reconcileBoostBadge(userId);
+    const tier = entitlement.active ? "boost" : "default";
+    const maxUploadBytes = entitlement.active ? env.ATTACHMENT_BOOST_MAX_BYTES : env.ATTACHMENT_MAX_BYTES;
 
     const attachmentId = ulidLike();
     const originalName = safeAttachmentFileName(filePart.filename);

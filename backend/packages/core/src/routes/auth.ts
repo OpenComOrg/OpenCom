@@ -7,10 +7,11 @@ import crypto from "node:crypto";
 import { parseBody } from "../validation.js";
 import { env } from "../env.js";
 import { sendVerificationEmail } from "../mail.js";
+import { isReservedUsername, isUsernameTaken, normalizeUsername } from "../usernames.js";
 
 const Register = z.object({
-  email: z.string().email(),
-  username: z.string().min(2).max(32),
+  email: z.string().trim().email(),
+  username: z.string().trim().min(2).max(32),
   password: z.string().min(8).max(200)
 });
 
@@ -97,17 +98,27 @@ export async function authRoutes(app: FastifyInstance) {
 
   app.post("/v1/auth/register", async (req, rep) => {
     const body = parseBody(Register, req.body);
+    const username = normalizeUsername(body.username);
 
     const existing = await q(`SELECT id FROM users WHERE email=:email`, { email: body.email });
     if (existing.length) return rep.code(409).send({ error: "EMAIL_TAKEN" });
+    if (isReservedUsername(username)) return rep.code(409).send({ error: "USERNAME_RESERVED" });
+    if (await isUsernameTaken(username)) return rep.code(409).send({ error: "USERNAME_TAKEN" });
 
     const id = ulidLike();
     const pwHash = await hashPassword(body.password);
 
-    await q(
-      `INSERT INTO users (id,email,username,password_hash) VALUES (:id,:email,:username,:passwordHash)`,
-      { id, email: body.email, username: body.username, passwordHash: pwHash }
-    );
+    try {
+      await q(
+        `INSERT INTO users (id,email,username,password_hash) VALUES (:id,:email,:username,:passwordHash)`,
+        { id, email: body.email, username, passwordHash: pwHash }
+      );
+    } catch (error: any) {
+      const message = String(error?.message || "").toLowerCase();
+      if (message.includes("username")) return rep.code(409).send({ error: "USERNAME_TAKEN" });
+      if (message.includes("email")) return rep.code(409).send({ error: "EMAIL_TAKEN" });
+      throw error;
+    }
 
     if (env.AUTH_REQUIRE_EMAIL_VERIFICATION) {
       try {
@@ -131,7 +142,7 @@ export async function authRoutes(app: FastifyInstance) {
     return rep.send({
       id,
       email: body.email,
-      username: body.username,
+      username,
       emailVerificationRequired: env.AUTH_REQUIRE_EMAIL_VERIFICATION
     });
   });

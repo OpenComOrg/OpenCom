@@ -13,6 +13,7 @@ import {
   ensurePeer,
   createWebRtcTransport,
   connectTransport,
+  restartIce,
   produce,
   consume,
   listProducers,
@@ -306,8 +307,12 @@ export function attachNodeGateway(app: FastifyInstance) {
       if (msg.op === "DISPATCH" && msg.t === "VOICE_JOIN") {
         const guildId = (msg.d as any)?.guildId;
         const channelId = (msg.d as any)?.channelId;
+        const requestId =
+          typeof (msg.d as any)?.requestId === "string"
+            ? (msg.d as any).requestId
+            : undefined;
         if (typeof guildId !== "string" || typeof channelId !== "string") {
-          sendVoiceError(conn, "BAD_VOICE_JOIN", new Error("Missing guildId/channelId"));
+          sendVoiceError(conn, "BAD_VOICE_JOIN", new Error("Missing guildId/channelId"), { requestId });
           return;
         }
 
@@ -330,9 +335,13 @@ export function attachNodeGateway(app: FastifyInstance) {
             return;
           }
 
-          if (conn.voice && (conn.voice.guildId !== guildId || conn.voice.channelId !== channelId)) {
+          if (conn.voice) {
+            const isSameChannel =
+              conn.voice.guildId === guildId && conn.voice.channelId === channelId;
             cleanupVoicePeerAndNotify(conn);
-            await leaveVoice(conn);
+            if (!isSameChannel) {
+              await leaveVoice(conn);
+            }
           }
 
           await ensurePeer(guildId, channelId, conn.userId);
@@ -349,10 +358,10 @@ export function attachNodeGateway(app: FastifyInstance) {
           const rtpCapabilities = await getRouterRtpCapabilities(guildId, channelId);
           const producers = listProducers(guildId, channelId).filter((p) => p.userId !== conn?.userId);
 
-          sendDispatch(conn, "VOICE_JOINED", { guildId, channelId, rtpCapabilities, producers });
+          sendDispatch(conn, "VOICE_JOINED", { guildId, channelId, rtpCapabilities, producers, requestId });
           await emitVoiceState(guildId, conn.userId);
         } catch (error) {
-          sendVoiceError(conn, "VOICE_JOIN_FAILED", error, { guildId, channelId });
+          sendVoiceError(conn, "VOICE_JOIN_FAILED", error, { guildId, channelId, requestId });
         }
         return;
       }
@@ -442,23 +451,27 @@ export function attachNodeGateway(app: FastifyInstance) {
           const guildId = (msg.d as any)?.guildId ?? conn.voice?.guildId;
           const channelId = (msg.d as any)?.channelId ?? conn.voice?.channelId;
           const direction = (msg.d as any)?.direction;
+          const requestId =
+            typeof (msg.d as any)?.requestId === "string"
+              ? (msg.d as any).requestId
+              : undefined;
           if (typeof guildId !== "string" || typeof channelId !== "string") {
-            sendVoiceError(conn, "BAD_VOICE_CONTEXT", new Error("Missing guildId/channelId"));
+            sendVoiceError(conn, "BAD_VOICE_CONTEXT", new Error("Missing guildId/channelId"), { requestId });
             return;
           }
 
           if (direction !== "send" && direction !== "recv") {
-            sendVoiceError(conn, "BAD_TRANSPORT_DIRECTION", new Error("direction must be send or recv"));
+            sendVoiceError(conn, "BAD_TRANSPORT_DIRECTION", new Error("direction must be send or recv"), { requestId });
             return;
           }
 
           if (!conn.voice || conn.voice.guildId !== guildId || conn.voice.channelId !== channelId) {
-            sendVoiceError(conn, "NOT_IN_VOICE_CHANNEL", new Error("Transport creation requested outside joined voice"));
+            sendVoiceError(conn, "NOT_IN_VOICE_CHANNEL", new Error("Transport creation requested outside joined voice"), { requestId });
             return;
           }
 
-          const transport = await createWebRtcTransport(guildId, channelId, conn.userId);
-          sendDispatch(conn, "VOICE_TRANSPORT_CREATED", { guildId, channelId, direction, transport });
+          const transport = await createWebRtcTransport(guildId, channelId, conn.userId, direction);
+          sendDispatch(conn, "VOICE_TRANSPORT_CREATED", { guildId, channelId, direction, transport, requestId });
         } catch (error) {
           sendVoiceError(conn, "VOICE_TRANSPORT_CREATE_FAILED", error);
         }
@@ -467,31 +480,71 @@ export function attachNodeGateway(app: FastifyInstance) {
 
       if (msg.op === "DISPATCH" && msg.t === "VOICE_CONNECT_TRANSPORT") {
         try {
+          const requestId =
+            typeof (msg.d as any)?.requestId === "string"
+              ? (msg.d as any).requestId
+              : undefined;
           if (!conn.voice) {
-            sendVoiceError(conn, "NOT_IN_VOICE_CHANNEL", new Error("No active voice session"));
+            sendVoiceError(conn, "NOT_IN_VOICE_CHANNEL", new Error("No active voice session"), { requestId });
             return;
           }
 
           const transportId = (msg.d as any)?.transportId;
           const dtlsParameters = (msg.d as any)?.dtlsParameters;
           if (typeof transportId !== "string" || !dtlsParameters) {
-            sendVoiceError(conn, "BAD_TRANSPORT_CONNECT", new Error("Missing transportId/dtlsParameters"));
+            sendVoiceError(conn, "BAD_TRANSPORT_CONNECT", new Error("Missing transportId/dtlsParameters"), { requestId });
             return;
           }
 
           const { guildId, channelId } = conn.voice;
           await connectTransport(guildId, channelId, conn.userId, transportId, dtlsParameters);
-          sendDispatch(conn, "VOICE_TRANSPORT_CONNECTED", { transportId, guildId, channelId });
+          sendDispatch(conn, "VOICE_TRANSPORT_CONNECTED", { transportId, guildId, channelId, requestId });
         } catch (error) {
           sendVoiceError(conn, "VOICE_TRANSPORT_CONNECT_FAILED", error);
         }
         return;
       }
 
+      if (msg.op === "DISPATCH" && msg.t === "VOICE_RESTART_ICE") {
+        try {
+          const requestId =
+            typeof (msg.d as any)?.requestId === "string"
+              ? (msg.d as any).requestId
+              : undefined;
+          if (!conn.voice) {
+            sendVoiceError(conn, "NOT_IN_VOICE_CHANNEL", new Error("No active voice session"), { requestId });
+            return;
+          }
+
+          const transportId = (msg.d as any)?.transportId;
+          if (typeof transportId !== "string" || !transportId) {
+            sendVoiceError(conn, "BAD_RESTART_ICE", new Error("Missing transportId"), { requestId });
+            return;
+          }
+
+          const { guildId, channelId } = conn.voice;
+          const result = await restartIce(guildId, channelId, conn.userId, transportId);
+          sendDispatch(conn, "VOICE_ICE_RESTARTED", {
+            guildId,
+            channelId,
+            transportId: result.transportId,
+            iceParameters: result.iceParameters,
+            requestId,
+          });
+        } catch (error) {
+          sendVoiceError(conn, "VOICE_RESTART_ICE_FAILED", error);
+        }
+        return;
+      }
+
       if (msg.op === "DISPATCH" && msg.t === "VOICE_PRODUCE") {
         try {
+          const requestId =
+            typeof (msg.d as any)?.requestId === "string"
+              ? (msg.d as any).requestId
+              : undefined;
           if (!conn.voice) {
-            sendVoiceError(conn, "NOT_IN_VOICE_CHANNEL", new Error("No active voice session"));
+            sendVoiceError(conn, "NOT_IN_VOICE_CHANNEL", new Error("No active voice session"), { requestId });
             return;
           }
 
@@ -500,7 +553,7 @@ export function attachNodeGateway(app: FastifyInstance) {
 
           const perms = await resolveChannelPermissions({ guildId, channelId, userId: conn.userId, roles: conn.roles });
           if (!has(perms, Perm.SPEAK)) {
-            sendVoiceError(conn, "MISSING_SPEAK_PERMS", new Error("SPEAK permission required"));
+            sendVoiceError(conn, "MISSING_SPEAK_PERMS", new Error("SPEAK permission required"), { requestId });
             return;
           }
 
@@ -509,12 +562,12 @@ export function attachNodeGateway(app: FastifyInstance) {
           const rtpParameters = (msg.d as any)?.rtpParameters;
 
           if (typeof transportId !== "string" || (kind !== "audio" && kind !== "video") || !rtpParameters) {
-            sendVoiceError(conn, "BAD_VOICE_PRODUCE", new Error("Missing transportId/kind/rtpParameters"));
+            sendVoiceError(conn, "BAD_VOICE_PRODUCE", new Error("Missing transportId/kind/rtpParameters"), { requestId });
             return;
           }
 
           const result = await produce(guildId, channelId, conn.userId, transportId, kind, rtpParameters);
-          sendDispatch(conn, "VOICE_PRODUCED", { ...result, userId: conn.userId, guildId, channelId });
+          sendDispatch(conn, "VOICE_PRODUCED", { ...result, userId: conn.userId, guildId, channelId, requestId });
           broadcastVoiceChannel(guildId, channelId, "VOICE_NEW_PRODUCER", {
             guildId,
             channelId,
@@ -529,8 +582,12 @@ export function attachNodeGateway(app: FastifyInstance) {
 
       if (msg.op === "DISPATCH" && msg.t === "VOICE_CONSUME") {
         try {
+          const requestId =
+            typeof (msg.d as any)?.requestId === "string"
+              ? (msg.d as any).requestId
+              : undefined;
           if (!conn.voice) {
-            sendVoiceError(conn, "NOT_IN_VOICE_CHANNEL", new Error("No active voice session"));
+            sendVoiceError(conn, "NOT_IN_VOICE_CHANNEL", new Error("No active voice session"), { requestId });
             return;
           }
 
@@ -539,7 +596,7 @@ export function attachNodeGateway(app: FastifyInstance) {
           const rtpCapabilities = (msg.d as any)?.rtpCapabilities;
 
           if (typeof transportId !== "string" || typeof producerId !== "string" || !rtpCapabilities) {
-            sendVoiceError(conn, "BAD_VOICE_CONSUME", new Error("Missing transportId/producerId/rtpCapabilities"));
+            sendVoiceError(conn, "BAD_VOICE_CONSUME", new Error("Missing transportId/producerId/rtpCapabilities"), { requestId });
             return;
           }
 
@@ -552,7 +609,7 @@ export function attachNodeGateway(app: FastifyInstance) {
             rtpCapabilities
           );
 
-          sendDispatch(conn, "VOICE_CONSUMED", { ...data, guildId: conn.voice.guildId, channelId: conn.voice.channelId });
+          sendDispatch(conn, "VOICE_CONSUMED", { ...data, guildId: conn.voice.guildId, channelId: conn.voice.channelId, requestId });
         } catch (error) {
           sendVoiceError(conn, "VOICE_CONSUME_FAILED", error);
         }

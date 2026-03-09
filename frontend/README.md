@@ -36,7 +36,14 @@ Create `.env` in `frontend/` (optional):
 ```bash
 VITE_CORE_API_URL=https://openapi.donskyblock.xyz
 VITE_FRONTEND_URL=https://opencom.donskyblock.xyz
+# Optional: STUN/TURN for browser ICE candidate gathering.
+# If omitted, the client falls back to a public STUN configuration.
+VITE_VOICE_ICE_SERVERS=[{"urls":["stun:stun.l.google.com:19302"]},{"urls":["turns:turn.example.com:443?transport=tcp"],"username":"opencom","credential":"replace-me"}]
+# Optional: set to relay to force TURN-only candidates.
+VITE_VOICE_ICE_TRANSPORT_POLICY=all
 ```
+
+For OpenCom voice, STUN/TURN helps the browser gather better ICE candidates, but the mediasoup node still needs a reachable announced address and its RTC port range reachable from the public internet. If `MEDIASOUP_ANNOUNCED_IP` is left blank, the node now tries to infer it from `PUBLIC_BASE_URL`.
 
 ## Run locally
 ```bash

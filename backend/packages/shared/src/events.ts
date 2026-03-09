@@ -82,14 +82,15 @@ export type InviteCreated = { code: string; serverId: string; createdAt: string 
 // These are intentionally generic so you can use mediasoup on the node.
 export type VoiceState = { guildId: string; channelId: string; userId: string; muted: boolean; deafened: boolean };
 
-export type VoiceJoin = { guildId: string; channelId: string };
+export type VoiceJoin = { guildId: string; channelId: string; requestId?: string };
 export type VoiceLeave = { guildId: string; channelId: string };
 
 export type VoiceRouterRtpCapabilities = { guildId: string; channelId: string; rtpCapabilities: any };
-export type VoiceCreateTransport = { guildId: string; channelId: string; direction: "send" | "recv" };
-export type VoiceConnectTransport = { transportId: string; dtlsParameters: any };
-export type VoiceProduce = { transportId: string; kind: "audio" | "video"; rtpParameters: any; appData?: any };
-export type VoiceConsume = { transportId: string; producerId: string; rtpCapabilities: any };
+export type VoiceCreateTransport = { guildId: string; channelId: string; direction: "send" | "recv"; requestId?: string };
+export type VoiceConnectTransport = { transportId: string; dtlsParameters: any; requestId?: string };
+export type VoiceRestartIce = { transportId: string; requestId?: string };
+export type VoiceProduce = { transportId: string; kind: "audio" | "video"; rtpParameters: any; appData?: any; requestId?: string };
+export type VoiceConsume = { transportId: string; producerId: string; rtpCapabilities: any; requestId?: string };
 export type VoiceCloseProducer = { producerId: string };
 
 // DM Call Signals

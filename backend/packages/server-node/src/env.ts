@@ -51,3 +51,26 @@ export const env = Env.parse(process.env);
 if (env.MEDIASOUP_RTC_MIN_PORT > env.MEDIASOUP_RTC_MAX_PORT) {
   throw new Error(`INVALID_MEDIASOUP_PORT_RANGE:${env.MEDIASOUP_RTC_MIN_PORT}>${env.MEDIASOUP_RTC_MAX_PORT}`);
 }
+
+function isLoopbackHostname(hostname: string) {
+  const normalized = String(hostname || "").trim().toLowerCase();
+  if (!normalized) return false;
+  return normalized === "localhost"
+    || normalized === "0.0.0.0"
+    || normalized === "::1"
+    || normalized === "0:0:0:0:0:0:0:1"
+    || normalized.startsWith("127.");
+}
+
+function inferMediasoupAnnouncedIp() {
+  if (env.MEDIASOUP_ANNOUNCED_IP) return env.MEDIASOUP_ANNOUNCED_IP;
+  try {
+    const parsed = new URL(env.PUBLIC_BASE_URL);
+    if (isLoopbackHostname(parsed.hostname)) return undefined;
+    return parsed.hostname || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export const resolvedMediasoupAnnouncedIp = inferMediasoupAnnouncedIp();

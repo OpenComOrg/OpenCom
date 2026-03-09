@@ -1,5 +1,5 @@
 import mediasoup from "mediasoup";
-import { env } from "../env.js";
+import { env, resolvedMediasoupAnnouncedIp } from "../env.js";
 
 type RoomKey = string; // `${guildId}:${channelId}`
 
@@ -41,6 +41,10 @@ export function getMediasoupDiagnostics() {
     transports: transportCount,
     producers: producerCount,
     consumers: consumerCount,
+    listenIp: env.MEDIASOUP_LISTEN_IP,
+    announcedIp: resolvedMediasoupAnnouncedIp || null,
+    rtcMinPort: env.MEDIASOUP_RTC_MIN_PORT,
+    rtcMaxPort: env.MEDIASOUP_RTC_MAX_PORT,
   };
 }
 
@@ -116,7 +120,12 @@ export async function createWebRtcTransport(
   const peer = await ensurePeer(guildId, channelId, userId);
 
   const transport = await room.router.createWebRtcTransport({
-    listenIps: [{ ip: env.MEDIASOUP_LISTEN_IP, announcedIp: env.MEDIASOUP_ANNOUNCED_IP }],
+    listenIps: [
+      {
+        ip: env.MEDIASOUP_LISTEN_IP,
+        announcedIp: resolvedMediasoupAnnouncedIp,
+      },
+    ],
     enableUdp: true,
     enableTcp: true,
     preferUdp: true,
@@ -147,6 +156,19 @@ export async function connectTransport(guildId: string, channelId: string, userI
   const transport = peer.transports.get(transportId);
   if (!transport) throw new Error("TRANSPORT_NOT_FOUND");
   await transport.connect({ dtlsParameters });
+}
+
+export async function restartIce(
+  guildId: string,
+  channelId: string,
+  userId: string,
+  transportId: string,
+) {
+  const peer = await ensurePeer(guildId, channelId, userId);
+  const transport = peer.transports.get(transportId);
+  if (!transport) throw new Error("TRANSPORT_NOT_FOUND");
+  const iceParameters = await transport.restartIce();
+  return { transportId, iceParameters };
 }
 
 export async function produce(guildId: string, channelId: string, userId: string, transportId: string, kind: "audio" | "video", rtpParameters: any) {

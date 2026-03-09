@@ -5470,12 +5470,16 @@ export function App() {
   }, [dmNotification]);
 
   useEffect(() => {
+    const currentVoiceUsesPrivateGateway = !!activePrivateCall?.callId;
     const canSendVoiceSpeaking =
       isInVoiceChannel &&
       isVoiceSessionSynced &&
       !!voiceConnectedGuildId &&
-      !!nodeGatewayReadyRef.current &&
-      nodeGatewayWsRef.current?.readyState === WebSocket.OPEN;
+      (currentVoiceUsesPrivateGateway
+        ? !!privateCallGatewayReadyRef.current &&
+          privateCallGatewayWsRef.current?.readyState === WebSocket.OPEN
+        : !!nodeGatewayReadyRef.current &&
+          nodeGatewayWsRef.current?.readyState === WebSocket.OPEN);
 
     if (
       !isInVoiceChannel ||
@@ -5578,8 +5582,11 @@ export function App() {
           if (
             isInVoiceChannel &&
             voiceConnectedGuildId &&
-            nodeGatewayReadyRef.current &&
-            nodeGatewayWsRef.current?.readyState === WebSocket.OPEN
+            (currentVoiceUsesPrivateGateway
+              ? privateCallGatewayReadyRef.current &&
+                privateCallGatewayWsRef.current?.readyState === WebSocket.OPEN
+              : nodeGatewayReadyRef.current &&
+                nodeGatewayWsRef.current?.readyState === WebSocket.OPEN)
           ) {
             void sendNodeVoiceDispatch("VOICE_SPEAKING", {
               guildId: voiceConnectedGuildId,
@@ -5622,6 +5629,7 @@ export function App() {
     audioInputDeviceId,
     noiseSuppressionEnabled,
     me?.id,
+    activePrivateCall?.callId,
   ]);
 
   useEffect(() => {
@@ -5820,6 +5828,7 @@ export function App() {
   useEffect(() => {
     if (!voiceConnectedGuildId || !voiceConnectedChannelId) return;
     if (isDisconnectingVoice) return;
+    if (activePrivateCall?.callId) return;
     const server = voiceConnectedServer || activeServer;
     if (!server?.baseUrl || !server?.membershipToken) return;
 
@@ -5944,6 +5953,7 @@ export function App() {
     voiceConnectedChannelId,
     voiceConnectedServer,
     activeServer,
+    activePrivateCall?.callId,
     isDisconnectingVoice,
     audioInputDeviceId,
     micGain,

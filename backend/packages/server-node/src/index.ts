@@ -3,7 +3,7 @@ import { attachNodeGateway } from "./gateway.js";
 import { guildRoutes } from "./routes/guilds.js";
 import { channelRoutes } from "./routes/channels.js";
 import { messageRoutes } from "./routes/messages.js";
-import { env } from "./env.js";
+import { env, resolvedMediasoupAnnouncedIp } from "./env.js";
 import { initMediasoup } from "./voice/mediasoup.js";
 import { attachmentRoutes } from "./routes/attachments.js";
 import { startAttachmentCleanupLoop } from "./jobs/attachmentCleanup.js";
@@ -29,14 +29,33 @@ logger.info("Starting node server", {
   logLevel: env.LOG_LEVEL,
   debugHttp: env.DEBUG_HTTP,
   debugVoice: env.DEBUG_VOICE,
-  mediasoupAnnouncedIp: env.MEDIASOUP_ANNOUNCED_IP || "(unset)",
+  mediasoupAnnouncedIp: resolvedMediasoupAnnouncedIp || "(unset)",
   rtcMinPort: env.MEDIASOUP_RTC_MIN_PORT,
   rtcMaxPort: env.MEDIASOUP_RTC_MAX_PORT
 });
 
-if (!env.MEDIASOUP_ANNOUNCED_IP) {
-  logger.warn("MEDIASOUP_ANNOUNCED_IP is unset. External clients may fail unless server is directly reachable.");
+if (!resolvedMediasoupAnnouncedIp) {
+  logger.warn(
+    "MEDIASOUP_ANNOUNCED_IP is unset. External voice clients may fail unless the node is directly reachable. Set MEDIASOUP_ANNOUNCED_IP to the public IP and open the RTC port range over UDP/TCP.",
+    {
+      listenIp: env.MEDIASOUP_LISTEN_IP,
+      rtcMinPort: env.MEDIASOUP_RTC_MIN_PORT,
+      rtcMaxPort: env.MEDIASOUP_RTC_MAX_PORT,
+    },
+  );
+} else if (!env.MEDIASOUP_ANNOUNCED_IP) {
+  logger.info("Using inferred mediasoup announced address from PUBLIC_BASE_URL", {
+    announcedIp: resolvedMediasoupAnnouncedIp,
+    publicBaseUrl: env.PUBLIC_BASE_URL,
+  });
 }
+
+logger.info("Voice RTC networking", {
+  listenIp: env.MEDIASOUP_LISTEN_IP,
+  announcedIp: resolvedMediasoupAnnouncedIp || "(unset)",
+  protocols: ["udp", "tcp"],
+  rtcPortRange: `${env.MEDIASOUP_RTC_MIN_PORT}-${env.MEDIASOUP_RTC_MAX_PORT}`,
+});
 
 await initMediasoup();
 const app = buildHttp();

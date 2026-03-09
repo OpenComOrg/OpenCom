@@ -2,6 +2,17 @@ import * as mediasoupClient from "mediasoup-client";
 
 const DEFAULT_TIMEOUT_MS = 10000;
 const DEFAULT_MIC_GAIN_PERCENT = 100;
+const DEFAULT_VOICE_ICE_SERVERS = Object.freeze([
+  Object.freeze({
+    urls: Object.freeze([
+      "stun:stun.l.google.com:19302",
+      "stun:stun1.l.google.com:19302",
+    ]),
+  }),
+]);
+const VOICE_ICE_SERVERS_STORAGE_KEY = "opencom_voice_ice_servers";
+const VOICE_ICE_TRANSPORT_POLICY_STORAGE_KEY =
+  "opencom_voice_ice_transport_policy";
 export const VOICE_NOISE_SUPPRESSION_DEFAULT_PRESET = "strict";
 export const VOICE_NOISE_SUPPRESSION_PRESETS = Object.freeze({
   strict: Object.freeze({
@@ -44,6 +55,118 @@ export const VOICE_NOISE_SUPPRESSION_PRESETS = Object.freeze({
     compressorRelease: 0.16,
   }),
 });
+
+function createVoiceRequestId(prefix = "voice") {
+  const randomPart =
+    typeof globalThis.crypto?.randomUUID === "function"
+      ? globalThis.crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  return `${prefix}-${randomPart}`;
+}
+
+function cloneIceServers(iceServers = []) {
+  return iceServers.map((server) => {
+    const cloned = {
+      urls: Array.isArray(server.urls) ? [...server.urls] : server.urls,
+    };
+    if (typeof server.username === "string" && server.username.trim()) {
+      cloned.username = server.username.trim();
+    }
+    if (server.credential !== undefined && server.credential !== null) {
+      cloned.credential = server.credential;
+    }
+    if (
+      typeof server.credentialType === "string" &&
+      server.credentialType.trim()
+    ) {
+      cloned.credentialType = server.credentialType.trim();
+    }
+    return cloned;
+  });
+}
+
+function normalizeIceServerUrls(urls) {
+  const normalized = (Array.isArray(urls) ? urls : [urls])
+    .map((value) => String(value || "").trim())
+    .filter(Boolean);
+  if (!normalized.length) return null;
+  return normalized.length === 1 ? normalized[0] : normalized;
+}
+
+function normalizeIceServer(server) {
+  if (!server || typeof server !== "object") return null;
+  const urls = normalizeIceServerUrls(server.urls);
+  if (!urls) return null;
+  const normalized = { urls };
+  if (typeof server.username === "string" && server.username.trim()) {
+    normalized.username = server.username.trim();
+  }
+  if (server.credential !== undefined && server.credential !== null) {
+    normalized.credential = server.credential;
+  }
+  if (
+    typeof server.credentialType === "string" &&
+    server.credentialType.trim()
+  ) {
+    normalized.credentialType = server.credentialType.trim();
+  }
+  return normalized;
+}
+
+function parseIceServersConfig(rawValue) {
+  if (typeof rawValue !== "string") {
+    return { explicit: false, iceServers: [], error: null };
+  }
+  const trimmed = rawValue.trim();
+  if (!trimmed) {
+    return { explicit: false, iceServers: [], error: null };
+  }
+
+  try {
+    const parsed = JSON.parse(trimmed);
+    const list = Array.isArray(parsed) ? parsed : [parsed];
+    return {
+      explicit: true,
+      iceServers: list.map((entry) => normalizeIceServer(entry)).filter(Boolean),
+      error: null,
+    };
+  } catch (error) {
+    return {
+      explicit: true,
+      iceServers: [],
+      error: error instanceof Error ? error : new Error("ICE_CONFIG_PARSE_FAILED"),
+    };
+  }
+}
+
+function readVoiceConfigValue(storageKey, envValue) {
+  if (typeof window !== "undefined") {
+    const storedValue = localStorage.getItem(storageKey);
+    if (storedValue !== null && storedValue.trim()) {
+      return { value: storedValue, source: "localStorage" };
+    }
+  }
+  if (typeof envValue === "string" && envValue.trim()) {
+    return { value: envValue, source: "env" };
+  }
+  return { value: null, source: "default" };
+}
+
+function normalizeIceTransportPolicy(rawValue) {
+  const normalized = String(rawValue || "")
+    .trim()
+    .toLowerCase();
+  if (!normalized) return undefined;
+  if (normalized === "all" || normalized === "relay") return normalized;
+  return null;
+}
+
+function summarizeIceServerUrls(iceServers = []) {
+  return iceServers.flatMap((server) => {
+    const urls = Array.isArray(server.urls) ? server.urls : [server.urls];
+    return urls.map((value) => String(value || "").trim()).filter(Boolean);
+  });
+}
 
 export function createSfuVoiceClient({
   selfUserId,
@@ -91,10 +214,179 @@ export function createSfuVoiceClient({
     localAudioContext: null,
     localAudioNodes: null,
     pendingAudioStartByProducerId: new Map(),
+    pendingIceRestartByTransportId: new Map(),
     userAudioPrefsByUserId: new Map(),
     selfMonitorAudio: null,
     selfMonitorActive: false,
   };
+
+  function resolveIceConfiguration() {
+    const iceServersValue = readVoiceConfigValue(
+      VOICE_ICE_SERVERS_STORAGE_KEY,
+      import.meta.env.VITE_VOICE_ICE_SERVERS,
+    );
+    const parsedIceServers = parseIceServersConfig(iceServersValue.value);
+    if (parsedIceServers.error) {
+      log("voice iceServers config parse failed, falling back to defaults", {
+        source: iceServersValue.source,
+        error: parsedIceServers.error.message,
+      });
+    }
+    const iceServers =
+      parsedIceServers.error || !parsedIceServers.explicit
+        ? cloneIceServers(DEFAULT_VOICE_ICE_SERVERS)
+        : cloneIceServers(parsedIceServers.iceServers);
+
+    const transportPolicyValue = readVoiceConfigValue(
+      VOICE_ICE_TRANSPORT_POLICY_STORAGE_KEY,
+      import.meta.env.VITE_VOICE_ICE_TRANSPORT_POLICY,
+    );
+    const iceTransportPolicy = normalizeIceTransportPolicy(
+      transportPolicyValue.value,
+    );
+    if (transportPolicyValue.value && iceTransportPolicy === null) {
+      log("voice iceTransportPolicy config ignored", {
+        source: transportPolicyValue.source,
+        value: transportPolicyValue.value,
+      });
+    }
+
+    return {
+      iceServers,
+      iceServerSource: parsedIceServers.explicit
+        ? iceServersValue.source
+        : "default-stun",
+      iceTransportPolicy:
+        iceTransportPolicy && iceTransportPolicy !== "all"
+          ? iceTransportPolicy
+          : undefined,
+    };
+  }
+
+  function clearPendingIceRestart(transportId) {
+    const pending = state.pendingIceRestartByTransportId.get(transportId);
+    if (!pending) return;
+    if (pending.timer) window.clearTimeout(pending.timer);
+    state.pendingIceRestartByTransportId.delete(transportId);
+  }
+
+  async function restartIceForTransport(transport, direction, token, reason) {
+    if (!transport?.id || !isActive(token)) return;
+    const currentTransport =
+      direction === "send" ? state.sendTransport : state.recvTransport;
+    if (!currentTransport || currentTransport.id !== transport.id) return;
+
+    const existing = state.pendingIceRestartByTransportId.get(transport.id);
+    if (existing?.inProgress) return;
+    if (existing?.timer) window.clearTimeout(existing.timer);
+    state.pendingIceRestartByTransportId.set(transport.id, {
+      timer: null,
+      inProgress: true,
+    });
+
+    try {
+      const requestId = createVoiceRequestId(`restart-ice-${direction}`);
+      log("transport restartIce requested", {
+        direction,
+        transportId: transport.id,
+        reason,
+      });
+      await sendDispatch("VOICE_RESTART_ICE", {
+        guildId: state.guildId,
+        channelId: state.channelId,
+        transportId: transport.id,
+        requestId,
+      });
+      const restarted = await waitForVoiceResponse(() =>
+        waitDispatch(
+          "VOICE_ICE_RESTARTED",
+          (d) =>
+            d?.transportId === transport.id && d?.requestId === requestId,
+        ),
+      );
+      if (!isActive(token)) throw new Error("VOICE_SESSION_CANCELLED");
+      const latestTransport =
+        direction === "send" ? state.sendTransport : state.recvTransport;
+      if (!latestTransport || latestTransport.id !== transport.id) {
+        throw new Error("VOICE_TRANSPORT_STALE");
+      }
+      await transport.restartIce({ iceParameters: restarted.iceParameters });
+      log("transport restartIce applied", {
+        direction,
+        transportId: transport.id,
+      });
+    } catch (error) {
+      log("transport restartIce failed", {
+        direction,
+        transportId: transport.id,
+        reason,
+        error: String(error?.message || error),
+      });
+    } finally {
+      clearPendingIceRestart(transport.id);
+    }
+  }
+
+  function scheduleIceRestart(transport, direction, token, reason, delayMs = 0) {
+    if (!transport?.id || !isActive(token)) return;
+    const existing = state.pendingIceRestartByTransportId.get(transport.id);
+    if (existing?.inProgress || existing?.timer) return;
+    const timer = window.setTimeout(() => {
+      restartIceForTransport(transport, direction, token, reason).catch(
+        () => {},
+      );
+    }, Math.max(0, delayMs));
+    state.pendingIceRestartByTransportId.set(transport.id, {
+      timer,
+      inProgress: false,
+    });
+  }
+
+  function attachTransportDebugHandlers(transport, direction, token) {
+    if (!transport) return;
+    transport.on("icegatheringstatechange", (iceGatheringState) => {
+      log("transport icegatheringstatechange", {
+        direction,
+        transportId: transport.id,
+        iceGatheringState,
+      });
+    });
+    transport.on("icecandidateerror", (event) => {
+      log("transport icecandidateerror", {
+        direction,
+        transportId: transport.id,
+        url: event?.url || "",
+        address: event?.address || "",
+        port: event?.port || 0,
+        errorCode: event?.errorCode || 0,
+        errorText: event?.errorText || "",
+      });
+    });
+    transport.on("connectionstatechange", (connectionState) => {
+      log("transport connectionstatechange", {
+        direction,
+        transportId: transport.id,
+        connectionState,
+      });
+      if (connectionState === "connected" || connectionState === "completed") {
+        clearPendingIceRestart(transport.id);
+        return;
+      }
+      if (connectionState === "disconnected") {
+        scheduleIceRestart(
+          transport,
+          direction,
+          token,
+          "connection-disconnected",
+          1500,
+        );
+        return;
+      }
+      if (connectionState === "failed") {
+        scheduleIceRestart(transport, direction, token, "connection-failed");
+      }
+    });
+  }
 
   function normalizeUserAudioPreference(pref = {}) {
     const muted = !!pref?.muted;
@@ -834,20 +1126,6 @@ export function createSfuVoiceClient({
     });
   }
 
-  async function waitForTransportConnected(
-    transportId,
-    timeoutMs = DEFAULT_TIMEOUT_MS,
-  ) {
-    return waitForEvent({
-      type: "VOICE_TRANSPORT_CONNECTED",
-      timeoutMs,
-      guildId: state.guildId,
-      channelId: state.channelId,
-      sessionToken: state.sessionToken,
-      transportId,
-    });
-  }
-
   async function waitForVoiceError(timeoutMs = DEFAULT_TIMEOUT_MS) {
     return waitForEvent({
       type: "VOICE_ERROR",
@@ -870,19 +1148,44 @@ export function createSfuVoiceClient({
   }
 
   async function createTransport(direction, token) {
+    const requestId = createVoiceRequestId(`transport-${direction}`);
     await sendDispatch("VOICE_CREATE_TRANSPORT", {
       guildId: state.guildId,
       channelId: state.channelId,
       direction,
+      requestId,
     });
     const created = await waitDispatch(
       "VOICE_TRANSPORT_CREATED",
-      (d) => d?.direction === direction,
+      (d) => d?.direction === direction && d?.requestId === requestId,
     );
     if (!isActive(token)) throw new Error("VOICE_SESSION_CANCELLED");
-    return direction === "send"
-      ? state.device.createSendTransport(created.transport)
-      : state.device.createRecvTransport(created.transport);
+    const {
+      iceServers,
+      iceServerSource,
+      iceTransportPolicy,
+    } = resolveIceConfiguration();
+    log("creating local mediasoup transport", {
+      direction,
+      transportId: created.transport?.id || "",
+      iceServerSource,
+      iceServerUrls: summarizeIceServerUrls(iceServers),
+      iceTransportPolicy: iceTransportPolicy || "all",
+      remoteIceCandidateCount: Array.isArray(created.transport?.iceCandidates)
+        ? created.transport.iceCandidates.length
+        : 0,
+    });
+    const transportOptions = {
+      ...created.transport,
+      iceServers,
+      ...(iceTransportPolicy ? { iceTransportPolicy } : {}),
+    };
+    const transport =
+      direction === "send"
+        ? state.device.createSendTransport(transportOptions)
+        : state.device.createRecvTransport(transportOptions);
+    attachTransportDebugHandlers(transport, direction, token);
+    return transport;
   }
 
   async function consumeProducer(producerId, userId, token) {
@@ -895,16 +1198,21 @@ export function createSfuVoiceClient({
       return;
     if (state.consumersByProducerId.has(producerId)) return;
 
+    const requestId = createVoiceRequestId("consume");
     await sendDispatch("VOICE_CONSUME", {
       guildId: state.guildId,
       channelId: state.channelId,
       transportId: state.recvTransport.id,
       producerId,
       rtpCapabilities: state.device.rtpCapabilities,
+      requestId,
     });
 
     const consumerOptions = await waitForVoiceResponse(() =>
-      waitDispatch("VOICE_CONSUMED", (d) => d?.producerId === producerId),
+      waitDispatch(
+        "VOICE_CONSUMED",
+        (d) => d?.producerId === producerId && d?.requestId === requestId,
+      ),
     );
     if (!isActive(token)) return;
 
@@ -1012,10 +1320,14 @@ export function createSfuVoiceClient({
     state.audioOutputDeviceId = audioOutputDeviceId || "";
 
     log("joining voice channel", { guildId, channelId, sessionToken: token });
-    await sendDispatch("VOICE_JOIN", { guildId, channelId });
+    const joinRequestId = createVoiceRequestId("join");
+    await sendDispatch("VOICE_JOIN", { guildId, channelId, requestId: joinRequestId });
     const joined = await waitForEvent({
       type: "VOICE_JOINED",
-      match: (d) => d?.guildId === guildId && d?.channelId === channelId,
+      match: (d) =>
+        d?.guildId === guildId &&
+        d?.channelId === channelId &&
+        d?.requestId === joinRequestId,
       timeoutMs: 12000,
       guildId,
       channelId,
@@ -1036,6 +1348,7 @@ export function createSfuVoiceClient({
       "connect",
       async ({ dtlsParameters }, callback, errback) => {
         try {
+          const requestId = createVoiceRequestId("connect-send");
           log("send transport connecting", {
             transportId: state.sendTransport.id,
             guildId: state.guildId,
@@ -1046,9 +1359,17 @@ export function createSfuVoiceClient({
             channelId: state.channelId,
             transportId: state.sendTransport.id,
             dtlsParameters,
+            requestId,
           });
-          await waitForVoiceResponse(() =>
-            waitForTransportConnected(state.sendTransport.id),
+          await waitForVoiceResponse(
+            () =>
+              waitDispatch(
+                "VOICE_TRANSPORT_CONNECTED",
+                (d) =>
+                  d?.transportId === state.sendTransport.id &&
+                  d?.requestId === requestId,
+                DEFAULT_TIMEOUT_MS,
+              ),
           );
           callback();
         } catch (error) {
@@ -1060,17 +1381,20 @@ export function createSfuVoiceClient({
       "produce",
       async ({ kind, rtpParameters }, callback, errback) => {
         try {
+          const requestId = createVoiceRequestId(`produce-${kind}`);
           await sendDispatch("VOICE_PRODUCE", {
             guildId: state.guildId,
             channelId: state.channelId,
             transportId: state.sendTransport.id,
             kind,
             rtpParameters,
+            requestId,
           });
           const produced = await waitForVoiceResponse(() =>
             waitDispatch(
               "VOICE_PRODUCED",
               (d) =>
+                d?.requestId === requestId &&
                 d?.guildId === state.guildId &&
                 d?.channelId === state.channelId &&
                 d?.userId === resolveSelfUserId(),
@@ -1098,6 +1422,7 @@ export function createSfuVoiceClient({
       "connect",
       async ({ dtlsParameters }, callback, errback) => {
         try {
+          const requestId = createVoiceRequestId("connect-recv");
           log("recv transport connecting", {
             transportId: state.recvTransport.id,
             guildId: state.guildId,
@@ -1108,9 +1433,17 @@ export function createSfuVoiceClient({
             channelId: state.channelId,
             transportId: state.recvTransport.id,
             dtlsParameters,
+            requestId,
           });
-          await waitForVoiceResponse(() =>
-            waitForTransportConnected(state.recvTransport.id),
+          await waitForVoiceResponse(
+            () =>
+              waitDispatch(
+                "VOICE_TRANSPORT_CONNECTED",
+                (d) =>
+                  d?.transportId === state.recvTransport.id &&
+                  d?.requestId === requestId,
+                DEFAULT_TIMEOUT_MS,
+              ),
           );
           callback();
         } catch (error) {
@@ -1247,6 +1580,9 @@ export function createSfuVoiceClient({
     state.sessionToken += 1;
     for (const producerId of [...state.pendingAudioStartByProducerId.keys()]) {
       removePendingAudioStart(producerId);
+    }
+    for (const transportId of [...state.pendingIceRestartByTransportId.keys()]) {
+      clearPendingIceRestart(transportId);
     }
     for (const producerId of [...state.consumersByProducerId.keys()]) {
       await cleanupConsumer(producerId);

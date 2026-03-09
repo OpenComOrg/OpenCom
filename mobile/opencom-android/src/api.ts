@@ -209,6 +209,14 @@ export function createApiClient(input: {
       );
     },
 
+    forgotPassword(email: string) {
+      return coreRequest<{ ok: boolean }>(
+        "/v1/auth/forgot-password",
+        { method: "POST", body: { email } },
+        false,
+      );
+    },
+
     // ─── Me / Profile ─────────────────────────────────────────────────────────
 
     getMe() {
@@ -276,21 +284,34 @@ export function createApiClient(input: {
 
     // ─── Sessions ─────────────────────────────────────────────────────────────
 
-    getSessions() {
-      return coreRequest<{
+    async getSessions() {
+      const data = await coreRequest<{
         sessions: {
           id: string;
-          device?: string;
-          location?: string;
+          deviceName?: string;
           lastActive?: string;
-          current?: boolean;
+          expiresAt?: string;
+          isCurrent?: boolean;
         }[];
-      }>("/v1/me/sessions");
+      }>("/v1/auth/sessions");
+      return {
+        sessions: Array.isArray(data.sessions)
+          ? data.sessions.map((session) => ({
+              id: session.id,
+              device: session.deviceName,
+              location: session.expiresAt
+                ? `Expires ${new Date(session.expiresAt).toLocaleDateString()}`
+                : undefined,
+              lastActive: session.lastActive,
+              current: session.isCurrent,
+            }))
+          : [],
+      };
     },
 
     revokeSession(sessionId: string) {
       return coreRequest<{ ok: boolean }>(
-        `/v1/me/sessions/${encodeURIComponent(sessionId)}`,
+        `/v1/auth/sessions/${encodeURIComponent(sessionId)}`,
         {
           method: "DELETE",
         },
@@ -298,8 +319,8 @@ export function createApiClient(input: {
     },
 
     changePassword(currentPassword: string, newPassword: string) {
-      return coreRequest<{ ok: boolean }>("/v1/me/password", {
-        method: "POST",
+      return coreRequest<{ success: boolean }>("/v1/auth/password", {
+        method: "PATCH",
         body: { currentPassword, newPassword },
       });
     },

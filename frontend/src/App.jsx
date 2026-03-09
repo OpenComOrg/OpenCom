@@ -1564,6 +1564,8 @@ export function App() {
   const [email, setEmail] = useState("");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [authResetPasswordConfirm, setAuthResetPasswordConfirm] = useState("");
+  const [resetPasswordToken, setResetPasswordToken] = useState("");
   const [pendingVerificationEmail, setPendingVerificationEmail] = useState("");
   const [me, setMe] = useState(null);
 
@@ -6166,6 +6168,25 @@ export function App() {
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search || "");
+    const nextResetPasswordToken = params.get("resetPasswordToken");
+    if (!nextResetPasswordToken) return;
+    if (getAppRouteFromLocation() === APP_ROUTE_HOME) {
+      navigateAppRoute(APP_ROUTE_LOGIN, { replace: true });
+    }
+    setResetPasswordToken(nextResetPasswordToken);
+    setAuthMode("reset-password");
+    setPassword("");
+    setAuthResetPasswordConfirm("");
+    setStatus("Reset link ready. Choose a new password.");
+
+    params.delete("resetPasswordToken");
+    const next = params.toString();
+    const nextUrl = `${window.location.pathname}${next ? `?${next}` : ""}${window.location.hash || ""}`;
+    window.history.replaceState({}, "", nextUrl);
+  }, []);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search || "");
     const verifyEmailToken = params.get("verifyEmailToken");
     if (!verifyEmailToken) return;
     if (getAppRouteFromLocation() === APP_ROUTE_HOME) {
@@ -6216,9 +6237,50 @@ export function App() {
 
   async function handleAuthSubmit(event) {
     event.preventDefault();
-    setStatus("Authenticating...");
+    setStatus(
+      authMode === "forgot-password"
+        ? "Sending reset link..."
+        : authMode === "reset-password"
+          ? "Resetting password..."
+          : "Authenticating...",
+    );
 
     try {
+      if (authMode === "forgot-password") {
+        await requestPasswordReset(email.trim());
+        return;
+      }
+
+      if (authMode === "reset-password") {
+        if (!resetPasswordToken) {
+          setStatus("This reset link is missing or invalid. Request a new one.");
+          return;
+        }
+        if (password !== authResetPasswordConfirm) {
+          setStatus("Passwords do not match.");
+          return;
+        }
+        if (password.length < 8) {
+          setStatus("Password must be at least 8 characters.");
+          return;
+        }
+
+        await api("/v1/auth/reset-password", {
+          method: "POST",
+          body: JSON.stringify({ token: resetPasswordToken, newPassword: password }),
+        });
+        setAccessToken("");
+        setRefreshToken("");
+        setMe(null);
+        setPendingVerificationEmail("");
+        setResetPasswordToken("");
+        setPassword("");
+        setAuthResetPasswordConfirm("");
+        setAuthMode("login");
+        setStatus("Password reset. Log in with your new password.");
+        return;
+      }
+
       if (authMode === "register") {
         await api("/v1/auth/register", {
           method: "POST",
@@ -6269,6 +6331,44 @@ export function App() {
         return;
       }
       setStatus(`Auth failed: ${error.message}`);
+    }
+  }
+
+  async function requestPasswordReset(targetEmail = "") {
+    const normalizedEmail = String(targetEmail || "").trim();
+    if (!normalizedEmail) {
+      setStatus("Enter your email first.");
+      return;
+    }
+
+    try {
+      await api("/v1/auth/forgot-password", {
+        method: "POST",
+        body: JSON.stringify({ email: normalizedEmail }),
+      });
+      setEmail(normalizedEmail);
+      setAuthMode("login");
+      setStatus("If the account exists, a password reset link has been sent.");
+    } catch (error) {
+      if (error?.message === "SMTP_NOT_CONFIGURED") {
+        setStatus(
+          "Reset failed: SMTP is not configured on the API server. Set SMTP_* (or Zoho SMTP envs) and restart backend.",
+        );
+        return;
+      }
+      if (error?.message === "SMTP_AUTH_FAILED") {
+        setStatus(
+          "Reset failed: SMTP auth failed. Check Zoho username and app password.",
+        );
+        return;
+      }
+      if (error?.message === "SMTP_CONNECTION_FAILED") {
+        setStatus(
+          "Reset failed: could not connect to SMTP server. Check host/port/TLS/firewall.",
+        );
+        return;
+      }
+      setStatus(`Reset failed: ${error.message}`);
     }
   }
 
@@ -11102,7 +11202,10 @@ export function App() {
         setUsername={setUsername}
         password={password}
         setPassword={setPassword}
+        authResetPasswordConfirm={authResetPasswordConfirm}
+        setAuthResetPasswordConfirm={setAuthResetPasswordConfirm}
         pendingVerificationEmail={pendingVerificationEmail}
+        resetPasswordToken={resetPasswordToken}
         status={status}
         onSubmit={handleAuthSubmit}
         onResendVerification={handleResendVerification}
@@ -13169,6 +13272,8 @@ export function App() {
             setNewPassword={setNewPassword}
             confirmPassword={confirmPassword}
             setConfirmPassword={setConfirmPassword}
+            userEmail={me?.email || ""}
+            onSendPasswordResetLink={requestPasswordReset}
             api={api}
             accessToken={accessToken}
             setStatus={setStatus}

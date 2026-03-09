@@ -6,7 +6,7 @@ import { hashPassword, verifyPassword, sha256Hex } from "../crypto.js";
 import crypto from "node:crypto";
 import { parseBody } from "../validation.js";
 import { env } from "../env.js";
-import { sendVerificationEmail } from "../mail.js";
+import { sendPasswordResetEmail, sendVerificationEmail } from "../mail.js";
 import { isReservedUsername, isUsernameTaken, normalizeUsername } from "../usernames.js";
 
 const Register = z.object({
@@ -26,6 +26,15 @@ const VerifyEmail = z.object({
 
 const ResendVerification = z.object({
   email: z.string().email()
+});
+
+const ForgotPassword = z.object({
+  email: z.string().trim().email()
+});
+
+const ResetPassword = z.object({
+  token: z.string().min(16),
+  newPassword: z.string().min(8).max(200)
 });
 
 const ACCESS_TOKEN_TTL = "12h";
@@ -64,6 +73,33 @@ async function issueEmailVerificationToken(userId: string): Promise<string> {
 async function sendEmailVerificationForUser(userId: string, email: string) {
   const token = await issueEmailVerificationToken(userId);
   await sendVerificationEmail(email, token);
+}
+
+async function issuePasswordResetToken(userId: string): Promise<string> {
+  const token = randomToken();
+  const tokenHash = sha256Hex(token);
+  const expiresAt = toSqlTimestamp(Date.now() + (env.AUTH_PASSWORD_RESET_TOKEN_TTL_MINUTES * 60 * 1000));
+
+  await q(
+    `UPDATE password_reset_tokens
+     SET used_at=NOW()
+     WHERE user_id=:userId
+       AND used_at IS NULL`,
+    { userId }
+  );
+
+  await q(
+    `INSERT INTO password_reset_tokens (id,user_id,token_hash,expires_at)
+     VALUES (:id,:userId,:tokenHash,:expiresAt)`,
+    { id: ulidLike(), userId, tokenHash, expiresAt }
+  );
+
+  return token;
+}
+
+async function sendPasswordResetForUser(userId: string, email: string) {
+  const token = await issuePasswordResetToken(userId);
+  await sendPasswordResetEmail(email, token);
 }
 
 function mapMailError(error: unknown): string {
@@ -232,6 +268,79 @@ export async function authRoutes(app: FastifyInstance) {
     } catch (error) {
       return rep.code(500).send({ error: mapMailError(error) });
     }
+  });
+
+  app.post("/v1/auth/forgot-password", async (req, rep) => {
+    const body = parseBody(ForgotPassword, req.body);
+
+    const rows = await q<{ id: string; email: string }>(
+      `SELECT id,email
+       FROM users
+       WHERE email=:email
+       LIMIT 1`,
+      { email: body.email }
+    );
+    if (!rows.length) return rep.send({ ok: true });
+
+    try {
+      await sendPasswordResetForUser(rows[0].id, rows[0].email);
+      return rep.send({ ok: true });
+    } catch (error) {
+      return rep.code(500).send({ error: mapMailError(error) });
+    }
+  });
+
+  app.post("/v1/auth/reset-password", async (req, rep) => {
+    const body = parseBody(ResetPassword, req.body);
+    const tokenHash = sha256Hex(body.token);
+    const rows = await q<{ id: string; user_id: string; expires_at: string; used_at: string | null }>(
+      `SELECT id,user_id,expires_at,used_at
+       FROM password_reset_tokens
+       WHERE token_hash=:tokenHash
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      { tokenHash }
+    );
+
+    if (!rows.length) return rep.code(400).send({ error: "INVALID_PASSWORD_RESET_TOKEN" });
+    const record = rows[0];
+    if (record.used_at) return rep.code(400).send({ error: "PASSWORD_RESET_TOKEN_USED" });
+    if (new Date(record.expires_at).getTime() < Date.now()) {
+      return rep.code(400).send({ error: "PASSWORD_RESET_TOKEN_EXPIRED" });
+    }
+
+    const users = await q<{ id: string }>(
+      `SELECT id
+       FROM users
+       WHERE id=:userId
+       LIMIT 1`,
+      { userId: record.user_id }
+    );
+    if (!users.length) return rep.code(400).send({ error: "INVALID_PASSWORD_RESET_TOKEN" });
+
+    const newHash = await hashPassword(body.newPassword);
+    await q(
+      `UPDATE users
+       SET password_hash=:newHash
+       WHERE id=:userId`,
+      { userId: record.user_id, newHash }
+    );
+    await q(
+      `UPDATE password_reset_tokens
+       SET used_at=NOW()
+       WHERE user_id=:userId
+         AND used_at IS NULL`,
+      { userId: record.user_id }
+    );
+    await q(
+      `UPDATE refresh_tokens
+       SET revoked_at=NOW()
+       WHERE user_id=:userId
+         AND revoked_at IS NULL`,
+      { userId: record.user_id }
+    );
+
+    return rep.send({ ok: true });
   });
 
   app.post("/v1/auth/refresh", async (req, rep) => {

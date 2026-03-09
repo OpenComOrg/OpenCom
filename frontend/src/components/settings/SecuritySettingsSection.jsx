@@ -8,6 +8,8 @@ export function SecuritySettingsSection({
   setNewPassword,
   confirmPassword,
   setConfirmPassword,
+  userEmail,
+  onSendPasswordResetLink,
   api,
   accessToken,
   setStatus,
@@ -115,8 +117,20 @@ export function SecuritySettingsSection({
               >
                 Update Password
               </button>
+              <button
+                type="button"
+                className="ghost"
+                onClick={() => onSendPasswordResetLink(userEmail)}
+              >
+                Email Reset Link
+              </button>
             </div>
           </>
+        )}
+        {!showPasswordChange && (
+          <button type="button" className="ghost" onClick={() => onSendPasswordResetLink(userEmail)}>
+            Email me a reset link
+          </button>
         )}
       </section>
 

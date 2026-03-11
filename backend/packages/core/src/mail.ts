@@ -1,6 +1,27 @@
 import { env } from "./env.js";
 import { sendSmtpEmail } from "./smtp.js";
 
+type SendSigninEmailInput = {
+  ip: string;
+  happenedAt?: Date | string;
+  userAgent?: string | null;
+};
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function formatTimestamp(value?: Date | string): string {
+  if (!value) return new Date().toUTCString();
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? String(value) : date.toUTCString();
+}
+
 export async function sendVerificationEmail(to: string, verifyToken: string) {
   const base = env.APP_BASE_URL.replace(/\/$/, "");
   const verifyUrl = `${base}/?verifyEmailToken=${encodeURIComponent(verifyToken)}`;
@@ -23,12 +44,19 @@ export async function sendPasswordResetEmail(to: string, resetToken: string) {
   });
 }
 
-export async function sendSigninEmail(to: string, ip: string) {
+export async function sendSigninEmail(to: string, input: SendSigninEmailInput) {
   const base = env.APP_BASE_URL.replace(/\/$/, "");
-  const loginUrl = `${base}/login`
+  const loginUrl = `${base}/login`;
+  const happenedAt = formatTimestamp(input.happenedAt);
+  const ip = input.ip.trim() || "unknown";
+  const userAgent = input.userAgent?.trim() || "";
+  const userAgentText = userAgent ? `\nUser agent: ${userAgent}` : "";
+  const userAgentHtml = userAgent ? `<p><strong>User agent:</strong> <code>${escapeHtml(userAgent)}</code></p>` : "";
+
   await sendSmtpEmail({
     to,
-    subject: "OpenCom Unrecognised Signin Alert",
-    text: `There has been a Unrecognised sign in to your account.\nThe ip of this sign in is ${ip}\nIf you do not recognise this sign in please login at ${loginUrl} and reset your paassword.\nIf this was you you can safely ignore this email!`,
-  })
+    subject: "OpenCom suspicious sign-in alert",
+    text: `We noticed a sign-in to your OpenCom account from a new IP address.\n\nTime: ${happenedAt}\nIP address: ${ip}${userAgentText}\n\nIf this was not you, sign in at ${loginUrl} and reset your password immediately.\nIf this was you, you can ignore this email.`,
+    html: `<p>We noticed a sign-in to your OpenCom account from a new IP address.</p><p><strong>Time:</strong> ${escapeHtml(happenedAt)}<br /><strong>IP address:</strong> <code>${escapeHtml(ip)}</code></p>${userAgentHtml}<p>If this was not you, sign in at <a href="${loginUrl}">${loginUrl}</a> and reset your password immediately.</p><p>If this was you, you can ignore this email.</p>`
+  });
 }

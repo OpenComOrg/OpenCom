@@ -145,10 +145,18 @@ services:
 
 volumes:
   mariadb_core:
+    name: opencom_mariadb_core
   mariadb_node:
+    name: opencom_mariadb_node
   minio_data:
+    name: opencom_minio_data
   core_logs:
+    name: opencom_core_logs
   core_profiles:
+    name: opencom_core_profiles
   core_attachments:
+    name: opencom_core_attachments
   node_logs:
+    name: opencom_node_logs
   node_attachments:
+    name: opencom_node_attachments

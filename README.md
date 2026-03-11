@@ -78,7 +78,7 @@ Create a portable backup bundle (DB + env config snapshots):
 
 Restore from a portable backup bundle:
 ```bash
-./scripts/ops/migrate-portability.sh import backups/opencom-backup.tar.gz
+./scripts/ops/migrate-portability.sh import backups/opencom-backup.tar.gz --force
 ```
 
 Create an automatic backup now (backs up all configured `*_DATABASE_URL` values and keeps latest 56 by default):

@@ -395,11 +395,13 @@ import_bundle() {
 print_usage() {
   cat <<'USAGE'
 Usage: ./scripts/ops/migrate-portability.sh export <backup.tar.gz>
-   or: ./scripts/ops/migrate-portability.sh import <backup.tar.gz>
+   or: ./scripts/ops/migrate-portability.sh import <backup.tar.gz> --force
 
 Export/imports all loaded MySQL/MariaDB DATABASE_URL variables:
 - backend/.env
 - backend/packages/server-node/.env
+
+Warning: `import` drops and recreates every configured database before restoring.
 USAGE
 }
 
@@ -410,7 +412,37 @@ main() {
   fi
 
   local mode="$1"
-  local file="${2:-}"
+  shift
+
+  local file=""
+  local force_import=0
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --force)
+        force_import=1
+        ;;
+      -h|--help|help)
+        print_usage
+        exit 0
+        ;;
+      -*)
+        echo "Unknown option: $1"
+        print_usage
+        exit 1
+        ;;
+      *)
+        if [[ -z "$file" ]]; then
+          file="$1"
+        else
+          echo "Unexpected argument: $1"
+          print_usage
+          exit 1
+        fi
+        ;;
+    esac
+    shift
+  done
 
   case "$mode" in
     -h|--help|help)
@@ -423,6 +455,10 @@ main() {
       if [[ "$mode" == "export" ]]; then
         export_bundle "$file"
       else
+        if [[ "$force_import" -ne 1 ]]; then
+          echo "Refusing to import without --force because this operation drops and recreates the configured databases."
+          exit 1
+        fi
         import_bundle "$file"
       fi
       ;;

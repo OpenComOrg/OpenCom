@@ -1,4 +1,4 @@
-import { FastifyInstance } from "fastify";
+import { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { ulidLike } from "@ods/shared/ids.js";
 import { q } from "../db.js";
@@ -6,7 +6,7 @@ import { hashPassword, verifyPassword, sha256Hex } from "../crypto.js";
 import crypto from "node:crypto";
 import { parseBody } from "../validation.js";
 import { env } from "../env.js";
-import { sendPasswordResetEmail, sendVerificationEmail } from "../mail.js";
+import { sendPasswordResetEmail, sendSigninEmail, sendVerificationEmail } from "../mail.js";
 import { isReservedUsername, isUsernameTaken, normalizeUsername } from "../usernames.js";
 
 const Register = z.object({
@@ -46,6 +46,34 @@ function randomToken(): string {
 
 function toSqlTimestamp(msFromEpoch: number): string {
   return new Date(msFromEpoch).toISOString().slice(0, 19).replace("T", " ");
+}
+
+function firstHeaderValue(value: string | string[] | undefined): string {
+  if (Array.isArray(value)) return value[0]?.trim() || "";
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function normalizeIp(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) return "unknown";
+  if (trimmed.startsWith("::ffff:")) return trimmed.slice(7);
+  return trimmed;
+}
+
+function getClientIp(request: FastifyRequest): string {
+  const cfIp = firstHeaderValue(request.headers["cf-connecting-ip"]);
+  if (cfIp) return normalizeIp(cfIp);
+
+  const forwardedFor = firstHeaderValue(request.headers["x-forwarded-for"]);
+  if (forwardedFor) return normalizeIp(forwardedFor.split(",")[0] || forwardedFor);
+
+  return normalizeIp(request.ip);
+}
+
+function getClientUserAgent(request: FastifyRequest): string | null {
+  const userAgent = firstHeaderValue(request.headers["user-agent"]);
+  if (!userAgent) return null;
+  return userAgent.slice(0, 512);
 }
 
 async function isAccountBanned(userId: string): Promise<boolean> {
@@ -100,6 +128,36 @@ async function issuePasswordResetToken(userId: string): Promise<string> {
 async function sendPasswordResetForUser(userId: string, email: string) {
   const token = await issuePasswordResetToken(userId);
   await sendPasswordResetEmail(email, token);
+}
+
+async function rememberSigninIp(userId: string, ip: string, userAgent: string | null): Promise<boolean> {
+  const knownIp = await q<{ ip_address: string }>(
+    `SELECT ip_address
+     FROM known_signin_ips
+     WHERE user_id=:userId
+       AND ip_address=:ip
+     LIMIT 1`,
+    { userId, ip }
+  );
+
+  const hasSigninHistory = knownIp.length > 0 || (await q<{ user_id: string }>(
+    `SELECT user_id
+     FROM known_signin_ips
+     WHERE user_id=:userId
+     LIMIT 1`,
+    { userId }
+  )).length > 0;
+
+  await q(
+    `INSERT INTO known_signin_ips (user_id,ip_address,last_user_agent)
+     VALUES (:userId,:ip,:userAgent)
+     ON DUPLICATE KEY UPDATE
+       last_seen_at=NOW(),
+       last_user_agent=VALUES(last_user_agent)`,
+    { userId, ip, userAgent }
+  );
+
+  return hasSigninHistory && knownIp.length === 0;
 }
 
 function mapMailError(error: unknown): string {
@@ -203,6 +261,10 @@ export async function authRoutes(app: FastifyInstance) {
       return rep.code(403).send({ error: "EMAIL_NOT_VERIFIED" });
     }
 
+    const signinIp = getClientIp(req);
+    const signinUserAgent = getClientUserAgent(req);
+    const signedInAt = new Date();
+
     const accessToken = app.jwt.sign({ sub: u.id, typ: "access" }, { expiresIn: ACCESS_TOKEN_TTL });
 
     const refresh = randomToken();
@@ -214,6 +276,19 @@ export async function authRoutes(app: FastifyInstance) {
       `INSERT INTO refresh_tokens (id,user_id,token_hash,expires_at) VALUES (:id,:userId,:tokenHash,:expiresAt)`,
       { id: refreshId, userId: u.id, tokenHash, expiresAt }
     );
+
+    try {
+      const isSuspiciousSignin = await rememberSigninIp(u.id, signinIp, signinUserAgent);
+      if (isSuspiciousSignin) {
+        await sendSigninEmail(u.email, {
+          ip: signinIp,
+          happenedAt: signedInAt,
+          userAgent: signinUserAgent
+        });
+      }
+    } catch (error) {
+      req.log.warn({ err: error, userId: u.id }, "Failed to process suspicious sign-in alert");
+    }
 
     return rep.send({
       user: { id: u.id, email: u.email, username: u.username },

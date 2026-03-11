@@ -1,0 +1,9 @@
+CREATE TABLE IF NOT EXISTS known_signin_ips (
+  user_id VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_uca1400_ai_ci NOT NULL,
+  ip_address VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_uca1400_ai_ci NOT NULL,
+  first_seen_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_seen_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_user_agent VARCHAR(512) CHARACTER SET utf8mb4 COLLATE utf8mb4_uca1400_ai_ci NULL,
+  PRIMARY KEY (user_id, ip_address),
+  CONSTRAINT fk_known_signin_ips_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;

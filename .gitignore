@@ -143,3 +143,10 @@ vite.config.ts.timestamp-*
 client/src/web/index.html
 client/src/web/assets/index-Cbol0dkw.js
 client/src/web/assets/index-Dz6Dwfd9.css
+frontend/OpenCom.exe
+client/src/web/downloads/*.tar.gz
+client/src/web/downloads/*.snap
+client/src/web/downloads/*.deb
+frontend/*.tar.gz
+frontend/*.snap
+frontend/*.deb

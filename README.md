@@ -66,15 +66,15 @@ An open source communication platform
 
 - [ ] Add more callbacks to the github in the frontend
 
-- [ ] Overall improvemnets to the platform
+- [x] Overall improvemnets to the platform
 
-- [ ] Make the actual day to day running of OpenCom easier for both self hosted and core
+- [x] Make the actual day to day running of OpenCom easier for both self hosted and core
 
-- [ ] Improve Client handelling
+- [x] Improve Client handelling
 
 - [ ] Make .deb Package actually have the icon [for some reason it dosent]
 
-- [ ] Overall improve everything else [more just small improvements to small for individual mentions]
+- [x] Overall improve everything else [more just small improvements to small for individual mentions]
 
 
 ## Hosting A server node

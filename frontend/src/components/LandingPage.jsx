@@ -1,3 +1,5 @@
+import { OPEN_SOURCE_REPO_URL } from "../lib/projectLinks";
+
 export function LandingPage({
   downloadMenuRef,
   downloadsMenuOpen,
@@ -69,6 +71,24 @@ export function LandingPage({
             </article>
           ))}
         </section>
+        <section className="landing-open-source-panel">
+          <div className="landing-open-source-copy">
+            <p className="landing-kicker">Open source</p>
+            <h3>Want to help shape OpenCom?</h3>
+            <p className="landing-hint">
+              OpenCom is open source. If you are interested in contributing,
+              check out the project on GitHub and jump in.
+            </p>
+          </div>
+          <a
+            href={OPEN_SOURCE_REPO_URL}
+            className="landing-btn landing-btn-secondary"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            View on GitHub
+          </a>
+        </section>
         <section className="landing-cta-panel" ref={downloadMenuRef}>
           <div className="landing-cta-copy">
             <h3>Prefer desktop?</h3>
@@ -114,6 +134,15 @@ export function LandingPage({
         <div className="landing-footer-actions">
           <button type="button" className="link-btn" onClick={onOpenBlogs}>Blogs</button>
           <button type="button" className="link-btn" onClick={onOpenTerms}>Terms of Service</button>
+          <button
+            type="button"
+            className="link-btn"
+            onClick={() =>
+              window.open(OPEN_SOURCE_REPO_URL, "_blank", "noopener,noreferrer")
+            }
+          >
+            GitHub
+          </button>
           <button
             type="button"
             className="link-btn"

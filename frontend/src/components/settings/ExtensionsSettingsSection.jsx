@@ -1,3 +1,5 @@
+import { OPEN_SOURCE_REPO_URL } from "../../lib/projectLinks";
+
 export function ExtensionsSettingsSection({
   activeServer,
   canManageServer,
@@ -220,6 +222,24 @@ export function ExtensionsSettingsSection({
             </ul>
           </>
         )}
+      </section>
+
+      <section className="card settings-open-source-card">
+        <h4>Open Source</h4>
+        <p className="hint">
+          OpenCom is open source. If you are interested in contributing, check
+          out the GitHub repo and have a look around.
+        </p>
+        <div className="settings-open-source-actions">
+          <a
+            href={OPEN_SOURCE_REPO_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="settings-open-source-link"
+          >
+            View OpenCom on GitHub
+          </a>
+        </div>
       </section>
     </>
   );

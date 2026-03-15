@@ -2,6 +2,9 @@
 
 OpenCom scans this folder for extension projects.
 
+## Notice:
+**THIS README was written by AI but I cant particularly do a better job so it stays for now**
+
 ## Folder layout
 - `Extensions/Client/<extension-id>/extension.json`
 - `Extensions/Server/<extension-id>/extension.json`

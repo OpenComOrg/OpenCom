@@ -42,6 +42,7 @@ import { VoiceSettingsSection } from "./components/settings/VoiceSettingsSection
 import { BillingSettingsSection } from "./components/settings/BillingSettingsSection";
 import { SecuritySettingsSection } from "./components/settings/SecuritySettingsSection";
 import { DOWNLOAD_TARGETS, getPreferredDownloadTarget } from "./lib/downloads";
+import { uploadFileInChunks } from "./utils/chunkedUploads";
 import {
   APP_ROUTE_CLIENT,
   APP_ROUTE_BLOGS,
@@ -1522,6 +1523,20 @@ function normalizeAttachmentFile(file, prefix = "upload") {
   } catch {
     return file;
   }
+}
+
+function formatByteCount(bytes = 0) {
+  const value = Number(bytes || 0);
+  if (!Number.isFinite(value) || value <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB"];
+  let amount = value;
+  let unitIndex = 0;
+  while (amount >= 1024 && unitIndex < units.length - 1) {
+    amount /= 1024;
+    unitIndex += 1;
+  }
+  const precision = amount >= 10 || unitIndex === 0 ? 0 : 1;
+  return `${amount.toFixed(precision)} ${units[unitIndex]}`;
 }
 
 function extractFilesFromClipboardData(clipboardData) {
@@ -7149,43 +7164,81 @@ export function App() {
     if (!activeServer || !activeGuildId || !activeChannelId || !file)
       return null;
     const nextFile = normalizeAttachmentFile(file, "attachment") || file;
-    const form = new FormData();
-    form.append("guildId", activeGuildId);
-    form.append("channelId", activeChannelId);
-    form.append("file", nextFile, nextFile.name || "upload.bin");
-    const response = await fetch(
-      `${activeServer.baseUrl}/v1/attachments/upload`,
-      {
-        method: "POST",
-        headers: { Authorization: `Bearer ${activeServer.membershipToken}` },
-        body: form,
+    return uploadFileInChunks({
+      file: nextFile,
+      initUrl: `${activeServer.baseUrl}/v1/attachments/uploads/init`,
+      buildChunkUrl: (uploadId, offset) =>
+        `${activeServer.baseUrl}/v1/attachments/uploads/${encodeURIComponent(uploadId)}/chunks?offset=${encodeURIComponent(offset)}`,
+      completeUrl: (uploadId) =>
+        `${activeServer.baseUrl}/v1/attachments/uploads/${encodeURIComponent(uploadId)}/complete`,
+      abortUrl: (uploadId) =>
+        `${activeServer.baseUrl}/v1/attachments/uploads/${encodeURIComponent(uploadId)}`,
+      headers: {
+        Authorization: `Bearer ${activeServer.membershipToken}`,
       },
-    );
-    if (!response.ok) {
-      const err = await response.json().catch(() => ({}));
-      throw new Error(err.error || `HTTP_${response.status}`);
-    }
-    return response.json();
+      initBody: {
+        guildId: activeGuildId,
+        channelId: activeChannelId,
+      },
+      onProgress: ({ uploadedBytes, totalBytes, complete }) => {
+        if (complete) return;
+        const percent = totalBytes
+          ? Math.max(
+              0,
+              Math.min(100, Math.round((uploadedBytes / totalBytes) * 100)),
+            )
+          : 100;
+        setStatus(`Uploading ${nextFile.name || "upload.bin"}... ${percent}%`);
+      },
+    });
   }
 
   async function uploadDmAttachment(file, threadId) {
     if (!threadId || !file || !accessToken) return null;
     const nextFile = normalizeAttachmentFile(file, "dm-attachment") || file;
-    const form = new FormData();
-    form.append("file", nextFile, nextFile.name || "upload.bin");
-    const response = await fetch(
-      `${CORE_API}/v1/social/dms/${threadId}/attachments/upload`,
-      {
-        method: "POST",
-        headers: { Authorization: `Bearer ${accessToken}` },
-        body: form,
+    return uploadFileInChunks({
+      file: nextFile,
+      initUrl: `${CORE_API}/v1/social/dms/${encodeURIComponent(threadId)}/attachments/uploads/init`,
+      buildChunkUrl: (uploadId, offset) =>
+        `${CORE_API}/v1/social/dms/${encodeURIComponent(threadId)}/attachments/uploads/${encodeURIComponent(uploadId)}/chunks?offset=${encodeURIComponent(offset)}`,
+      completeUrl: (uploadId) =>
+        `${CORE_API}/v1/social/dms/${encodeURIComponent(threadId)}/attachments/uploads/${encodeURIComponent(uploadId)}/complete`,
+      abortUrl: (uploadId) =>
+        `${CORE_API}/v1/social/dms/${encodeURIComponent(threadId)}/attachments/uploads/${encodeURIComponent(uploadId)}`,
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
       },
-    );
-    if (!response.ok) {
-      const err = await response.json().catch(() => ({}));
-      throw new Error(err.error || `HTTP_${response.status}`);
+      onProgress: ({ uploadedBytes, totalBytes, complete }) => {
+        if (complete) return;
+        const percent = totalBytes
+          ? Math.max(
+              0,
+              Math.min(100, Math.round((uploadedBytes / totalBytes) * 100)),
+            )
+          : 100;
+        setStatus(`Uploading ${nextFile.name || "upload.bin"}... ${percent}%`);
+      },
+    });
+  }
+
+  function describeAttachmentUploadError(error) {
+    const code = String(error?.code || error?.message || "");
+    if (code === "TOO_LARGE" && Number.isFinite(error?.maxBytes)) {
+      return `File exceeds the ${formatByteCount(error.maxBytes)} upload limit.`;
     }
-    return response.json();
+    if (
+      code === "CHUNK_TOO_LARGE" &&
+      Number.isFinite(error?.chunkSizeBytes)
+    ) {
+      return `Upload chunk exceeded ${formatByteCount(error.chunkSizeBytes)}.`;
+    }
+    if (code === "OFFICIAL_ACCOUNT_NO_REPLY") {
+      return "The OpenCom official account is no-reply.";
+    }
+    if (code === "MISSING_PERMS") {
+      return "You do not have permission to attach files here.";
+    }
+    return "";
   }
 
   async function uploadAttachments(files, source = "files", scope = "server") {
@@ -7211,10 +7264,16 @@ export function App() {
 
     for (const file of queue) {
       try {
+        const nextFile = normalizeAttachmentFile(
+          file,
+          isDmScope ? "dm-attachment" : "attachment",
+        ) || file;
+        const fileLabel = nextFile.name || "upload.bin";
+        setStatus(`Uploading ${fileLabel}...`);
         // eslint-disable-next-line no-await-in-loop
         const data = isDmScope
-          ? await uploadDmAttachment(file, activeDm?.id)
-          : await uploadServerAttachment(file);
+          ? await uploadDmAttachment(nextFile, activeDm?.id)
+          : await uploadServerAttachment(nextFile);
         if (data) {
           if (isDmScope)
             setPendingDmAttachments((current) => [...current, data]);
@@ -7223,6 +7282,8 @@ export function App() {
         }
       } catch (error) {
         failed += 1;
+        const detailedMessage = describeAttachmentUploadError(error);
+        if (detailedMessage) setStatus(detailedMessage);
         console.warn("Attachment upload failed", error);
       }
     }

@@ -9,6 +9,14 @@ import { buildOfficialBadgeDetail, ensureSocialDmThread, getDmCounterpartyMeta, 
 import fs from "node:fs";
 import path from "node:path";
 import { ensureDir, randomId } from "../storage.js";
+import {
+  appendUploadChunk,
+  createUploadSession,
+  DEFAULT_UPLOAD_CHUNK_BYTES,
+  destroyUploadSession,
+  finalizeUploadSession,
+  getUploadSession
+} from "../uploadSessions.js";
 
 const AddFriend = z.object({ username: z.string().min(2).max(32) });
 const OpenDm = z.object({ friendId: z.string().min(3) });
@@ -110,6 +118,24 @@ export async function socialRoutes(
       });
     }
     return byMessage;
+  }
+
+  async function resolveDmAttachmentUploadContext(userId: string, threadId: string) {
+    const thread = await q<{ id: string }>(
+      `SELECT id FROM social_dm_threads WHERE id=:threadId AND (user_a=:userId OR user_b=:userId) LIMIT 1`,
+      { threadId, userId }
+    );
+    if (!thread.length) return { error: "THREAD_NOT_FOUND" as const };
+
+    const counterparty = await getDmCounterpartyMeta(threadId, userId);
+    if (counterparty?.isNoReply) return { error: "OFFICIAL_ACCOUNT_NO_REPLY" as const };
+
+    const entitlement = await reconcileBoostBadge(userId);
+    return {
+      error: null,
+      tier: entitlement.active ? "boost" : "default",
+      maxUploadBytes: entitlement.active ? env.ATTACHMENT_BOOST_MAX_BYTES : env.ATTACHMENT_MAX_BYTES
+    };
   }
 
   app.get("/v1/social/friends", { preHandler: [app.authenticate] } as any, async (req: any) => {
@@ -379,18 +405,202 @@ export async function socialRoutes(
     };
   });
 
+  app.post("/v1/social/dms/:threadId/attachments/uploads/init", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
+    const userId = req.user.sub as string;
+    const { threadId } = z.object({ threadId: z.string().min(3) }).parse(req.params);
+    const body = z.object({
+      fileName: z.string().min(1).max(255),
+      contentType: z.string().max(255).optional(),
+      sizeBytes: z.coerce.number().int().min(0)
+    }).parse(req.body || {});
+
+    const uploadContext = await resolveDmAttachmentUploadContext(userId, threadId);
+    if (uploadContext.error === "THREAD_NOT_FOUND") return rep.code(404).send({ error: "THREAD_NOT_FOUND" });
+    if (uploadContext.error === "OFFICIAL_ACCOUNT_NO_REPLY") return rep.code(403).send({ error: "OFFICIAL_ACCOUNT_NO_REPLY" });
+    if (body.sizeBytes > uploadContext.maxUploadBytes) {
+      return rep.code(413).send({ error: "TOO_LARGE", maxBytes: uploadContext.maxUploadBytes });
+    }
+
+    const attachmentId = ulidLike();
+    const originalName = safeAttachmentFileName(body.fileName);
+    const contentType = String(body.contentType || "application/octet-stream").slice(0, 255);
+
+    const rootDir = path.resolve(env.ATTACHMENT_STORAGE_DIR, "social-dms");
+    const threadDir = path.resolve(rootDir, threadId);
+    ensureDir(rootDir);
+    ensureDir(threadDir);
+
+    const relPath = path.join(threadId, `${attachmentId}_${randomId(8)}_${originalName}`);
+    const absPath = path.resolve(rootDir, relPath);
+    if (!absPath.startsWith(threadDir + path.sep)) {
+      return rep.code(400).send({ error: "BAD_FILE_PATH" });
+    }
+
+    const session = createUploadSession({
+      rootDir,
+      attachmentId,
+      fileName: originalName,
+      contentType,
+      expectedSizeBytes: body.sizeBytes,
+      maxBytes: uploadContext.maxUploadBytes,
+      finalObjectKey: relPath,
+      chunkSizeBytes: DEFAULT_UPLOAD_CHUNK_BYTES,
+      context: {
+        threadId,
+        uploaderUserId: userId,
+        tier: uploadContext.tier
+      }
+    });
+
+    return rep.send({
+      uploadId: session.uploadId,
+      attachmentId,
+      fileName: originalName,
+      contentType,
+      sizeBytes: body.sizeBytes,
+      chunkSizeBytes: session.chunkSizeBytes,
+      uploadedBytes: 0,
+      tier: uploadContext.tier,
+      maxBytes: uploadContext.maxUploadBytes,
+      expiresAt: session.expiresAt
+    });
+  });
+
+  app.put("/v1/social/dms/:threadId/attachments/uploads/:uploadId/chunks", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
+    const userId = req.user.sub as string;
+    const { threadId, uploadId } = z.object({
+      threadId: z.string().min(3),
+      uploadId: z.string().min(8)
+    }).parse(req.params);
+    const { offset } = z.object({ offset: z.coerce.number().int().min(0) }).parse(req.query || {});
+
+    const session = getUploadSession(path.resolve(env.ATTACHMENT_STORAGE_DIR, "social-dms"), uploadId);
+    if (!session) return rep.code(404).send({ error: "UPLOAD_NOT_FOUND" });
+    if (String(session.context.threadId || "") !== threadId) return rep.code(404).send({ error: "UPLOAD_NOT_FOUND" });
+    if (String(session.context.uploaderUserId || "") !== userId) return rep.code(403).send({ error: "BAD_UPLOADER" });
+
+    const stream = (req.body || req.raw) as NodeJS.ReadableStream | undefined;
+    if (!stream || typeof (stream as { pipe?: unknown }).pipe !== "function") {
+      return rep.code(400).send({ error: "CHUNK_REQUIRED" });
+    }
+
+    try {
+      const result = await appendUploadChunk(path.resolve(env.ATTACHMENT_STORAGE_DIR, "social-dms"), uploadId, stream, offset);
+      if (result.error === "NOT_FOUND") return rep.code(404).send({ error: "UPLOAD_NOT_FOUND" });
+      if (result.error === "OFFSET_MISMATCH") {
+        return rep.code(409).send({
+          error: "OFFSET_MISMATCH",
+          uploadedBytes: result.uploadedBytes,
+          expectedSizeBytes: result.expectedSizeBytes
+        });
+      }
+
+      return rep.send({
+        ok: true,
+        attachmentId: session.attachmentId,
+        uploadedBytes: result.uploadedBytes,
+        expectedSizeBytes: result.expectedSizeBytes,
+        complete: result.complete
+      });
+    } catch (error: any) {
+      destroyUploadSession(path.resolve(env.ATTACHMENT_STORAGE_DIR, "social-dms"), uploadId);
+      if (String(error?.message || "") === "CHUNK_TOO_LARGE") {
+        return rep.code(413).send({ error: "CHUNK_TOO_LARGE", chunkSizeBytes: session.chunkSizeBytes });
+      }
+      if (String(error?.message || "") === "TOO_LARGE") {
+        return rep.code(413).send({ error: "TOO_LARGE", maxBytes: session.maxBytes });
+      }
+      return rep.code(500).send({ error: "UPLOAD_FAILED" });
+    }
+  });
+
+  app.post("/v1/social/dms/:threadId/attachments/uploads/:uploadId/complete", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
+    const userId = req.user.sub as string;
+    const { threadId, uploadId } = z.object({
+      threadId: z.string().min(3),
+      uploadId: z.string().min(8)
+    }).parse(req.params);
+
+    const rootDir = path.resolve(env.ATTACHMENT_STORAGE_DIR, "social-dms");
+    const session = getUploadSession(rootDir, uploadId);
+    if (!session) return rep.code(404).send({ error: "UPLOAD_NOT_FOUND" });
+    if (String(session.context.threadId || "") !== threadId) return rep.code(404).send({ error: "UPLOAD_NOT_FOUND" });
+    if (String(session.context.uploaderUserId || "") !== userId) return rep.code(403).send({ error: "BAD_UPLOADER" });
+
+    const uploadContext = await resolveDmAttachmentUploadContext(userId, threadId);
+    if (uploadContext.error === "THREAD_NOT_FOUND") return rep.code(404).send({ error: "THREAD_NOT_FOUND" });
+    if (uploadContext.error === "OFFICIAL_ACCOUNT_NO_REPLY") return rep.code(403).send({ error: "OFFICIAL_ACCOUNT_NO_REPLY" });
+
+    let finalized = null as ReturnType<typeof finalizeUploadSession> | null;
+    try {
+      finalized = finalizeUploadSession(rootDir, uploadId);
+    } catch (error: any) {
+      if (String(error?.message || "") === "INCOMPLETE_UPLOAD") {
+        return rep.code(400).send({ error: "INCOMPLETE_UPLOAD", uploadedBytes: session.uploadedBytes });
+      }
+      return rep.code(500).send({ error: "UPLOAD_FAILED" });
+    }
+    if (!finalized) return rep.code(404).send({ error: "UPLOAD_NOT_FOUND" });
+
+    const expiresAt = new Date(Date.now() + (env.ATTACHMENT_TTL_DAYS * 24 * 60 * 60 * 1000));
+    try {
+      await q(
+        `INSERT INTO social_dm_attachments
+          (id,thread_id,message_id,uploader_user_id,object_key,file_name,content_type,size_bytes,expires_at)
+         VALUES
+          (:id,:threadId,NULL,:uploaderUserId,:objectKey,:fileName,:contentType,:sizeBytes,:expiresAt)`,
+        {
+          id: finalized.attachmentId,
+          threadId,
+          uploaderUserId: userId,
+          objectKey: finalized.finalObjectKey,
+          fileName: finalized.fileName,
+          contentType: finalized.contentType,
+          sizeBytes: finalized.uploadedBytes,
+          expiresAt: toMariaTimestamp(expiresAt)
+        }
+      );
+    } catch (error) {
+      try { fs.unlinkSync(path.resolve(rootDir, finalized.finalObjectKey)); } catch {}
+      throw error;
+    }
+
+    return rep.send({
+      attachmentId: finalized.attachmentId,
+      fileName: finalized.fileName,
+      contentType: finalized.contentType,
+      sizeBytes: finalized.uploadedBytes,
+      tier: String(session.context.tier || uploadContext.tier),
+      maxBytes: session.maxBytes,
+      expiresAt: expiresAt.toISOString(),
+      url: `/v1/social/dms/attachments/${finalized.attachmentId}`
+    });
+  });
+
+  app.delete("/v1/social/dms/:threadId/attachments/uploads/:uploadId", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
+    const userId = req.user.sub as string;
+    const { threadId, uploadId } = z.object({
+      threadId: z.string().min(3),
+      uploadId: z.string().min(8)
+    }).parse(req.params);
+
+    const rootDir = path.resolve(env.ATTACHMENT_STORAGE_DIR, "social-dms");
+    const session = getUploadSession(rootDir, uploadId);
+    if (!session) return rep.send({ ok: true });
+    if (String(session.context.threadId || "") !== threadId) return rep.send({ ok: true });
+    if (String(session.context.uploaderUserId || "") !== userId) return rep.code(403).send({ error: "BAD_UPLOADER" });
+
+    destroyUploadSession(rootDir, uploadId);
+    return rep.send({ ok: true });
+  });
+
   app.post("/v1/social/dms/:threadId/attachments/upload", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
     const userId = req.user.sub as string;
     const { threadId } = z.object({ threadId: z.string().min(3) }).parse(req.params);
 
-    const thread = await q<{ id: string }>(
-      `SELECT id FROM social_dm_threads WHERE id=:threadId AND (user_a=:userId OR user_b=:userId) LIMIT 1`,
-      { threadId, userId }
-    );
-    if (!thread.length) return rep.code(404).send({ error: "THREAD_NOT_FOUND" });
-
-    const counterparty = await getDmCounterpartyMeta(threadId, userId);
-    if (counterparty?.isNoReply) return rep.code(403).send({ error: "OFFICIAL_ACCOUNT_NO_REPLY" });
+    const uploadContext = await resolveDmAttachmentUploadContext(userId, threadId);
+    if (uploadContext.error === "THREAD_NOT_FOUND") return rep.code(404).send({ error: "THREAD_NOT_FOUND" });
+    if (uploadContext.error === "OFFICIAL_ACCOUNT_NO_REPLY") return rep.code(403).send({ error: "OFFICIAL_ACCOUNT_NO_REPLY" });
 
     let filePart: any = null;
     for await (const part of req.parts()) {
@@ -402,10 +612,6 @@ export async function socialRoutes(
       }
     }
     if (!filePart) return rep.code(400).send({ error: "FILE_REQUIRED" });
-
-    const entitlement = await reconcileBoostBadge(userId);
-    const tier = entitlement.active ? "boost" : "default";
-    const maxUploadBytes = entitlement.active ? env.ATTACHMENT_BOOST_MAX_BYTES : env.ATTACHMENT_MAX_BYTES;
 
     const attachmentId = ulidLike();
     const originalName = safeAttachmentFileName(filePart.filename);
@@ -425,11 +631,11 @@ export async function socialRoutes(
 
     let sizeBytes = 0;
     try {
-      sizeBytes = await streamToFileWithLimit(filePart.file, absPath, maxUploadBytes);
+      sizeBytes = await streamToFileWithLimit(filePart.file, absPath, uploadContext.maxUploadBytes);
     } catch (error: any) {
       try { fs.unlinkSync(absPath); } catch {}
       if (String(error?.message || "") === "TOO_LARGE") {
-        return rep.code(413).send({ error: "TOO_LARGE", maxBytes: maxUploadBytes });
+        return rep.code(413).send({ error: "TOO_LARGE", maxBytes: uploadContext.maxUploadBytes });
       }
       return rep.code(500).send({ error: "UPLOAD_FAILED" });
     }
@@ -456,8 +662,8 @@ export async function socialRoutes(
       fileName: originalName,
       contentType,
       sizeBytes,
-      tier,
-      maxBytes: maxUploadBytes,
+      tier: uploadContext.tier,
+      maxBytes: uploadContext.maxUploadBytes,
       expiresAt: expiresAt.toISOString(),
       url: `/v1/social/dms/attachments/${attachmentId}`
     });

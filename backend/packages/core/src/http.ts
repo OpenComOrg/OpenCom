@@ -24,6 +24,12 @@ export function buildHttp() {
 
   app.register(cors, { origin: true, credentials: true });
   app.register(rateLimit, { max: 240, timeWindow: "1 minute" });
+  app.addContentTypeParser(
+    ["application/octet-stream", "application/offset+octet-stream"],
+    (req, payload, done) => {
+      done(null, payload);
+    }
+  );
   app.register(multipart, { limits: { fileSize: MAX_MULTIPART_BYTES } });
 
   app.register(jwt, { secret: env.CORE_JWT_ACCESS_SECRET });

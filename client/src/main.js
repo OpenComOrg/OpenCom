@@ -1,4 +1,13 @@
-import { app, BrowserWindow, dialog, shell, ipcMain, session, desktopCapturer } from "electron";
+import {
+  app,
+  BrowserWindow,
+  Notification,
+  dialog,
+  shell,
+  ipcMain,
+  session,
+  desktopCapturer,
+} from "electron";
 import { createServer } from "node:http";
 import fs from "node:fs";
 import path from "node:path";
@@ -21,6 +30,7 @@ const RPC_HOST = process.env.OPENCOM_RPC_HOST || "127.0.0.1";
 const RPC_PORT = Number(process.env.OPENCOM_RPC_PORT || 6483);
 
 let rpcServer = null;
+let mainWindow = null;
 const rpcAuthState = {
   accessToken: "",
   coreApi: ""
@@ -783,7 +793,7 @@ function installMediaHandlers() {
 }
 
 function createWindow() {
-  const mainWindow = new BrowserWindow({
+  mainWindow = new BrowserWindow({
     width: 1280,
     height: 800,
     minWidth: 1024,
@@ -858,6 +868,18 @@ function createWindow() {
       shell.openExternal(targetUrl);
     }
   });
+
+  mainWindow.on("closed", () => {
+    mainWindow = null;
+  });
+}
+
+function focusMainWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) return false;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+  return true;
 }
 
 function writeJson(rep, code, payload) {
@@ -1017,6 +1039,33 @@ ipcMain.handle("desktop:update:check", async (_event, payload = {}) => {
 ipcMain.handle("desktop:update:install", async () => {
   return installAvailableDesktopUpdate();
 });
+
+ipcMain.handle("desktop:notify", async (_event, payload = {}) => {
+  const title =
+    typeof payload.title === "string" && payload.title.trim()
+      ? payload.title.trim()
+      : "OpenCom";
+  const body = typeof payload.body === "string" ? payload.body.trim() : "";
+  const tag = typeof payload.tag === "string" ? payload.tag.trim() : "";
+  const silent = payload.silent === true;
+
+  if (!Notification.isSupported()) return { ok: false, unsupported: true };
+
+  const notification = new Notification({
+    title,
+    body,
+    silent,
+    ...(fs.existsSync(LOCAL_ICON) ? { icon: LOCAL_ICON } : {}),
+  });
+  notification.on("click", () => {
+    focusMainWindow();
+  });
+  notification.show();
+
+  return { ok: true, tag };
+});
+
+ipcMain.handle("desktop:focus-window", () => ({ ok: focusMainWindow() }));
 
 app.whenReady().then(() => {
   installMediaHandlers();

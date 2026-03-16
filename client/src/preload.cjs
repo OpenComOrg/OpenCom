@@ -10,6 +10,8 @@ contextBridge.exposeInMainWorld("opencomDesktopBridge", {
   checkForUpdates: (payload = {}) =>
     ipcRenderer.invoke("desktop:update:check", payload || {}),
   installUpdate: () => ipcRenderer.invoke("desktop:update:install"),
+  notify: (payload = {}) => ipcRenderer.invoke("desktop:notify", payload || {}),
+  focusWindow: () => ipcRenderer.invoke("desktop:focus-window"),
   getDisplaySources: () => ipcRenderer.invoke("desktop:display-sources:get").then((result) => result?.sources || []),
   pickDisplaySource: () => ipcRenderer.invoke("desktop:display-source:pick").then((result) => result?.sourceId || null),
   prompt: (text, defaultValue = "", title = "OpenCom") =>

@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { q } from "../db.js";
 import { env } from "../env.js";
+import { sendMobilePushToUser } from "../pushNotifications.js";
 
 const NodeSyncBody = z.object({
   nodeServerId: z.string().min(1),
@@ -18,6 +19,23 @@ const NodeExtensionStateBody = z.object({
   nodeServerId: z.string().min(1),
   baseUrl: z.string().url().optional()
 });
+
+const MentionNotificationBody = z.object({
+  userIds: z.array(z.string().min(1)).min(1).max(200),
+  serverId: z.string().min(1),
+  guildId: z.string().min(1),
+  channelId: z.string().min(1),
+  serverName: z.string().trim().min(1).max(120),
+  channelName: z.string().trim().min(1).max(120),
+  authorName: z.string().trim().min(1).max(120),
+  preview: z.string().trim().max(180).optional().default(""),
+  mentionEveryone: z.boolean().optional().default(false)
+});
+
+function buildAppDeepLink(path: string) {
+  const normalized = String(path || "").replace(/^\/+/, "");
+  return `opencom://${normalized}`;
+}
 
 export async function nodeSyncRoutes(app: FastifyInstance) {
   if (!env.CORE_NODE_SYNC_SECRET) {
@@ -62,6 +80,49 @@ export async function nodeSyncRoutes(app: FastifyInstance) {
     }
 
     return rep.send({ ok: true, serversSynced: uniqueServerIds.length, guildsReported: body.guilds.length });
+  });
+
+  app.post("/v1/internal/mobile-notify-mentions", async (req: any, rep) => {
+    const secret = req.headers["x-node-sync-secret"];
+    if (secret !== env.CORE_NODE_SYNC_SECRET) {
+      return rep.code(401).send({ error: "INVALID_SYNC_SECRET" });
+    }
+
+    const parsed = MentionNotificationBody.safeParse(req.body || {});
+    if (!parsed.success) {
+      return rep.code(400).send({ error: "INVALID_SYNC_BODY" });
+    }
+
+    const body = parsed.data;
+    const userIds = Array.from(new Set(body.userIds.filter(Boolean)));
+    const preview = body.preview.trim();
+    const title = body.mentionEveryone
+      ? `${body.authorName} mentioned everyone`
+      : `${body.authorName} mentioned you`;
+    const messageBody = preview
+      ? `#${body.channelName} in ${body.serverName}: ${preview}`
+      : `#${body.channelName} in ${body.serverName}`;
+
+    await Promise.all(
+      userIds.map((userId) =>
+        sendMobilePushToUser({
+          userId,
+          title,
+          body: messageBody,
+          data: {
+            deepLink: buildAppDeepLink(
+              `channel/${body.serverId}/${body.guildId}/${body.channelId}`,
+            ),
+            kind: "mention",
+            serverId: body.serverId,
+            guildId: body.guildId,
+            channelId: body.channelId
+          }
+        }),
+      ),
+    );
+
+    return rep.send({ ok: true, notified: userIds.length });
   });
 
   app.post("/v1/internal/node-extensions-state", async (req: any, rep) => {

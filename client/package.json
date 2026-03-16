@@ -1,6 +1,6 @@
 {
   "name": "opencom-client",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Desktop wrapper for OpenCom frontend",
   "homepage": "https://opencom.online",
   "author": {
@@ -25,7 +25,7 @@
     "stage:aur": "node scripts/stage-aur.mjs",
     "build:stage:linux": "node scripts/build-and-stage.mjs linux",
     "build:stage:win": "node scripts/build-and-stage.mjs win",
-    "build:stage:all": "npm run build:stage:linux && npm run build:stage:win",
+    "build:stage:all": "npm run build:stage:linux && npm run build:aur -- --skip-build && npm run build:stage:win",
     "check:minimatch": "node scripts/check-minimatch.mjs",
     "check:mismatch": "npm run check:minimatch",
     "audit:runtime": "npm audit --omit=dev",

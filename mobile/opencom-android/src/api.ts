@@ -11,6 +11,9 @@ import type {
   MemberProfile,
   MyProfile,
   PinnedMessage,
+  PrivateCallCreateResult,
+  PrivateCallJoinResult,
+  PrivateCallStatusResult,
   Role,
   UserStatus,
   VoiceState,
@@ -253,7 +256,7 @@ export function createApiClient(input: {
         type: "image/jpeg",
       });
       const response = await coreRequestRaw(
-        `/v1/me/profile/upload/${fieldName}`,
+        `/v1/me/profile/${fieldName}`,
         {
           method: "POST",
           rawBody: formData,
@@ -272,14 +275,27 @@ export function createApiClient(input: {
       });
     },
 
-    getPresence(userIds: string[]) {
+    async getPresence(userIds: string[]) {
       const params = new URLSearchParams({ userIds: userIds.join(",") });
-      return coreRequest<{
-        presence: Record<
+      const raw = await coreRequest<
+        | {
+            presence: Record<
+              string,
+              { status: string; customStatus?: string | null }
+            >;
+          }
+        | Record<string, { status: string; customStatus?: string | null }>
+      >(`/v1/presence?${params.toString()}`);
+      const presence =
+        raw && typeof raw === "object" && "presence" in raw
+          ? raw.presence || {}
+          : raw || {};
+      return {
+        presence: presence as Record<
           string,
           { status: string; customStatus?: string | null }
-        >;
-      }>(`/v1/presence?${params.toString()}`);
+        >,
+      };
     },
 
     // ─── Sessions ─────────────────────────────────────────────────────────────
@@ -741,6 +757,37 @@ export function createApiClient(input: {
       return coreRequest<{ threadId: string }>("/v1/social/dms/open", {
         method: "POST",
         body: { friendId },
+      });
+    },
+
+    createPrivateCall(friendId: string) {
+      return coreRequest<PrivateCallCreateResult>("/call/create", {
+        method: "POST",
+        body: { id: friendId },
+      });
+    },
+
+    joinPrivateCall(callId: string) {
+      return coreRequest<PrivateCallJoinResult>("/call/join", {
+        method: "POST",
+        body: { callId },
+      });
+    },
+
+    getPrivateCallStatus(callId: string, options?: { requireConnected?: boolean }) {
+      return coreRequest<PrivateCallStatusResult>("/call/get_status", {
+        method: "POST",
+        body: {
+          callId,
+          requireConnected: options?.requireConnected === true,
+        },
+      });
+    },
+
+    endPrivateCall(callId?: string) {
+      return coreRequest<{ success: boolean; message?: string }>("/call/end", {
+        method: "POST",
+        body: callId ? { callId } : {},
       });
     },
 

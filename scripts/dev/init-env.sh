@@ -13,10 +13,11 @@ Pass-through options are forwarded to scripts/env/generate-env.mjs.
 Common options:
   --frontend-url=<url>   Frontend public URL
   --core-url=<url>       Core API URL
+  --klipy-api-key=<key>  Optional Klipy partner key for the media picker
   -h, --help             Show this help and exit
 
 Example:
-  ./scripts/dev/init-env.sh --frontend-url=https://opencom.example --core-url=https://openapi.example
+  ./scripts/dev/init-env.sh --frontend-url=https://opencom.example --core-url=https://openapi.example --klipy-api-key=your_test_key
 USAGE
 }
 
@@ -28,7 +29,7 @@ fi
 cat <<MSG
 [env-init] Generating backend/.env and frontend/.env with secure defaults.
 [env-init] You can override values via flags, e.g.:
-  ./scripts/dev/init-env.sh --frontend-url=https://opencom.donskyblock.xyz --core-url=https://openapi.donskyblock.xyz
+  ./scripts/dev/init-env.sh --frontend-url=https://opencom.donskyblock.xyz --core-url=https://openapi.donskyblock.xyz --klipy-api-key=your_test_key
 MSG
 
 node "$ROOT_DIR/scripts/env/generate-env.mjs" "$@"

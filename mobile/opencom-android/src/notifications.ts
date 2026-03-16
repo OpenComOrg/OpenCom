@@ -37,6 +37,8 @@ export async function registerForPushNotificationsAsync(): Promise<string> {
   if (finalStatus !== "granted") return "";
 
   const projectId =
+    process.env.EXPO_PUBLIC_OPENCOM_EXPO_PROJECT_ID ||
+    Constants.expoConfig?.extra?.opencomExpoProjectId ||
     Constants.expoConfig?.extra?.eas?.projectId ||
     Constants.easConfig?.projectId ||
     undefined;

@@ -409,42 +409,43 @@ function ProfileTab() {
 // ─── Status tab ───────────────────────────────────────────────────────────────
 
 function StatusTab() {
-  const { api, selfStatus, setSelfStatus } = useAuth();
+  const {
+    me,
+    selfStatus,
+    selfCustomStatus,
+    setSelfStatus,
+    setSelfCustomStatus,
+    updatePresence,
+  } = useAuth();
 
   const [customStatus, setCustomStatus] = useState("");
-  const [saving, setSaving] = useState(false);
   const [feedback, setFeedback] = useState("");
 
+  useEffect(() => {
+    setCustomStatus(selfCustomStatus ?? "");
+  }, [selfCustomStatus]);
+
   const handleSetStatus = useCallback(
-    async (status: UserStatus) => {
-      setSaving(true);
+    (status: UserStatus) => {
       setFeedback("");
-      try {
-        await api.setStatus(status, customStatus.trim() || null);
-        setSelfStatus(status);
-        setFeedback("Status updated!");
-      } catch {
-        setFeedback("Failed to update status.");
-      } finally {
-        setSaving(false);
+      setSelfStatus(status);
+      if (me?.id) {
+        updatePresence(me.id, status, selfCustomStatus);
       }
+      setFeedback("Status updated!");
     },
-    [api, customStatus, setSelfStatus],
+    [me?.id, selfCustomStatus, setSelfStatus, updatePresence],
   );
 
-  const handleSaveCustomStatus = useCallback(async () => {
-    if (saving) return;
-    setSaving(true);
+  const handleSaveCustomStatus = useCallback(() => {
+    const nextCustomStatus = customStatus.trim() || null;
     setFeedback("");
-    try {
-      await api.setStatus(selfStatus, customStatus.trim() || null);
-      setFeedback("Custom status saved!");
-    } catch {
-      setFeedback("Failed to save status.");
-    } finally {
-      setSaving(false);
+    setSelfCustomStatus(nextCustomStatus);
+    if (me?.id) {
+      updatePresence(me.id, selfStatus, nextCustomStatus);
     }
-  }, [api, selfStatus, customStatus, saving]);
+    setFeedback("Custom status saved!");
+  }, [customStatus, me?.id, selfStatus, setSelfCustomStatus, updatePresence]);
 
   return (
     <ScrollView contentContainerStyle={styles.tabContent}>
@@ -480,20 +481,11 @@ function StatusTab() {
             placeholder="Set a custom status…"
             placeholderTextColor={colors.textDim}
             maxLength={128}
-            editable={!saving}
           />
         </View>
         <View style={[styles.inputGroup, styles.inputGroupLast]}>
-          <Pressable
-            style={[styles.saveBtn, saving && styles.saveBtnDisabled]}
-            onPress={handleSaveCustomStatus}
-            disabled={saving}
-          >
-            {saving ? (
-              <ActivityIndicator size="small" color="#fff" />
-            ) : (
-              <Text style={styles.saveBtnText}>Save Status</Text>
-            )}
+          <Pressable style={styles.saveBtn} onPress={handleSaveCustomStatus}>
+            <Text style={styles.saveBtnText}>Save Status</Text>
           </Pressable>
         </View>
       </Section>

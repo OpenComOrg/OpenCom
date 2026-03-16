@@ -103,6 +103,8 @@ These commands build and then copy installer artifacts into `frontend/`:
 - `frontend/OpenCom.tar.gz`
 - `frontend/OpenCom.exe` (Windows NSIS installer)
 
+`./scripts/build-all.sh` also stages the Arch/AUR package skeleton from the Linux artifacts via `build-aur --skip-build`, so the release flow now covers Linux, AUR, and Windows in one pass.
+
 Direct script entrypoints are also available:
 
 ```bash

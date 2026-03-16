@@ -12,6 +12,9 @@ RUN_INSTALL=1
 ASSUME_YES=0
 MARIADB_ROOT_USER="root"
 INIT_ENV_ARGS=()
+PRESERVED_KLIPY_API_KEY=""
+PRESERVED_KLIPY_API_BASE_URL=""
+PRESERVED_KLIPY_CLIENT_KEY=""
 
 print_usage() {
   cat <<'USAGE'
@@ -40,6 +43,7 @@ Examples:
   ./scripts/dev/reconfigure.sh --yes
   ./scripts/dev/reconfigure.sh --yes --with-minio
   ./scripts/dev/reconfigure.sh --yes --frontend-url=https://opencom.local --core-url=https://api.opencom.local
+  ./scripts/dev/reconfigure.sh --yes --klipy-api-key=your_test_key
   ./scripts/dev/reconfigure.sh --yes --local-db --mariadb-root-user=root
 USAGE
 }
@@ -95,6 +99,26 @@ append_init_env_default() {
     return
   fi
   INIT_ENV_ARGS+=("--${key}=${value}")
+}
+
+read_env_value_from_file() {
+  local file="$1"
+  local key="$2"
+  if [[ ! -f "$file" ]]; then
+    return
+  fi
+  local line
+  line="$(rg -m1 "^${key}=" "$file" || true)"
+  if [[ -z "$line" ]]; then
+    return
+  fi
+  printf '%s' "${line#*=}"
+}
+
+capture_existing_env_defaults() {
+  PRESERVED_KLIPY_API_KEY="$(read_env_value_from_file "$BACKEND_ENV" "KLIPY_API_KEY")"
+  PRESERVED_KLIPY_API_BASE_URL="$(read_env_value_from_file "$BACKEND_ENV" "KLIPY_API_BASE_URL")"
+  PRESERVED_KLIPY_CLIENT_KEY="$(read_env_value_from_file "$BACKEND_ENV" "KLIPY_CLIENT_KEY")"
 }
 
 confirm_destructive_action() {
@@ -177,6 +201,15 @@ generate_env_files() {
   append_init_env_default "voice-gateway-url" "ws://localhost:3002/gateway"
   append_init_env_default "node-public-url" "http://localhost:3002"
   append_init_env_default "redis-url" "redis://localhost:6379"
+  if [[ -n "$PRESERVED_KLIPY_API_KEY" ]]; then
+    append_init_env_default "klipy-api-key" "$PRESERVED_KLIPY_API_KEY"
+  fi
+  if [[ -n "$PRESERVED_KLIPY_API_BASE_URL" ]]; then
+    append_init_env_default "klipy-api-base-url" "$PRESERVED_KLIPY_API_BASE_URL"
+  fi
+  if [[ -n "$PRESERVED_KLIPY_CLIENT_KEY" ]]; then
+    append_init_env_default "klipy-client-key" "$PRESERVED_KLIPY_CLIENT_KEY"
+  fi
 
   if [[ "$MODE" == "docker" ]]; then
     append_init_env_default "core-db" "mysql://ods:ods@localhost:3307/ods_core"
@@ -250,6 +283,7 @@ main() {
   require_node_major 22
 
   confirm_destructive_action
+  capture_existing_env_defaults
   reset_docker_state
   reset_local_state
   install_dependencies

@@ -1,0 +1,1 @@
+import{j as e,c as t,R as r}from"./client-D1ZVDB-N.js";import{T as o}from"./ThemeStudioApp-LpL6fKlw.js";function a(){return e.jsx(o,{defaultTab:"creator",standalone:!0})}t(document.getElementById("root")).render(e.jsx(r.StrictMode,{children:e.jsx(a,{})}));

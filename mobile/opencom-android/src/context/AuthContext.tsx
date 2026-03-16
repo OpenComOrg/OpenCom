@@ -8,7 +8,7 @@ import {
 } from "react";
 import { createApiClient } from "../api";
 import { resolveCoreApiUrl } from "../config";
-import { loadTokens, saveTokens, clearTokens } from "../storage";
+import { saveTokens, clearTokens } from "../storage";
 import type {
   AuthTokens,
   CoreServer,
@@ -45,6 +45,8 @@ export type AuthContextValue = {
   // Self status (set by user)
   selfStatus: UserStatus;
   setSelfStatus: (status: UserStatus) => void;
+  selfCustomStatus: string | null;
+  setSelfCustomStatus: (customStatus: string | null) => void;
 
   // Servers
   servers: CoreServer[];
@@ -74,6 +76,21 @@ export type AuthContextValue = {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
+function normalizeUserStatus(value: string | null | undefined): UserStatus {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase();
+  if (
+    normalized === "idle" ||
+    normalized === "dnd" ||
+    normalized === "offline" ||
+    normalized === "invisible"
+  ) {
+    return normalized;
+  }
+  return "online";
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const coreApiUrl = useMemo(() => resolveCoreApiUrl(), []);
   const tokensRef = useRef<AuthTokens | null>(null);
@@ -82,6 +99,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [me, setMe] = useState<{ id: string; username: string } | null>(null);
   const [myProfile, setMyProfile] = useState<MyProfile | null>(null);
   const [selfStatus, setSelfStatus] = useState<UserStatus>("online");
+  const [selfCustomStatus, setSelfCustomStatus] = useState<string | null>(null);
   const [servers, setServers] = useState<CoreServer[]>([]);
   const [presenceByUserId, setPresenceByUserId] = useState<PresenceMap>({});
   const [dmThreads, setDmThreads] = useState<DmThreadApi[]>([]);
@@ -98,6 +116,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       await clearTokens();
       setMe(null);
       setMyProfile(null);
+      setSelfStatus("online");
+      setSelfCustomStatus(null);
       setServers([]);
       setPresenceByUserId({});
       setDmThreads([]);
@@ -123,12 +143,33 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   );
 
   const refreshServers = useCallback(async () => {
-    const [meData, serversData] = await Promise.all([
-      api.getMe(),
+    const meData = await api.getMe();
+    const [serversData, presenceData] = await Promise.all([
       api.getServers(),
+      api.getPresence([meData.id]).catch(() => ({
+        presence: {} as Record<
+          string,
+          { status: string; customStatus?: string | null }
+        >,
+      })),
     ]);
     setMe({ id: meData.id, username: meData.username });
     setServers(serversData.servers || []);
+    const selfPresence = presenceData.presence?.[meData.id];
+    if (selfPresence?.status) {
+      const normalizedStatus = normalizeUserStatus(selfPresence.status);
+      setSelfStatus(normalizedStatus);
+      setSelfCustomStatus(selfPresence.customStatus ?? null);
+      setPresenceByUserId((prev) => ({
+        ...prev,
+        [meData.id]: {
+          status: normalizedStatus,
+          customStatus: selfPresence.customStatus ?? null,
+        },
+      }));
+    } else {
+      setSelfCustomStatus(null);
+    }
   }, [api]);
 
   const refreshMyProfile = useCallback(async () => {
@@ -214,6 +255,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       refreshMyProfile,
       selfStatus,
       setSelfStatus,
+      selfCustomStatus,
+      setSelfCustomStatus,
       servers,
       setServers,
       refreshServers,
@@ -235,6 +278,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       myProfile,
       refreshMyProfile,
       selfStatus,
+      selfCustomStatus,
       servers,
       refreshServers,
       presenceByUserId,

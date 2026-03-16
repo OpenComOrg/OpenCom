@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   ChannelMessage,
   DmMessageApi,
   GatewayEvent,
   NodeGatewayEvent,
+  VoiceProducerSource,
 } from "../types";
 
 // ─── URL helpers ─────────────────────────────────────────────────────────────
@@ -49,6 +50,18 @@ type UseNodeGatewayOptions = {
   channelId?: string | null;
   onEvent: NodeGatewayEventHandler;
   enabled?: boolean;
+};
+
+export type CoreGatewayController = {
+  connected: boolean;
+  ready: boolean;
+  sendDispatch: (t: string, d?: Record<string, unknown>) => boolean;
+};
+
+export type NodeGatewayController = {
+  connected: boolean;
+  ready: boolean;
+  sendDispatch: (t: string, d?: Record<string, unknown>) => boolean;
 };
 
 function isDispatchMessage(msg: { op: unknown; t?: string }) {
@@ -133,6 +146,11 @@ function normalizeDmMessage(raw: any): DmMessageApi {
   };
 }
 
+function normalizeVoiceProducerSource(value: unknown): VoiceProducerSource {
+  if (value === "camera" || value === "screen") return value;
+  return "microphone";
+}
+
 // ─── Core gateway hook ───────────────────────────────────────────────────────
 // Connects to the main platform gateway for real-time DMs, presence and calls.
 
@@ -141,13 +159,16 @@ export function useCoreGateway({
   accessToken,
   onEvent,
   enabled = true,
-}: UseCoreGatewayOptions): void {
+}: UseCoreGatewayOptions): CoreGatewayController {
   const wsRef = useRef<WebSocket | null>(null);
   const heartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const reconnectRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const attemptRef = useRef(0);
   const disposedRef = useRef(false);
   const onEventRef = useRef(onEvent);
+  const [connected, setConnected] = useState(false);
+  const [ready, setReady] = useState(false);
+  const readyRef = useRef(false);
   onEventRef.current = onEvent;
 
   const cleanup = useCallback(() => {
@@ -160,10 +181,19 @@ export function useCoreGateway({
       reconnectRef.current = null;
     }
     if (wsRef.current) {
+      wsRef.current.onopen = null;
+      wsRef.current.onmessage = null;
+      wsRef.current.onerror = null;
+      wsRef.current.onclose = null;
       try {
         wsRef.current.close();
       } catch {}
       wsRef.current = null;
+    }
+    readyRef.current = false;
+    if (!disposedRef.current) {
+      setConnected(false);
+      setReady(false);
     }
   }, []);
 
@@ -182,6 +212,7 @@ export function useCoreGateway({
     wsRef.current = ws;
 
     ws.onopen = () => {
+      setConnected(true);
       ws.send(JSON.stringify({ op: "IDENTIFY", d: { accessToken } }));
     };
 
@@ -202,13 +233,22 @@ export function useCoreGateway({
             ws.send(JSON.stringify({ op: "HEARTBEAT" }));
           }
         }, interval);
+        return;
+      }
+
+      if (msg.op === "READY") {
         attemptRef.current = 0;
+        readyRef.current = true;
+        setReady(true);
         return;
       }
 
       if (isDispatchMessage(msg) && msg.t) {
         const d = msg.d ?? {};
         switch (msg.t) {
+          case "PRESENCE_SYNC_REQUEST":
+            onEventRef.current({ type: "PRESENCE_SYNC_REQUEST" });
+            break;
           case "SELF_STATUS":
             onEventRef.current({
               type: "SELF_STATUS",
@@ -298,6 +338,7 @@ export function useCoreGateway({
               type: "FRIEND_ACCEPTED",
               friendId: d.friendId ?? "",
               username: d.username ?? "",
+              threadId: d.threadId ?? undefined,
             });
             break;
           default:
@@ -311,6 +352,11 @@ export function useCoreGateway({
     };
 
     ws.onclose = () => {
+      readyRef.current = false;
+      if (!disposedRef.current) {
+        setConnected(false);
+        setReady(false);
+      }
       if (heartbeatRef.current) {
         clearInterval(heartbeatRef.current);
         heartbeatRef.current = null;
@@ -330,6 +376,24 @@ export function useCoreGateway({
       cleanup();
     };
   }, [enabled, wsUrl, accessToken]); // eslint-disable-line
+
+  const sendDispatch = useCallback(
+    (t: string, d: Record<string, unknown> = {}) => {
+      const ws = wsRef.current;
+      if (!ws || ws.readyState !== WebSocket.OPEN || !readyRef.current) {
+        return false;
+      }
+      ws.send(JSON.stringify({ op: "DISPATCH", t, d }));
+      return true;
+    },
+    [],
+  );
+
+  return {
+    connected,
+    ready,
+    sendDispatch,
+  };
 }
 
 // ─── Node gateway hook ───────────────────────────────────────────────────────
@@ -342,13 +406,17 @@ export function useNodeGateway({
   channelId,
   onEvent,
   enabled = true,
-}: UseNodeGatewayOptions): void {
+}: UseNodeGatewayOptions): NodeGatewayController {
   const wsRef = useRef<WebSocket | null>(null);
   const heartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const reconnectRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const attemptRef = useRef(0);
   const disposedRef = useRef(false);
   const onEventRef = useRef(onEvent);
+  const [connected, setConnected] = useState(false);
+  const [ready, setReady] = useState(false);
+  const connectedRef = useRef(false);
+  const readyRef = useRef(false);
   onEventRef.current = onEvent;
 
   const cleanup = useCallback(() => {
@@ -360,7 +428,17 @@ export function useNodeGateway({
       clearTimeout(reconnectRef.current);
       reconnectRef.current = null;
     }
+    connectedRef.current = false;
+    readyRef.current = false;
+    if (!disposedRef.current) {
+      setConnected(false);
+      setReady(false);
+    }
     if (wsRef.current) {
+      wsRef.current.onopen = null;
+      wsRef.current.onmessage = null;
+      wsRef.current.onerror = null;
+      wsRef.current.onclose = null;
       try {
         wsRef.current.close();
       } catch {}
@@ -383,6 +461,8 @@ export function useNodeGateway({
     wsRef.current = ws;
 
     ws.onopen = () => {
+      connectedRef.current = true;
+      setConnected(true);
       ws.send(JSON.stringify({ op: "IDENTIFY", d: { membershipToken } }));
     };
 
@@ -408,6 +488,8 @@ export function useNodeGateway({
       }
 
       if (msg.op === "READY") {
+        readyRef.current = true;
+        setReady(true);
         if (guildId) {
           ws.send(
             JSON.stringify({
@@ -494,6 +576,76 @@ export function useNodeGateway({
               speaking: d.speaking ?? false,
             });
             break;
+          case "VOICE_JOINED":
+            onEventRef.current({
+              type: "VOICE_JOINED",
+              guildId: d.guildId ?? "",
+              channelId: d.channelId ?? "",
+              requestId: typeof d.requestId === "string" ? d.requestId : undefined,
+              producers: Array.isArray(d.producers)
+                ? d.producers
+                    .map((producer: any) => ({
+                      producerId: String(producer?.producerId ?? ""),
+                      userId: String(producer?.userId ?? ""),
+                      source: normalizeVoiceProducerSource(producer?.source),
+                    }))
+                    .filter(
+                      (producer: {
+                        producerId: string;
+                        userId: string;
+                      }) => producer.producerId && producer.userId,
+                    )
+                : [],
+            });
+            break;
+          case "VOICE_LEFT":
+            onEventRef.current({
+              type: "VOICE_LEFT",
+              ok: d.ok !== false,
+            });
+            break;
+          case "VOICE_NEW_PRODUCER":
+            if (d.userId && d.producerId) {
+              onEventRef.current({
+                type: "VOICE_NEW_PRODUCER",
+                guildId: d.guildId ?? "",
+                channelId: d.channelId ?? "",
+                userId: d.userId,
+                producerId: d.producerId,
+                source: normalizeVoiceProducerSource(d.source),
+              });
+            }
+            break;
+          case "VOICE_PRODUCER_CLOSED":
+            if (d.userId && d.producerId) {
+              onEventRef.current({
+                type: "VOICE_PRODUCER_CLOSED",
+                guildId: d.guildId ?? "",
+                channelId: d.channelId ?? "",
+                userId: d.userId,
+                producerId: d.producerId,
+              });
+            }
+            break;
+          case "VOICE_USER_LEFT":
+            if (d.userId) {
+              onEventRef.current({
+                type: "VOICE_USER_LEFT",
+                guildId: d.guildId ?? "",
+                channelId: d.channelId ?? "",
+                userId: d.userId,
+              });
+            }
+            break;
+          case "VOICE_ERROR":
+            onEventRef.current({
+              type: "VOICE_ERROR",
+              error: d.error ?? "VOICE_ERROR",
+              code: typeof d.code === "string" ? d.code : undefined,
+              details: typeof d.details === "string" ? d.details : undefined,
+              requestId: typeof d.requestId === "string" ? d.requestId : undefined,
+            });
+            break;
           default:
             break;
         }
@@ -503,6 +655,12 @@ export function useNodeGateway({
     ws.onerror = () => {};
 
     ws.onclose = () => {
+      connectedRef.current = false;
+      readyRef.current = false;
+      if (!disposedRef.current) {
+        setConnected(false);
+        setReady(false);
+      }
       if (heartbeatRef.current) {
         clearInterval(heartbeatRef.current);
         heartbeatRef.current = null;
@@ -522,4 +680,22 @@ export function useNodeGateway({
       cleanup();
     };
   }, [enabled, wsUrl, membershipToken, guildId, channelId]); // eslint-disable-line
+
+  const sendDispatch = useCallback(
+    (t: string, d: Record<string, unknown> = {}) => {
+      const ws = wsRef.current;
+      if (!ws || ws.readyState !== WebSocket.OPEN || !readyRef.current) {
+        return false;
+      }
+      ws.send(JSON.stringify({ op: "DISPATCH", t, d }));
+      return true;
+    },
+    [],
+  );
+
+  return {
+    connected,
+    ready,
+    sendDispatch,
+  };
 }

@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { SafeAvatar } from "./ui/SafeAvatar";
+import { HeadphonesIcon, MicrophoneIcon } from "./ui/VoiceIcons";
 
 export function VoiceChannel({ 
   channelId, 
@@ -88,8 +89,15 @@ export function VoiceChannel({
               />
               <div>
                 {member.username}
-                {member.muted && <span> 🔇</span>}
-                {member.deafened && <span> 🔇🔇</span>}
+                {member.deafened ? (
+                  <span style={{ marginInlineStart: "6px" }}>
+                    <HeadphonesIcon deafened size={13} />
+                  </span>
+                ) : member.muted ? (
+                  <span style={{ marginInlineStart: "6px" }}>
+                    <MicrophoneIcon muted size={13} />
+                  </span>
+                ) : null}
               </div>
             </div>
           ))}
@@ -111,7 +119,16 @@ export function VoiceChannel({
               className={isMuted ? "danger" : ""}
               style={{ flex: 1 }}
             >
-              {isMuted ? "Unmute" : "Mute"}
+              <span
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "8px",
+                }}
+              >
+                <MicrophoneIcon muted={isMuted} size={16} />
+                <span>{isMuted ? "Unmute" : "Mute"}</span>
+              </span>
             </button>
             <button 
               onClick={() => {
@@ -121,7 +138,16 @@ export function VoiceChannel({
               className={isDeafened ? "danger" : ""}
               style={{ flex: 1 }}
             >
-              {isDeafened ? "Undeafen" : "Deafen"}
+              <span
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "8px",
+                }}
+              >
+                <HeadphonesIcon deafened={isDeafened} size={16} />
+                <span>{isDeafened ? "Undeafen" : "Deafen"}</span>
+              </span>
             </button>
             <button onClick={handleDisconnect} className="danger" style={{ flex: 1 }}>
               Leave

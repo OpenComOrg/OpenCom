@@ -18,7 +18,6 @@ import {
   TopBar,
 } from "../components/chrome";
 import { useAuth } from "../context/AuthContext";
-import { useCoreGateway, httpToCoreGatewayWs } from "../hooks/useGateway";
 import { colors, radii, spacing, typography } from "../theme";
 import type { DmThreadApi } from "../types";
 
@@ -49,21 +48,15 @@ function formatLastTime(iso: string | null | undefined): string {
 export function DmsScreen({ onSelectDm }: DmsScreenProps) {
   const {
     api,
-    tokens,
-    coreApiUrl,
     presenceByUserId,
     dmThreads,
+    dmMessages,
     setDmThreads,
-    upsertDmMessage,
-    updatePresence,
   } = useAuth();
 
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [status, setStatus] = useState("");
-
-  const gatewayWsUrl = httpToCoreGatewayWs(coreApiUrl);
-
   const loadDms = useCallback(
     async (silent = false) => {
       if (!silent) setLoading(true);
@@ -89,32 +82,6 @@ export function DmsScreen({ onSelectDm }: DmsScreenProps) {
     setRefreshing(true);
     loadDms(true);
   }, [loadDms]);
-
-  useCoreGateway({
-    wsUrl: gatewayWsUrl,
-    accessToken: tokens?.accessToken ?? null,
-    enabled: !!tokens?.accessToken,
-    onEvent: useCallback(
-      (event) => {
-        if (event.type === "DM_NEW_MESSAGE") {
-          upsertDmMessage(event.threadId, event.message);
-          setDmThreads((prev) => {
-            const exists = prev.some((thread) => thread.id === event.threadId);
-            if (!exists) {
-              api
-                .getDms()
-                .then((data) => setDmThreads(data.dms ?? []))
-                .catch(() => {});
-            }
-            return prev;
-          });
-        } else if (event.type === "PRESENCE_UPDATE") {
-          updatePresence(event.userId, event.status, event.customStatus);
-        }
-      },
-      [api, setDmThreads, updatePresence, upsertDmMessage],
-    ),
-  });
 
   const onlineThreads = useMemo(
     () =>
@@ -207,11 +174,16 @@ export function DmsScreen({ onSelectDm }: DmsScreenProps) {
           }
           ItemSeparatorComponent={() => <View style={{ height: spacing.sm }} />}
           renderItem={({ item }) => {
+            const latestCachedMessage = dmMessages[item.id]?.[0];
+            const previewSource =
+              item.lastMessageContent ?? latestCachedMessage?.content ?? null;
+            const previewTimestamp =
+              item.lastMessageAt ?? latestCachedMessage?.createdAt ?? null;
             const presence = presenceByUserId[item.participantId];
-            const preview = item.lastMessageContent
-              ? item.lastMessageContent.length > 72
-                ? item.lastMessageContent.slice(0, 72) + "…"
-                : item.lastMessageContent
+            const preview = previewSource
+              ? previewSource.length > 72
+                ? previewSource.slice(0, 72) + "…"
+                : previewSource
               : presence?.customStatus || presence?.status || "No messages yet";
 
             return (
@@ -236,7 +208,7 @@ export function DmsScreen({ onSelectDm }: DmsScreenProps) {
                         {item.name}
                       </Text>
                       <Text style={styles.threadTime}>
-                        {formatLastTime(item.lastMessageAt)}
+                        {formatLastTime(previewTimestamp)}
                       </Text>
                     </View>
                     <Text style={styles.threadPreview} numberOfLines={2}>

@@ -26,16 +26,53 @@ function run(cmd, args, cwd = clientDir) {
   });
 }
 
+function parseCliArgs(argv) {
+  const options = {
+    skipBuild: false,
+    wantsHelp: false,
+    forwardedArgs: []
+  };
+
+  for (const arg of argv) {
+    if (arg === "--skip-build") {
+      options.skipBuild = true;
+      continue;
+    }
+
+    if (arg === "--help" || arg === "-h") {
+      options.wantsHelp = true;
+    }
+
+    options.forwardedArgs.push(arg);
+  }
+
+  return options;
+}
+
+function printHelp() {
+  console.log(`Usage: node scripts/build-aur.mjs [options] [stage options]
+
+Build the Linux artifacts and stage the Arch/AUR package directory.
+
+Options:
+  --skip-build                 Reuse existing Linux build artifacts and only stage AUR files
+  -h, --help                   Show this help text and the stage-aur options
+`);
+}
+
 async function main() {
-  const forwardedArgs = process.argv.slice(2);
-  const wantsHelp = forwardedArgs.includes("--help") || forwardedArgs.includes("-h");
+  const { forwardedArgs, skipBuild, wantsHelp } = parseCliArgs(process.argv.slice(2));
 
   if (wantsHelp) {
+    printHelp();
     await run(process.execPath, [path.join(__dirname, "stage-aur.mjs"), ...forwardedArgs], clientDir);
     return;
   }
 
-  await run("npm", ["run", "build:linux"], clientDir);
+  if (!skipBuild) {
+    await run("npm", ["run", "build:linux"], clientDir);
+  }
+
   await run(process.execPath, [path.join(__dirname, "stage-aur.mjs"), ...forwardedArgs], clientDir);
 }
 

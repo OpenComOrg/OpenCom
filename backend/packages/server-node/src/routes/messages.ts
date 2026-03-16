@@ -6,6 +6,7 @@ import { requireGuildMember } from "../auth/requireGuildMember.js";
 import { resolveChannelPermissions } from "../permissions/resolve.js";
 import { Perm, has } from "../permissions/bits.js";
 import { preferredDisplayName, resolveCoreUserProfiles } from "../userDirectory.js";
+import { env } from "../env.js";
 
 type Mention = { userId: string; display: string };
 
@@ -112,6 +113,53 @@ function buildReactionSummaries(rows: MessageReactionRow[]) {
   return byMessage;
 }
 
+function summarizeMentionPreview(content: string) {
+  const trimmed = String(content || "").replace(/\s+/g, " ").trim();
+  if (!trimmed) return "Open OpenCom to view the message.";
+  return trimmed.slice(0, 180);
+}
+
+async function forwardMentionPushNotification(input: {
+  userIds: string[];
+  serverId: string;
+  guildId: string;
+  channelId: string;
+  serverName: string;
+  channelName: string;
+  authorName: string;
+  preview: string;
+  mentionEveryone: boolean;
+}) {
+  const baseUrl = String(env.CORE_BASE_URL || "").replace(/\/$/, "");
+  const syncSecret = String(env.NODE_SYNC_SECRET || "").trim();
+  if (!baseUrl || !syncSecret) return;
+
+  const userIds = Array.from(new Set((input.userIds || []).filter(Boolean)));
+  if (userIds.length === 0) return;
+
+  try {
+    const response = await fetch(`${baseUrl}/v1/internal/mobile-notify-mentions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-node-sync-secret": syncSecret,
+      },
+      body: JSON.stringify({
+        ...input,
+        userIds,
+      }),
+    });
+    if (!response.ok) {
+      throw new Error(`MENTION_PUSH_${response.status}`);
+    }
+  } catch (error) {
+    console.warn(
+      "[mention-push]",
+      error instanceof Error ? error.message : String(error || "UNKNOWN_ERROR"),
+    );
+  }
+}
+
 async function loadMessageReactionMap(messageIds: string[]) {
   if (!messageIds.length) return new Map<string, any[]>();
   const params: Record<string, any> = {};
@@ -213,8 +261,8 @@ export async function messageRoutes(
     const { channelId } = z.object({ channelId: z.string().min(3) }).parse(req.params);
     const userId = req.auth.userId as string;
 
-    const ch = await q<{ id: string; guild_id: string }>(
-      `SELECT id,guild_id FROM channels WHERE id=:channelId`,
+    const ch = await q<{ id: string; guild_id: string; name: string }>(
+      `SELECT id,guild_id,name FROM channels WHERE id=:channelId`,
       { channelId }
     );
     if (!ch.length) return rep.code(404).send({ error: "CHANNEL_NOT_FOUND" });
@@ -318,8 +366,8 @@ export async function messageRoutes(
       before: z.string().datetime().optional()
     }).parse(req.query);
 
-    const ch = await q<{ id: string; guild_id: string }>(
-      `SELECT id,guild_id FROM channels WHERE id=:channelId`,
+    const ch = await q<{ id: string; guild_id: string; name: string }>(
+      `SELECT id,guild_id,name FROM channels WHERE id=:channelId`,
       { channelId }
     );
     if (!ch.length) return rep.code(404).send({ error: "CHANNEL_NOT_FOUND" });
@@ -421,8 +469,8 @@ export async function messageRoutes(
       embeds: z.array(EmbedSchema).max(5).optional()
     }).parse(req.body);
 
-    const ch = await q<{ id: string; guild_id: string }>(
-      `SELECT id,guild_id FROM channels WHERE id=:channelId`,
+    const ch = await q<{ id: string; guild_id: string; name: string }>(
+      `SELECT id,guild_id,name FROM channels WHERE id=:channelId`,
       { channelId }
     );
     if (!ch.length) return rep.code(404).send({ error: "CHANNEL_NOT_FOUND" });
@@ -466,6 +514,11 @@ export async function messageRoutes(
     const embeds = (body.embeds || []) as MessageEmbed[];
     const authorProfiles = await resolveCoreUserProfiles([authorId]);
     const authorProfile = authorProfiles.get(authorId);
+    const guildRows = await q<{ name: string }>(
+      `SELECT name FROM guilds WHERE id=:guildId LIMIT 1`,
+      { guildId },
+    );
+    const guildName = guildRows[0]?.name || "Server";
     let resolvedAttachments: any[] = [];
 
     await q(
@@ -546,8 +599,23 @@ export async function messageRoutes(
         channelId,
         messageId: id,
         authorId,
+        authorName: preferredDisplayName(authorId, authorProfile),
+        channelName: ch[0]?.name || "channel",
+        contentPreview: summarizeMentionPreview(body.content || ""),
         mentionEveryone: mentionMeta.mentionEveryone,
         mentions: mentionMeta.mentions
+      });
+
+      void forwardMentionPushNotification({
+        userIds: mentionedUserIds,
+        serverId: req.auth.coreServerId || req.auth.serverId || "",
+        guildId,
+        channelId,
+        serverName: guildName,
+        channelName: ch[0]?.name || "channel",
+        authorName: preferredDisplayName(authorId, authorProfile),
+        preview: summarizeMentionPreview(body.content || ""),
+        mentionEveryone: mentionMeta.mentionEveryone,
       });
     }
 

@@ -17,6 +17,7 @@ import {
   finalizeUploadSession,
   getUploadSession
 } from "../uploadSessions.js";
+import { sendMobilePushToUser } from "../pushNotifications.js";
 
 const AddFriend = z.object({ username: z.string().min(2).max(32) });
 const OpenDm = z.object({ friendId: z.string().min(3) });
@@ -111,6 +112,22 @@ async function createFriendshipPair(userId: string, friendId: string) {
 
 async function ensureThread(userId: string, friendId: string): Promise<string> {
   return ensureSocialDmThread(userId, friendId);
+}
+
+function buildAppDeepLink(path: string) {
+  const normalized = String(path || "").replace(/^\/+/, "");
+  return `opencom://${normalized}`;
+}
+
+function summarizeDmNotificationBody(content: string, attachmentCount = 0) {
+  const trimmed = String(content || "").replace(/\s+/g, " ").trim();
+  if (trimmed && trimmed !== "Attachment") return trimmed.slice(0, 160);
+  if (attachmentCount > 0) {
+    return attachmentCount === 1
+      ? "Sent an attachment"
+      : `Sent ${attachmentCount} attachments`;
+  }
+  return "Open OpenCom to view the message.";
 }
 
 function isValidReactionImageUrl(value: string | null | undefined) {
@@ -306,6 +323,30 @@ export async function socialRoutes(
     if (incomingRequest.length) {
       await createFriendshipPair(userId, friendId);
       const threadId = await ensureThread(userId, friendId);
+      const accepter = await q<{ username: string; display_name: string | null }>(
+        `SELECT username,display_name FROM users WHERE id=:userId LIMIT 1`,
+        { userId }
+      );
+      const actorLabel =
+        accepter[0]?.display_name || accepter[0]?.username || "Someone";
+      if (broadcastToUser) {
+        await broadcastToUser(friendId, "FRIEND_ACCEPTED", {
+          friendId: userId,
+          username: actorLabel,
+          threadId
+        });
+      }
+      await sendMobilePushToUser({
+        userId: friendId,
+        title: "Friend request accepted",
+        body: `${actorLabel} accepted your friend request`,
+        data: {
+          deepLink: buildAppDeepLink(`dm/${threadId}`),
+          kind: "friend_accepted",
+          threadId,
+          userId
+        }
+      });
       return {
         ok: true,
         acceptedExistingRequest: true,
@@ -331,6 +372,33 @@ export async function socialRoutes(
       `INSERT INTO friend_requests (id,sender_user_id,recipient_user_id,status) VALUES (:id,:userId,:friendId,'pending')`,
       { id: newRequestId, userId, friendId }
     );
+
+    const sender = await q<{ username: string; display_name: string | null }>(
+      `SELECT username,display_name FROM users WHERE id=:userId LIMIT 1`,
+      { userId }
+    );
+    const senderLabel =
+      sender[0]?.display_name || sender[0]?.username || body.username;
+
+    if (broadcastToUser) {
+      await broadcastToUser(friendId, "FRIEND_REQUEST", {
+        requestId: newRequestId,
+        userId,
+        username: senderLabel
+      });
+    }
+
+    await sendMobilePushToUser({
+      userId: friendId,
+      title: "New friend request",
+      body: `${senderLabel} sent you a friend request`,
+      data: {
+        deepLink: buildAppDeepLink("friends"),
+        kind: "friend_request",
+        requestId: newRequestId,
+        userId
+      }
+    });
 
     return { ok: true, requestId: newRequestId, requestStatus: "pending" };
   });
@@ -375,6 +443,34 @@ export async function socialRoutes(
     const friendId = pending[0].sender_user_id;
     await createFriendshipPair(userId, friendId);
     await q(`UPDATE friend_requests SET status='accepted', responded_at=NOW() WHERE id=:requestId`, { requestId });
+    const threadId = await ensureThread(userId, friendId);
+
+    const accepter = await q<{ username: string; display_name: string | null }>(
+      `SELECT username,display_name FROM users WHERE id=:userId LIMIT 1`,
+      { userId }
+    );
+    const accepterLabel =
+      accepter[0]?.display_name || accepter[0]?.username || "Someone";
+
+    if (broadcastToUser) {
+      await broadcastToUser(friendId, "FRIEND_ACCEPTED", {
+        friendId: userId,
+        username: accepterLabel,
+        threadId
+      });
+    }
+
+    await sendMobilePushToUser({
+      userId: friendId,
+      title: "Friend request accepted",
+      body: `${accepterLabel} accepted your friend request`,
+      data: {
+        deepLink: buildAppDeepLink(`dm/${threadId}`),
+        kind: "friend_accepted",
+        threadId,
+        userId
+      }
+    });
 
     return { ok: true };
   });
@@ -943,12 +1039,13 @@ export async function socialRoutes(
 
     await q(`UPDATE social_dm_threads SET last_message_at=NOW() WHERE id=:threadId`, { threadId });
 
+    const sender = await q<{ username: string; display_name: string | null; pfp_url: string | null }>(
+      `SELECT username,display_name,pfp_url FROM users WHERE id=:userId LIMIT 1`,
+      { userId }
+    );
+    const otherUserId = thread[0].user_a === userId ? thread[0].user_b : thread[0].user_a;
+
     if (broadcastToUser) {
-      const sender = await q<{ username: string; display_name: string | null; pfp_url: string | null }>(
-        `SELECT username,display_name,pfp_url FROM users WHERE id=:userId LIMIT 1`,
-        { userId }
-      );
-      const otherUserId = thread[0].user_a === userId ? thread[0].user_b : thread[0].user_a;
       const createdAt = new Date().toISOString();
       const isOfficial = isOfficialAccountName(sender[0]?.username || "");
       const payload = {
@@ -970,6 +1067,18 @@ export async function socialRoutes(
       await broadcastToUser(userId, "SOCIAL_DM_MESSAGE_CREATE", payload);
       await broadcastToUser(otherUserId, "SOCIAL_DM_MESSAGE_CREATE", payload);
     }
+
+    await sendMobilePushToUser({
+      userId: otherUserId,
+      title: sender[0]?.display_name || sender[0]?.username || "New message",
+      body: summarizeDmNotificationBody(finalContent, resolvedAttachments.length),
+      data: {
+        deepLink: buildAppDeepLink(`dm/${threadId}`),
+        kind: "dm",
+        threadId,
+        authorId: userId
+      }
+    });
 
     return { ok: true, messageId: id };
   });

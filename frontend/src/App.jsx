@@ -22,6 +22,7 @@ import { VoiceCallStage } from "./components/app/VoiceCallStage";
 import { AppContextMenus } from "./components/app/AppContextMenus";
 import { AddServerModal } from "./components/app/AddServerModal";
 import { FavouriteMediaModal } from "./components/app/FavouriteMediaModal";
+import { KlipyMediaModal } from "./components/app/KlipyMediaModal";
 import { MediaViewerModal } from "./components/app/MediaViewerModal";
 import { MessageReactionPickerModal } from "./components/app/MessageReactionPickerModal";
 import { MemberProfilePopout } from "./components/app/MemberProfilePopout";
@@ -43,6 +44,7 @@ import { VoiceSettingsSection } from "./components/settings/VoiceSettingsSection
 import { BillingSettingsSection } from "./components/settings/BillingSettingsSection";
 import { SecuritySettingsSection } from "./components/settings/SecuritySettingsSection";
 import { SafeAvatar } from "./components/ui/SafeAvatar";
+import { HeadphonesIcon, MicrophoneIcon } from "./components/ui/VoiceIcons";
 import { ThemeStudioApp } from "./theme/ThemeStudioApp.jsx";
 import { DOWNLOAD_TARGETS, getPreferredDownloadTarget } from "./lib/downloads";
 import {
@@ -103,7 +105,9 @@ import {
   SELF_STATUS_KEY,
   SERVER_VOICE_GATEWAY_PREFS_KEY,
   VOICE_MEMBER_AUDIO_PREFS_KEY,
+  VOICE_NOISE_CANCELLATION_MODE_KEY,
   api,
+  buildSmartNoiseSuppressionProfile,
   buildFavouriteMediaKey,
   buildPaginatedPath,
   buildSlashCommandTemplate,
@@ -145,6 +149,7 @@ import {
   normalizeFavouriteMediaUrl,
   normalizeFullProfile,
   normalizeImageUrlInput,
+  normalizeVoiceNoiseCancellationMode,
   normalizeNoiseSuppressionConfigForUi,
   normalizeNoiseSuppressionPresetForUi,
   normalizeServerBaseUrl,
@@ -159,6 +164,9 @@ import {
   rpcActivityFromForm,
   rpcFormFromActivity,
   resolveSlashCommand,
+  requestSystemNotificationPermission,
+  showSystemNotification,
+  isNoiseSuppressionConfigEquivalent,
   splitSlashInput,
   toIsoTimestamp,
   toTimestampMs,
@@ -195,6 +203,18 @@ function matchesReactionPickerQuery(searchText = "", query = "") {
     .split(/\s+/)
     .filter(Boolean)
     .every((token) => normalizedText.includes(token));
+}
+
+function mergeKlipyMediaItems(current = [], incoming = []) {
+  const merged = [];
+  const seen = new Set();
+  for (const item of [...current, ...incoming]) {
+    const key = String(item?.id || item?.sourceUrl || "").trim();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    merged.push(item);
+  }
+  return merged;
 }
 
 export function App() {
@@ -376,6 +396,11 @@ export function App() {
   const [noiseSuppressionEnabled, setNoiseSuppressionEnabled] = useState(
     localStorage.getItem(NOISE_SUPPRESSION_KEY) !== "0",
   );
+  const [noiseCancellationMode, setNoiseCancellationMode] = useState(() =>
+    normalizeVoiceNoiseCancellationMode(
+      localStorage.getItem(VOICE_NOISE_CANCELLATION_MODE_KEY) || "smart",
+    ),
+  );
   const [noiseSuppressionPreset, setNoiseSuppressionPreset] = useState(() => {
     const storedPreset = localStorage.getItem(NOISE_SUPPRESSION_PRESET_KEY);
     return normalizeNoiseSuppressionPresetForUi(
@@ -395,6 +420,15 @@ export function App() {
   });
   const [localAudioProcessingInfo, setLocalAudioProcessingInfo] =
     useState(null);
+  const smartNoiseSuppressionProfile = useMemo(
+    () =>
+      buildSmartNoiseSuppressionProfile({
+        micGain,
+        micSensitivity,
+        localAudioProcessingInfo,
+      }),
+    [micGain, micSensitivity, localAudioProcessingInfo],
+  );
   const [audioInputDevices, setAudioInputDevices] = useState([]);
   const [audioOutputDevices, setAudioOutputDevices] = useState([]);
   const [selfStatus, setSelfStatus] = useState(
@@ -448,6 +482,12 @@ export function App() {
     useState("");
   const [favouriteMediaPreviewUrlById, setFavouriteMediaPreviewUrlById] =
     useState({});
+  const [klipyModalOpen, setKlipyModalOpen] = useState(false);
+  const [klipyQuery, setKlipyQuery] = useState("");
+  const [klipyItems, setKlipyItems] = useState([]);
+  const [klipyLoading, setKlipyLoading] = useState(false);
+  const [klipyNext, setKlipyNext] = useState("");
+  const [klipyInsertBusyId, setKlipyInsertBusyId] = useState("");
   const [expandedMedia, setExpandedMedia] = useState(null);
   const [addServerModalOpen, setAddServerModalOpen] = useState(false);
   const [addServerTab, setAddServerTab] = useState("create");
@@ -541,6 +581,7 @@ export function App() {
 
   function applyNoiseSuppressionPreset(nextPresetRaw) {
     const nextPreset = normalizeNoiseSuppressionPresetForUi(nextPresetRaw);
+    setNoiseCancellationMode("advanced");
     setNoiseSuppressionPreset(nextPreset);
     if (nextPreset === "custom") return;
     setNoiseSuppressionConfig(
@@ -549,6 +590,7 @@ export function App() {
   }
 
   function updateNoiseSuppressionConfig(patch = {}) {
+    setNoiseCancellationMode("advanced");
     setNoiseSuppressionPreset("custom");
     setNoiseSuppressionConfig((current) =>
       normalizeNoiseSuppressionConfigForUi(
@@ -558,6 +600,22 @@ export function App() {
         },
         noiseSuppressionPreset,
       ),
+    );
+  }
+
+  function applySmartNoiseSuppressionProfile({ ensureEnabled = true } = {}) {
+    const nextPreset = smartNoiseSuppressionProfile.preset;
+    const nextConfig = normalizeNoiseSuppressionConfigForUi(
+      smartNoiseSuppressionProfile.config,
+      nextPreset,
+    );
+    setNoiseCancellationMode("smart");
+    if (ensureEnabled) setNoiseSuppressionEnabled(true);
+    setNoiseSuppressionPreset(nextPreset);
+    setNoiseSuppressionConfig((current) =>
+      isNoiseSuppressionConfigEquivalent(current, nextConfig)
+        ? current
+        : nextConfig,
     );
   }
 
@@ -660,6 +718,19 @@ export function App() {
   function getCustomStatus(userId) {
     if (!userId) return "";
     return String(presenceByUserId[userId]?.customStatus || "").trim();
+  }
+  function shouldDeliverDeviceNotification() {
+    if (selfStatusRef.current === "dnd") return false;
+    if (typeof document === "undefined") return true;
+    if (document.hidden) return true;
+    if (typeof document.hasFocus === "function") {
+      return !document.hasFocus();
+    }
+    return false;
+  }
+  function notifyDesktopDevice(input) {
+    if (!shouldDeliverDeviceNotification()) return;
+    void showSystemNotification(input);
   }
   function truncateUiText(value, maxLength = 60) {
     const text = String(value || "").trim();
@@ -788,6 +859,7 @@ export function App() {
   const attachmentPreviewUrlByIdRef = useRef({});
   const favouriteMediaPreviewFetchInFlightRef = useRef(new Set());
   const favouriteMediaPreviewUrlByIdRef = useRef({});
+  const klipyRequestSeqRef = useRef(0);
   const autoJoinInviteAttemptRef = useRef("");
   const previousDmIdRef = useRef("");
   const previousServerChannelIdRef = useRef("");
@@ -2669,6 +2741,22 @@ export function App() {
       ].some((value) => String(value || "").toLowerCase().includes(query)),
     );
   }, [favouriteMedia, favouriteMediaQuery]);
+  const klipySaveStateByItemId = useMemo(() => {
+    const next = {};
+    for (const item of klipyItems) {
+      const itemKey = String(item?.id || item?.sourceUrl || "").trim();
+      if (!itemKey) continue;
+      const favouriteKey = buildFavouriteMediaKey("external_url", item?.sourceUrl);
+      const existing = favouriteKey ? favouriteMediaByKey.get(favouriteKey) : null;
+      next[itemKey] = {
+        saved: !!existing,
+        busy:
+          !!favouriteMediaBusyById[favouriteKey] ||
+          (existing?.id ? !!favouriteMediaBusyById[existing.id] : false),
+      };
+    }
+    return next;
+  }, [klipyItems, favouriteMediaByKey, favouriteMediaBusyById]);
 
   async function refreshSocialData(token = accessToken) {
     if (!token) return;
@@ -2757,6 +2845,11 @@ export function App() {
         coreApi: CORE_API,
       });
     } catch {}
+  }, [accessToken]);
+
+  useEffect(() => {
+    if (!accessToken) return;
+    void requestSystemNotificationPermission();
   }, [accessToken]);
 
   useEffect(() => {
@@ -3704,8 +3797,23 @@ export function App() {
               ];
             });
             if (incoming.authorId && incoming.authorId !== me?.id) {
-              playNotificationBeep(selfStatusRef.current === "dnd");
-              setDmNotification({ dmId: threadId, at: Date.now() });
+              const isCallRequestMessage =
+                String(incoming.content || "").trim() === "__CALL_REQUEST__";
+              if (!isCallRequestMessage) {
+                playNotificationBeep(selfStatusRef.current === "dnd");
+                setDmNotification({ dmId: threadId, at: Date.now() });
+                notifyDesktopDevice({
+                  title: incoming.author || "New message",
+                  body:
+                    truncateUiText(incoming.content || "", 140) ||
+                    "Open OpenCom to read the message.",
+                  tag: `dm:${threadId}`,
+                  onClick: () => {
+                    setNavMode("dms");
+                    setActiveDmId(threadId);
+                  },
+                });
+              }
             }
           }
           if (
@@ -3769,6 +3877,15 @@ export function App() {
                     guildId: d.guildId,
                     nodeBaseUrl: d.nodeBaseUrl,
                   });
+                  notifyDesktopDevice({
+                    title: "Incoming call",
+                    body: `${callerName} is calling you`,
+                    tag: `call:${d.callId}`,
+                    onClick: () => {
+                      setNavMode("dms");
+                      if (dmThread?.id) setActiveDmId(dmThread.id);
+                    },
+                  });
                   return currentDms; // no mutation
                 });
                 return currentFriends; // no mutation
@@ -3780,6 +3897,102 @@ export function App() {
                 prev ? { ...prev, callId: d.callId } : prev,
               );
             }
+          }
+
+          if (
+            msg.op === "DISPATCH" &&
+            msg.t === "FRIEND_REQUEST" &&
+            msg.d?.requestId
+          ) {
+            const requestId = String(msg.d.requestId || "");
+            const userId = String(msg.d.userId || "");
+            const username = String(msg.d.username || "Someone");
+            setFriendRequests((prev) => ({
+              incoming: [
+                {
+                  id: requestId,
+                  userId,
+                  username,
+                  createdAt: new Date().toISOString(),
+                },
+                ...prev.incoming.filter((item) => item.id !== requestId),
+              ],
+              outgoing: prev.outgoing,
+            }));
+            notifyDesktopDevice({
+              title: "Friend request",
+              body: `${username} sent you a friend request`,
+              tag: `friend-request:${requestId}`,
+              onClick: () => {
+                setNavMode("friends");
+                setFriendView("requests");
+              },
+            });
+          }
+
+          if (
+            msg.op === "DISPATCH" &&
+            msg.t === "FRIEND_ACCEPTED" &&
+            msg.d?.friendId
+          ) {
+            const friendId = String(msg.d.friendId || "");
+            const username = String(msg.d.username || "New friend");
+            const threadId = String(msg.d.threadId || "");
+            setFriendRequests((prev) => ({
+              incoming: prev.incoming,
+              outgoing: prev.outgoing.filter((item) => item.userId !== friendId),
+            }));
+            setFriends((current) => {
+              const existing = current.find((item) => item.id === friendId);
+              if (existing) return current;
+              return [
+                {
+                  id: friendId,
+                  username,
+                  pfp_url: null,
+                  status: "online",
+                },
+                ...current,
+              ];
+            });
+            if (threadId) {
+              setDms((current) => {
+                const existingIndex = current.findIndex(
+                  (item) => item.id === threadId || item.participantId === friendId,
+                );
+                const nextDm = {
+                  id: threadId,
+                  participantId: friendId,
+                  name: username,
+                  pfp_url: null,
+                  lastMessageAt: null,
+                  lastMessageContent: null,
+                  messages: [],
+                };
+                if (existingIndex < 0) return [nextDm, ...current];
+                const existing = current[existingIndex];
+                const next = [...current];
+                next[existingIndex] = {
+                  ...existing,
+                  id: existing.id || threadId,
+                  participantId: existing.participantId || friendId,
+                  name: existing.name || username,
+                };
+                return next;
+              });
+            }
+            notifyDesktopDevice({
+              title: "Friend request accepted",
+              body: `${username} accepted your friend request`,
+              tag: `friend-accepted:${friendId}`,
+              onClick: () => {
+                setNavMode("friends");
+                if (threadId) {
+                  setNavMode("dms");
+                  setActiveDmId(threadId);
+                }
+              },
+            });
           }
 
           if (
@@ -3924,8 +4137,7 @@ export function App() {
       setGuildState(state);
 
       const activeExists = allChannels.some(
-        (channel) =>
-          channel.id === activeChannelIdRef.current && channel.type === "text",
+        (channel) => channel.id === activeChannelIdRef.current,
       );
       if (activeExists) return;
 
@@ -4171,6 +4383,21 @@ export function App() {
                   ...prev,
                   [server.id]: (prev[server.id] || 0) + 1,
                 }));
+                notifyDesktopDevice({
+                  title: msg.d?.mentionEveryone
+                    ? `${msg.d?.authorName || "Someone"} mentioned everyone`
+                    : `${msg.d?.authorName || "Someone"} mentioned you`,
+                  body:
+                    truncateUiText(msg.d?.contentPreview || "", 140) ||
+                    `#${msg.d?.channelName || "channel"} in ${server.name}`,
+                  tag: `mention:${server.id}:${channelId}`,
+                  onClick: () => {
+                    setNavMode("servers");
+                    setActiveServerId(server.id);
+                    setActiveGuildId(msg.d?.guildId || "");
+                    if (channelId) setActiveChannelId(channelId);
+                  },
+                });
               }
               return;
             }
@@ -4708,8 +4935,7 @@ export function App() {
           setGuildState(state);
 
           const activeExists = allChannels.some(
-            (channel) =>
-              channel.id === activeChannelId && channel.type === "text",
+            (channel) => channel.id === activeChannelId,
           );
           if (activeExists) return;
 
@@ -4989,6 +5215,13 @@ export function App() {
   }, [noiseSuppressionEnabled]);
 
   useEffect(() => {
+    localStorage.setItem(
+      VOICE_NOISE_CANCELLATION_MODE_KEY,
+      noiseCancellationMode,
+    );
+  }, [noiseCancellationMode]);
+
+  useEffect(() => {
     localStorage.setItem(NOISE_SUPPRESSION_PRESET_KEY, noiseSuppressionPreset);
   }, [noiseSuppressionPreset]);
 
@@ -5005,6 +5238,33 @@ export function App() {
       config: noiseSuppressionConfig,
     });
   }, [noiseSuppressionPreset, noiseSuppressionConfig]);
+
+  useEffect(() => {
+    if (
+      noiseCancellationMode !== "smart" ||
+      !noiseSuppressionEnabled ||
+      !smartNoiseSuppressionProfile
+    ) {
+      return;
+    }
+    const nextPreset = smartNoiseSuppressionProfile.preset;
+    const nextConfig = normalizeNoiseSuppressionConfigForUi(
+      smartNoiseSuppressionProfile.config,
+      nextPreset,
+    );
+    if (noiseSuppressionPreset !== nextPreset) {
+      setNoiseSuppressionPreset(nextPreset);
+    }
+    if (!isNoiseSuppressionConfigEquivalent(noiseSuppressionConfig, nextConfig)) {
+      setNoiseSuppressionConfig(nextConfig);
+    }
+  }, [
+    noiseCancellationMode,
+    noiseSuppressionEnabled,
+    noiseSuppressionPreset,
+    noiseSuppressionConfig,
+    smartNoiseSuppressionProfile,
+  ]);
 
   useEffect(() => {
     if (!isInVoiceChannel) return;
@@ -5912,6 +6172,67 @@ export function App() {
     loadFavouriteMedia().catch(() => {});
   }
 
+  function closeKlipyPicker() {
+    klipyRequestSeqRef.current += 1;
+    setKlipyModalOpen(false);
+    setKlipyQuery("");
+    setKlipyItems([]);
+    setKlipyNext("");
+    setKlipyLoading(false);
+    setKlipyInsertBusyId("");
+  }
+
+  function openKlipyPicker() {
+    setKlipyModalOpen(true);
+  }
+
+  async function loadKlipyMedia({
+    queryText = klipyQuery,
+    append = false,
+    nextToken = "",
+  } = {}) {
+    if (!accessToken) {
+      setKlipyItems([]);
+      setKlipyNext("");
+      return;
+    }
+
+    const trimmedQuery = String(queryText || "").trim();
+    const requestId = ++klipyRequestSeqRef.current;
+    setKlipyLoading(true);
+
+    try {
+      const params = new URLSearchParams({
+        limit: "24",
+      });
+      if (nextToken) params.set("pos", nextToken);
+      if (trimmedQuery) params.set("q", trimmedQuery);
+      const endpoint = trimmedQuery
+        ? "/v1/media/klipy/search"
+        : "/v1/media/klipy/featured";
+      const data = await api(`${endpoint}?${params.toString()}`, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      if (requestId !== klipyRequestSeqRef.current) return;
+      const items = Array.isArray(data?.items) ? data.items : [];
+      setKlipyItems((current) =>
+        append ? mergeKlipyMediaItems(current, items) : items,
+      );
+      setKlipyNext(String(data?.next || "").trim());
+    } catch (error) {
+      if (requestId !== klipyRequestSeqRef.current) return;
+      if (!append) {
+        setKlipyItems([]);
+        setKlipyNext("");
+      }
+      setStatus(`Could not load Klipy media: ${error.message}`);
+    } finally {
+      if (requestId === klipyRequestSeqRef.current) {
+        setKlipyLoading(false);
+      }
+    }
+  }
+
   function buildFavouriteMediaDraftFromAttachment(attachment, messageId = "") {
     const sourceUrl = String(attachment?.url || "").trim();
     if (!sourceUrl) return null;
@@ -5945,6 +6266,19 @@ export function App() {
       title: embed?.title || preview?.title || guessFileNameFromUrl(resolvedImageUrl),
       fileName: guessFileNameFromUrl(resolvedImageUrl),
       contentType: "",
+    };
+  }
+
+  function buildFavouriteMediaDraftFromKlipyItem(item) {
+    const sourceUrl = String(item?.sourceUrl || "").trim();
+    if (!sourceUrl) return null;
+    return {
+      sourceKind: "external_url",
+      sourceUrl,
+      pageUrl: item?.pageUrl || sourceUrl,
+      title: item?.title || guessFileNameFromUrl(sourceUrl) || "Klipy media",
+      fileName: guessFileNameFromUrl(sourceUrl),
+      contentType: item?.contentType || "",
     };
   }
 
@@ -6034,16 +6368,16 @@ export function App() {
     composerInputRef.current?.focus();
   }
 
-  async function insertFavouriteMedia(item) {
-    if (!item?.id) return;
-    const scope = navMode === "dms" ? "dm" : navMode === "servers" ? "server" : "";
+  function resolveMediaInsertScope() {
+    const scope =
+      navMode === "dms" ? "dm" : navMode === "servers" ? "server" : "";
     if (!scope) {
-      setStatus("Open a channel or DM to send saved media.");
-      return;
+      setStatus("Open a channel or DM to send media.");
+      return "";
     }
     if (scope === "server" && (!activeServer || !activeChannelId)) {
       setStatus("Select a server channel first.");
-      return;
+      return "";
     }
     if (scope === "dm" && (!activeDm || activeDm?.isNoReply)) {
       setStatus(
@@ -6051,8 +6385,44 @@ export function App() {
           ? "This official account does not accept replies."
           : "Select a DM first.",
       );
+      return "";
+    }
+    return scope;
+  }
+
+  async function insertKlipyMedia(item) {
+    const itemKey = String(item?.id || item?.sourceUrl || "").trim();
+    const sourceUrl = String(item?.sourceUrl || "").trim();
+    if (!itemKey || !sourceUrl) {
+      setStatus("Klipy media is missing a usable source URL.");
       return;
     }
+    const scope = resolveMediaInsertScope();
+    if (!scope) return;
+
+    setKlipyInsertBusyId(itemKey);
+    try {
+      appendTextToActiveComposer(sourceUrl, scope);
+      setStatus("Added Klipy media to the composer.");
+      closeKlipyPicker();
+    } finally {
+      setKlipyInsertBusyId("");
+    }
+  }
+
+  async function toggleKlipyFavourite(item) {
+    const draft = buildFavouriteMediaDraftFromKlipyItem(item);
+    if (!draft) {
+      setStatus("Klipy media is missing a usable source URL.");
+      return;
+    }
+    await toggleFavouriteMedia(draft);
+  }
+
+  async function insertFavouriteMedia(item) {
+    if (!item?.id) return;
+    const scope = resolveMediaInsertScope();
+    if (!scope) return;
 
     setFavouriteMediaInsertBusyId(item.id);
     try {
@@ -6071,6 +6441,18 @@ export function App() {
       setFavouriteMediaInsertBusyId("");
     }
   }
+
+  useEffect(() => {
+    if (!klipyModalOpen) return undefined;
+    const delay = String(klipyQuery || "").trim() ? 250 : 0;
+    const timer = window.setTimeout(() => {
+      loadKlipyMedia({
+        queryText: klipyQuery,
+        append: false,
+      }).catch(() => {});
+    }, delay);
+    return () => window.clearTimeout(timer);
+  }, [klipyModalOpen, klipyQuery, accessToken]);
 
   async function toggleFavouriteMedia(draft) {
     const key = buildFavouriteMediaKey(draft?.sourceKind, draft?.sourceUrl);
@@ -7071,7 +7453,7 @@ export function App() {
     if (existing) {
       setActiveDmId(existing.id);
       setNavMode("dms");
-      return;
+      return existing.id;
     }
 
     try {
@@ -7097,8 +7479,10 @@ export function App() {
       });
       setActiveDmId(threadId);
       setNavMode("dms");
+      return threadId;
     } catch (error) {
       setStatus(`Open DM failed: ${error.message}`);
+      return "";
     }
   }
 
@@ -8997,21 +9381,38 @@ export function App() {
     setSelectedScreenShareProducerId(id);
   }
 
-  function openCurrentCallView() {
+  async function openCurrentCallView() {
     if (activePrivateCall?.callId) {
-      const matchingDm = dms.find(
+      let matchingDm = dms.find(
         (dm) => dm.participantId === activePrivateCall?.otherUserId,
       );
+      if (!matchingDm && activePrivateCall?.otherUserId) {
+        const matchingFriend =
+          friends.find((friend) => friend.id === activePrivateCall.otherUserId) ||
+          {
+            id: activePrivateCall.otherUserId,
+            username:
+              activePrivateCall.otherName || activePrivateCall.otherUserId,
+          };
+        const threadId = await openDmFromFriend(matchingFriend);
+        if (threadId) {
+          matchingDm = { id: threadId };
+        }
+      }
       if (matchingDm?.id) {
         setActiveDmId(matchingDm.id);
       }
       setNavMode("dms");
-      setPrivateCallViewOpen(true);
+      setPrivateCallViewOpen(enrichedRemoteScreenShares.length === 0);
       return;
     }
     if (!voiceConnectedChannelId) return;
-    if (voiceConnectedServer?.id) {
-      setActiveServerId(voiceConnectedServer.id);
+    const targetServer =
+      voiceConnectedServer ||
+      servers.find((server) => server.defaultGuildId === voiceConnectedGuildId) ||
+      null;
+    if (targetServer?.id) {
+      setActiveServerId(targetServer.id);
     }
     if (voiceConnectedGuildId) {
       setActiveGuildId(voiceConnectedGuildId);
@@ -11713,11 +12114,23 @@ export function App() {
                                               {member.username}
                                             </span>
                                             <span className="voice-channel-member-icons">
-                                              {member.deafened
-                                                ? "🔇"
-                                                : member.muted
-                                                  ? "🎙️"
-                                                  : "🎤"}
+                                              {member.deafened ? (
+                                                <HeadphonesIcon
+                                                  deafened
+                                                  size={14}
+                                                  title="Deafened"
+                                                />
+                                              ) : (
+                                                <MicrophoneIcon
+                                                  muted={member.muted}
+                                                  size={14}
+                                                  title={
+                                                    member.muted
+                                                      ? "Muted"
+                                                      : "Microphone active"
+                                                  }
+                                                />
+                                              )}
                                             </span>
                                           </div>
                                         </div>
@@ -11922,14 +12335,22 @@ export function App() {
                   title={isMuted ? "Unmute" : "Mute"}
                   onClick={() => setIsMuted((value) => !value)}
                 >
-                  {isMuted ? "🔇" : "🎤"}
+                  <MicrophoneIcon
+                    muted={isMuted}
+                    size={17}
+                    title={isMuted ? "Unmute" : "Mute"}
+                  />
                 </button>
                 <button
                   className={`voice-action-pill ${isDeafened ? "active danger" : ""}`}
                   title={isDeafened ? "Undeafen" : "Deafen"}
                   onClick={() => setIsDeafened((value) => !value)}
                 >
-                  {isDeafened ? "🔕" : "🎧"}
+                  <HeadphonesIcon
+                    deafened={isDeafened}
+                    size={17}
+                    title={isDeafened ? "Undeafen" : "Deafen"}
+                  />
                 </button>
                 <button
                   className={`voice-action-pill ${isCameraEnabled ? "active" : ""}`}
@@ -11985,7 +12406,13 @@ export function App() {
                       : "Jump back into the full call view for screens and cameras anytime."}
                   </span>
                 </div>
-                <button type="button" className="ghost" onClick={openCurrentCallView}>
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={() => {
+                    void openCurrentCallView();
+                  }}
+                >
                   View call
                 </button>
               </div>
@@ -12018,14 +12445,16 @@ export function App() {
               <button
                 className={`icon-btn ${isMuted ? "danger" : "ghost"}`}
                 onClick={() => setIsMuted((value) => !value)}
+                title={isMuted ? "Unmute" : "Mute"}
               >
-                {isMuted ? "🎙️" : "🎤"}
+                <MicrophoneIcon muted={isMuted} size={18} />
               </button>
               <button
                 className={`icon-btn ${isDeafened ? "danger" : "ghost"}`}
                 onClick={() => setIsDeafened((value) => !value)}
+                title={isDeafened ? "Undeafen" : "Deafen"}
               >
-                {isDeafened ? "🔇" : "🎧"}
+                <HeadphonesIcon deafened={isDeafened} size={18} />
               </button>
               <button
                 className="icon-btn ghost"
@@ -12709,6 +13138,17 @@ export function App() {
                   className="ghost composer-icon"
                   onClick={(event) => {
                     event.stopPropagation();
+                    openKlipyPicker();
+                  }}
+                  title="Search Klipy"
+                  disabled={!activeChannelId}
+                >
+                  GIF
+                </button>
+                <button
+                  className="ghost composer-icon"
+                  onClick={(event) => {
+                    event.stopPropagation();
                     openFavouriteMediaPicker();
                   }}
                   title="Open favourites"
@@ -12840,7 +13280,11 @@ export function App() {
                               </strong>
                               <span>
                                 {memberVoice
-                                  ? `${memberVoice.deafened ? "🔇" : memberVoice.muted ? "🎙️" : "🎤"} In voice`
+                                  ? memberVoice.deafened
+                                    ? "Deafened in voice"
+                                    : memberVoice.muted
+                                      ? "Muted in voice"
+                                      : "In voice"
                                   : presenceLabel(getPresence(member.id))}
                               </span>
                             </div>
@@ -13316,6 +13760,17 @@ export function App() {
                 className="ghost composer-icon"
                 onClick={(event) => {
                   event.stopPropagation();
+                  openKlipyPicker();
+                }}
+                title="Search Klipy"
+                disabled={!activeDm || activeDm?.isNoReply}
+              >
+                GIF
+              </button>
+              <button
+                className="ghost composer-icon"
+                onClick={(event) => {
+                  event.stopPropagation();
                   openFavouriteMediaPicker();
                 }}
                 title="Open favourites"
@@ -13590,6 +14045,29 @@ export function App() {
         insertBusyId={favouriteMediaInsertBusyId}
       />
 
+      <KlipyMediaModal
+        open={klipyModalOpen}
+        onClose={closeKlipyPicker}
+        query={klipyQuery}
+        setQuery={setKlipyQuery}
+        items={klipyItems}
+        loading={klipyLoading}
+        hasMore={!!klipyNext}
+        insertBusyId={klipyInsertBusyId}
+        saveStateByItemId={klipySaveStateByItemId}
+        onSelect={insertKlipyMedia}
+        onSave={(item) => {
+          void toggleKlipyFavourite(item);
+        }}
+        onLoadMore={() => {
+          void loadKlipyMedia({
+            queryText: klipyQuery,
+            append: true,
+            nextToken: klipyNext,
+          });
+        }}
+      />
+
       <MediaViewerModal
         media={expandedMedia}
         onClose={() => setExpandedMedia(null)}
@@ -13823,6 +14301,10 @@ export function App() {
             setMicSensitivity={setMicSensitivity}
             noiseSuppressionEnabled={noiseSuppressionEnabled}
             setNoiseSuppressionEnabled={setNoiseSuppressionEnabled}
+            noiseCancellationMode={noiseCancellationMode}
+            setNoiseCancellationMode={setNoiseCancellationMode}
+            smartNoiseSuppressionProfile={smartNoiseSuppressionProfile}
+            applySmartNoiseSuppressionProfile={applySmartNoiseSuppressionProfile}
             noiseSuppressionPreset={noiseSuppressionPreset}
             applyNoiseSuppressionPreset={applyNoiseSuppressionPreset}
             noiseSuppressionConfig={noiseSuppressionConfig}

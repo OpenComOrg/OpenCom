@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { SafeAvatar } from "../ui/SafeAvatar";
+import { HeadphonesIcon, MicrophoneIcon } from "../ui/VoiceIcons";
 
 function formatDuration(totalSeconds = 0) {
   const mins = Math.floor(Number(totalSeconds || 0) / 60);
@@ -604,7 +605,9 @@ export function VoiceCallStage({
                 className={`voice-call-stage-dm-action ${isMuted ? "danger" : ""}`}
                 onClick={() => onToggleMute?.()}
               >
-                <span>{isMuted ? "🔇" : "🎤"}</span>
+                <span>
+                  <MicrophoneIcon muted={isMuted} size={20} />
+                </span>
                 <small>{isMuted ? "Unmute" : "Mute"}</small>
               </button>
               <button
@@ -614,7 +617,9 @@ export function VoiceCallStage({
                 }`}
                 onClick={() => onToggleDeafen?.()}
               >
-                <span>{isDeafened ? "🔊" : "🎧"}</span>
+                <span>
+                  <HeadphonesIcon deafened={isDeafened} size={20} />
+                </span>
                 <small>{isDeafened ? "Undeafen" : "Deafen"}</small>
               </button>
               <button
@@ -721,14 +726,20 @@ export function VoiceCallStage({
                 className={`voice-call-stage-control ${isMuted ? "danger" : ""}`}
                 onClick={() => onToggleMute?.()}
               >
-                {isMuted ? "Unmute" : "Mute"}
+                <span className="voice-call-stage-control-body">
+                  <MicrophoneIcon muted={isMuted} size={15} />
+                  <span>{isMuted ? "Unmute" : "Mute"}</span>
+                </span>
               </button>
               <button
                 type="button"
                 className={`voice-call-stage-control ${isDeafened ? "danger" : ""}`}
                 onClick={() => onToggleDeafen?.()}
               >
-                {isDeafened ? "Undeafen" : "Deafen"}
+                <span className="voice-call-stage-control-body">
+                  <HeadphonesIcon deafened={isDeafened} size={15} />
+                  <span>{isDeafened ? "Undeafen" : "Deafen"}</span>
+                </span>
               </button>
               <button
                 type="button"

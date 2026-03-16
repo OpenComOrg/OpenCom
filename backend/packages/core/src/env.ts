@@ -71,6 +71,11 @@ const Env = z.object({
   STRIPE_CANCEL_URL: z.preprocess(emptyToUndefined, z.string().url().optional()),
   STRIPE_CUSTOMER_PORTAL_RETURN_URL: z.preprocess(emptyToUndefined, z.string().url().optional()),
 
+  // Klipy media search
+  KLIPY_API_KEY: z.preprocess(emptyToUndefined, z.string().min(1).optional()),
+  KLIPY_API_BASE_URL: z.preprocess(emptyToUndefined, z.string().url().optional()),
+  KLIPY_CLIENT_KEY: z.preprocess(emptyToUndefined, z.string().min(1).optional()),
+
   // Auth email verification
   AUTH_REQUIRE_EMAIL_VERIFICATION: boolFlag.default(true),
   AUTH_EMAIL_VERIFICATION_TOKEN_TTL_MINUTES: z.coerce.number().int().min(5).max(1440).default(60),

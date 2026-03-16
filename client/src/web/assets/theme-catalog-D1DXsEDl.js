@@ -1,1 +1,0 @@
-import{j as t,c as e,R as o}from"./client-D1ZVDB-N.js";import{T as a}from"./ThemeStudioApp-JtIrRLQX.js";function r(){return t.jsx(a,{defaultTab:"catalog",standalone:!0})}e(document.getElementById("root")).render(t.jsx(o.StrictMode,{children:t.jsx(r,{})}));

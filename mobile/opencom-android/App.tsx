@@ -2,7 +2,16 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { NavigationContainer } from "@react-navigation/native";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
-import { ActivityIndicator, Alert, Linking, Text, View } from "react-native";
+import {
+  ActivityIndicator,
+  Alert,
+  Linking,
+  Modal,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
 import * as Notifications from "expo-notifications";
 import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider } from "react-native-safe-area-context";
@@ -10,6 +19,7 @@ import { SafeAreaProvider } from "react-native-safe-area-context";
 import { AuthProvider, useAuth } from "./src/context/AuthContext";
 import { useCoreGateway, httpToCoreGatewayWs } from "./src/hooks/useGateway";
 import { AppTabBar } from "./src/components/chrome";
+import { Avatar } from "./src/components/Avatar";
 
 import { AuthScreen } from "./src/screens/AuthScreen";
 import { ServersScreen } from "./src/screens/ServersScreen";
@@ -22,6 +32,7 @@ import { PinnedMessagesScreen } from "./src/screens/PinnedMessagesScreen";
 import { CreateInviteScreen } from "./src/screens/CreateInviteScreen";
 import { MembersScreen } from "./src/screens/MembersScreen";
 import { SettingsScreen } from "./src/screens/SettingsScreen";
+import { VoiceRoomScreen } from "./src/screens/VoiceRoomScreen";
 
 import { parseDeepLink } from "./src/deeplinks";
 import {
@@ -45,12 +56,25 @@ import { colors } from "./src/theme";
 const Tab = createBottomTabNavigator();
 const MainStack = createNativeStackNavigator();
 
+type IncomingCallPrompt = {
+  callId: string;
+  callerId: string;
+  callerName: string;
+  callerPfp?: string | null;
+  threadId?: string;
+};
+
 // ─── Tab screen wrappers ──────────────────────────────────────────────────────
 
 function TabServers({ navigation }: { navigation: any }) {
   const onSelectChannel = useCallback(
     (server: CoreServer, guild: Guild, channel: Channel) => {
-      navigation.navigate("Channel", { server, guild, channel });
+      navigation.navigate(channel.type === "voice" ? "VoiceRoom" : "Channel", {
+        server,
+        guild,
+        channel,
+        ...(channel.type === "voice" ? { mode: "server" as const } : {}),
+      });
     },
     [navigation],
   );
@@ -214,6 +238,18 @@ function ChannelScreenWrapper({
     navigation.navigate("Members", { server, guild });
   }, [navigation, server, guild]);
 
+  const onJoinVoice = useCallback(
+    (nextServer: CoreServer, nextGuild: Guild, nextChannel: Channel) => {
+      navigation.navigate("VoiceRoom", {
+        server: nextServer,
+        guild: nextGuild,
+        channel: nextChannel,
+        mode: "server",
+      });
+    },
+    [navigation],
+  );
+
   return (
     <ChannelScreen
       server={server}
@@ -222,6 +258,7 @@ function ChannelScreenWrapper({
       onBack={() => navigation.goBack()}
       onViewPins={onViewPins}
       onViewMembers={onViewMembers}
+      onJoinVoice={onJoinVoice}
     />
   );
 }
@@ -233,17 +270,64 @@ function DmChatScreenWrapper({
   route: any;
   navigation: any;
 }) {
+  const { api } = useAuth();
   const { thread } = route.params as { thread: DmThreadApi };
 
   const onViewPins = useCallback(() => {
     navigation.navigate("PinnedMessages", { mode: "dm", thread });
   }, [navigation, thread]);
 
+  const onStartCall = useCallback(
+    async (targetThread: DmThreadApi) => {
+      try {
+        const created = await api.createPrivateCall(targetThread.participantId);
+        if (!created.success || !created.call_id) {
+          throw new Error(created.message || "CALL_CREATE_FAILED");
+        }
+
+        const joined = await api.joinPrivateCall(created.call_id);
+        if (
+          !joined.success ||
+          !joined.membershipToken ||
+          !joined.nodeBaseUrl ||
+          !joined.guildId ||
+          !joined.channelId
+        ) {
+          throw new Error("CALL_JOIN_FAILED");
+        }
+
+        navigation.navigate("VoiceRoom", {
+          mode: "private",
+          callId: created.call_id,
+          participantName: targetThread.name,
+          membershipToken: joined.membershipToken,
+          nodeBaseUrl: joined.nodeBaseUrl,
+          guild: {
+            id: joined.guildId,
+            name: "Private Calls",
+          },
+          channel: {
+            id: joined.channelId,
+            guild_id: joined.guildId,
+            name: "Private Call",
+            type: "voice",
+            position: 0,
+            parent_id: null,
+          } satisfies Channel,
+        });
+      } catch {
+        Alert.alert("Call failed", "Could not start the voice call right now.");
+      }
+    },
+    [api, navigation],
+  );
+
   return (
     <DmChatScreen
       thread={thread}
       onBack={() => navigation.goBack()}
       onViewPins={onViewPins}
+      onStartCall={onStartCall}
     />
   );
 }
@@ -344,6 +428,48 @@ function SettingsScreenWrapper({ navigation }: { navigation: any }) {
   return <SettingsScreen onLogout={onLogout} />;
 }
 
+function VoiceRoomScreenWrapper({
+  route,
+  navigation,
+}: {
+  route: any;
+  navigation: any;
+}) {
+  const {
+    server,
+    guild,
+    channel,
+    mode,
+    membershipToken,
+    nodeBaseUrl,
+    callId,
+    participantName,
+  } = route.params as {
+    server?: CoreServer;
+    guild: Guild;
+    channel: Channel;
+    mode?: "server" | "private";
+    membershipToken?: string | null;
+    nodeBaseUrl?: string | null;
+    callId?: string;
+    participantName?: string | null;
+  };
+
+  return (
+    <VoiceRoomScreen
+      server={server}
+      guild={guild}
+      channel={channel}
+      mode={mode}
+      membershipToken={membershipToken}
+      nodeBaseUrl={nodeBaseUrl}
+      callId={callId}
+      participantName={participantName}
+      onBack={() => navigation.goBack()}
+    />
+  );
+}
+
 // ─── Main stack navigator ─────────────────────────────────────────────────────
 
 function MainNavigator() {
@@ -385,6 +511,11 @@ function MainNavigator() {
         component={SettingsScreenWrapper}
         options={{ presentation: "card" }}
       />
+      <MainStack.Screen
+        name="VoiceRoom"
+        component={VoiceRoomScreenWrapper}
+        options={{ presentation: "card" }}
+      />
     </MainStack.Navigator>
   );
 }
@@ -397,11 +528,14 @@ function AppContent() {
     setTokens,
     me,
     setMe,
+    servers,
     refreshServers,
     refreshMyProfile,
     api,
     coreApiUrl,
+    setSelfStatus,
     updatePresence,
+    dmThreads,
     upsertDmMessage,
     removeDmMessage,
     setDmThreads,
@@ -409,6 +543,13 @@ function AppContent() {
 
   const [booting, setBooting] = useState(true);
   const [authStatus, setAuthStatus] = useState("");
+  const [navigationReady, setNavigationReady] = useState(false);
+  const [incomingCall, setIncomingCall] = useState<IncomingCallPrompt | null>(
+    null,
+  );
+  const [answeringCall, setAnsweringCall] = useState(false);
+  const [decliningCall, setDecliningCall] = useState(false);
+  const navigationRef = useRef<any>(null);
   const pendingDeepLinkRef = useRef<DeepLinkTarget | null>(null);
 
   const getApiErrorCode = useCallback((error: unknown) => {
@@ -423,6 +564,165 @@ function AppContent() {
   // ── Derived ──────────────────────────────────────────────────────────────────
   const gatewayWsUrl = httpToCoreGatewayWs(coreApiUrl);
 
+  const openFriendsScreen = useCallback(() => {
+    if (!navigationRef.current?.navigate) return false;
+    navigationRef.current.navigate("Tabs", { screen: "Friends" });
+    return true;
+  }, []);
+
+  const openDmThreadById = useCallback(
+    async (threadId: string) => {
+      const normalizedThreadId = String(threadId || "").trim();
+      if (!normalizedThreadId || !navigationRef.current?.navigate) return false;
+
+      let thread =
+        dmThreads.find((item) => item.id === normalizedThreadId) || null;
+
+      if (!thread) {
+        const data = await api.getDms().catch(() => null);
+        const nextThreads = data?.dms ?? [];
+        if (nextThreads.length) {
+          setDmThreads(nextThreads);
+          thread =
+            nextThreads.find((item) => item.id === normalizedThreadId) || null;
+        }
+      }
+
+      if (!thread) return false;
+
+      navigationRef.current.navigate("DmChat", { thread });
+      return true;
+    },
+    [api, dmThreads, setDmThreads],
+  );
+
+  const openServerChannelTarget = useCallback(
+    async (target: Extract<DeepLinkTarget, { kind: "channel" }>) => {
+      if (!navigationRef.current?.navigate) return false;
+      const server = servers.find((item) => item.id === target.serverId);
+      if (!server) return false;
+
+      const state = await api.getGuildState(server, target.guildId).catch(() => null);
+      if (!state?.guild) return false;
+
+      const channel =
+        state.channels.find((item) => item.id === target.channelId) ||
+        state.channels.find((item) => item.type === "text") ||
+        state.channels[0];
+      if (!channel) return false;
+
+      navigationRef.current.navigate(
+        channel.type === "voice" ? "VoiceRoom" : "Channel",
+        {
+        server,
+        guild: state.guild,
+        channel,
+        ...(channel.type === "voice" ? { mode: "server" as const } : {}),
+        },
+      );
+      return true;
+    },
+    [api, servers],
+  );
+
+  const queueIncomingCall = useCallback((payload: IncomingCallPrompt) => {
+    if (!payload.callId) return;
+    setIncomingCall((current) => {
+      if (current?.callId === payload.callId) {
+        return { ...current, ...payload };
+      }
+      return payload;
+    });
+  }, []);
+
+  const openPrivateCallRoom = useCallback(
+    async (call: IncomingCallPrompt) => {
+      if (!navigationRef.current?.navigate || !call.callId) return false;
+
+      const joined = await api.joinPrivateCall(call.callId);
+      if (
+        !joined.success ||
+        !joined.membershipToken ||
+        !joined.nodeBaseUrl ||
+        !joined.guildId ||
+        !joined.channelId
+      ) {
+        return false;
+      }
+
+      navigationRef.current.navigate("VoiceRoom", {
+        mode: "private",
+        callId: call.callId,
+        participantName: call.callerName,
+        membershipToken: joined.membershipToken,
+        nodeBaseUrl: joined.nodeBaseUrl,
+        guild: {
+          id: joined.guildId,
+          name: "Private Calls",
+        },
+        channel: {
+          id: joined.channelId,
+          guild_id: joined.guildId,
+          name: "Private Call",
+          type: "voice",
+          position: 0,
+          parent_id: null,
+        } satisfies Channel,
+      });
+      setIncomingCall(null);
+      return true;
+    },
+    [api],
+  );
+
+  const acceptIncomingCall = useCallback(async () => {
+    if (!incomingCall || answeringCall) return;
+    setAnsweringCall(true);
+    try {
+      const opened = await openPrivateCallRoom(incomingCall);
+      if (!opened) {
+        Alert.alert("Call unavailable", "Could not join this call right now.");
+      }
+    } finally {
+      setAnsweringCall(false);
+    }
+  }, [answeringCall, incomingCall, openPrivateCallRoom]);
+
+  const declineIncomingCall = useCallback(async () => {
+    if (!incomingCall || decliningCall) return;
+    setDecliningCall(true);
+    try {
+      await api.endPrivateCall(incomingCall.callId);
+      setIncomingCall(null);
+    } catch {
+      Alert.alert("Call error", "Could not decline this call right now.");
+    } finally {
+      setDecliningCall(false);
+    }
+  }, [api, decliningCall, incomingCall]);
+
+  const handleNotificationCallData = useCallback(
+    async (data: Record<string, unknown>) => {
+      const callId = String(data.callId || "").trim();
+      if (!callId) return false;
+
+      const threadId = String(data.threadId || "").trim();
+      if (threadId) {
+        await openDmThreadById(threadId).catch(() => false);
+      }
+
+      queueIncomingCall({
+        callId,
+        callerId: String(data.callerId || "").trim(),
+        callerName: String(data.callerName || "Incoming Call").trim(),
+        callerPfp: String(data.callerPfp || "").trim() || null,
+        threadId: threadId || undefined,
+      });
+      return true;
+    },
+    [openDmThreadById, queueIncomingCall],
+  );
+
   // ── Core gateway ─────────────────────────────────────────────────────────────
   // Handles real-time DMs, presence, and call events globally.
   useCoreGateway({
@@ -432,6 +732,16 @@ function AppContent() {
     onEvent: useCallback(
       (event) => {
         switch (event.type) {
+          case "SELF_STATUS":
+            setSelfStatus(
+              event.status === "idle" ||
+                event.status === "dnd" ||
+                event.status === "offline"
+                ? event.status
+                : "online",
+            );
+            break;
+
           case "PRESENCE_UPDATE":
             updatePresence(event.userId, event.status, event.customStatus);
             break;
@@ -455,46 +765,43 @@ function AppContent() {
             break;
 
           case "CALL_INCOMING":
-            Alert.alert(
-              "📞 Incoming Call",
-              `${event.callerName} is calling you`,
-              [
-                { text: "Decline", style: "cancel" },
-                {
-                  text: "Answer (Web/Desktop)",
-                  onPress: () => {
-                    // Voice calls require the web/desktop app
-                    Alert.alert(
-                      "Voice Calls",
-                      "Accept voice calls from the OpenCom web or desktop app.",
-                    );
-                  },
-                },
-              ],
+            queueIncomingCall({
+              callId: event.callId,
+              callerId: event.callerId,
+              callerName: event.callerName,
+              callerPfp: event.callerPfp ?? null,
+            });
+            break;
+
+          case "CALL_ENDED":
+            setIncomingCall((current) =>
+              current?.callId === event.callId ? null : current,
             );
             break;
 
           case "FRIEND_REQUEST":
-            Alert.alert(
-              "👋 Friend Request",
-              `${event.username} sent you a friend request`,
-              [{ text: "OK" }],
-            );
             break;
 
           case "FRIEND_ACCEPTED":
-            Alert.alert(
-              "✅ New Friend",
-              `${event.username} accepted your friend request!`,
-              [{ text: "OK" }],
-            );
+            api
+              .getDms()
+              .then((data) => setDmThreads(data.dms ?? []))
+              .catch(() => {});
             break;
 
           default:
             break;
         }
       },
-      [updatePresence, upsertDmMessage, removeDmMessage, setDmThreads, api],
+      [
+        updatePresence,
+        upsertDmMessage,
+        removeDmMessage,
+        setDmThreads,
+        api,
+        queueIncomingCall,
+        setSelfStatus,
+      ],
     ),
   });
 
@@ -591,12 +898,19 @@ function AppContent() {
         setAuthStatus("You have been signed out.");
         return;
       }
+
+      if (!tokens) {
+        pendingDeepLinkRef.current = target;
+        setAuthStatus("Sign in to continue.");
+        return;
+      }
+
+      if (!navigationReady || !navigationRef.current?.navigate) {
+        pendingDeepLinkRef.current = target;
+        return;
+      }
+
       if (target.kind === "join") {
-        if (!tokens) {
-          pendingDeepLinkRef.current = target;
-          setAuthStatus("Sign in to accept the invite.");
-          return;
-        }
         try {
           await api.joinInvite(target.code);
           await refreshServers();
@@ -607,10 +921,51 @@ function AppContent() {
         }
         return;
       }
-      // Other deep link kinds can be stored and handled post-login
+
+      if (target.kind === "friends") {
+        if (openFriendsScreen()) {
+          pendingDeepLinkRef.current = null;
+        }
+        return;
+      }
+
+      if (target.kind === "dm") {
+        if (await openDmThreadById(target.threadId)) {
+          pendingDeepLinkRef.current = null;
+        }
+        return;
+      }
+
+      if (target.kind === "channel") {
+        if (await openServerChannelTarget(target)) {
+          pendingDeepLinkRef.current = null;
+          return;
+        }
+      }
+
+      if (target.kind === "server") {
+        const server = servers.find((item) => item.id === target.serverId);
+        if (server && navigationRef.current?.navigate) {
+          navigationRef.current.navigate("Tabs", { screen: "Servers" });
+          pendingDeepLinkRef.current = null;
+          return;
+        }
+      }
+
       pendingDeepLinkRef.current = target;
     },
-    [api, refreshServers, setTokens, setMe, tokens],
+    [
+      api,
+      navigationReady,
+      openDmThreadById,
+      openFriendsScreen,
+      openServerChannelTarget,
+      refreshServers,
+      servers,
+      setTokens,
+      setMe,
+      tokens,
+    ],
   );
 
   const handleIncomingUrl = useCallback(
@@ -651,7 +1006,23 @@ function AppContent() {
 
       // Handle cold-start deep link
       const initialUrl = await Linking.getInitialURL();
-      if (initialUrl) await handleIncomingUrl(initialUrl);
+      if (initialUrl) {
+        await handleIncomingUrl(initialUrl);
+      } else {
+        const notificationResponse =
+          await Notifications.getLastNotificationResponseAsync();
+        const notificationData =
+          notificationResponse?.notification.request.content.data ?? {};
+        const notificationUrl = String(
+          (notificationData.deepLink as string) ??
+            (notificationData.url as string) ??
+            "",
+        );
+        if (notificationUrl) await handleIncomingUrl(notificationUrl);
+        await handleNotificationCallData(
+          notificationData as Record<string, unknown>,
+        );
+      }
     })();
 
     // Warm deep links
@@ -668,6 +1039,7 @@ function AppContent() {
           (data.deepLink as string) ?? (data.url as string) ?? "",
         );
         if (url) void handleIncomingUrl(url);
+        void handleNotificationCallData(data as Record<string, unknown>);
       },
     );
 
@@ -684,17 +1056,23 @@ function AppContent() {
       notifTapSub.remove();
       notifReceiveSub.remove();
     };
-  }, [handleIncomingUrl, refreshServers, refreshMyProfile, setTokens]);
+  }, [
+    handleIncomingUrl,
+    handleNotificationCallData,
+    refreshServers,
+    refreshMyProfile,
+    setTokens,
+  ]);
 
   // ── Pending deep link after sign in ───────────────────────────────────────────
 
   useEffect(() => {
     const pending = pendingDeepLinkRef.current;
-    if (tokens?.accessToken && pending) {
+    if (tokens?.accessToken && navigationReady && pending) {
       pendingDeepLinkRef.current = null;
       void applyDeepLinkTarget(pending);
     }
-  }, [tokens?.accessToken, applyDeepLinkTarget]);
+  }, [tokens?.accessToken, navigationReady, applyDeepLinkTarget]);
 
   // ── Push token registration ───────────────────────────────────────────────────
 
@@ -753,34 +1131,164 @@ function AppContent() {
   }
 
   return (
-    <NavigationContainer
-      theme={
-        {
-          dark: true,
-          colors: {
-            primary: colors.brand,
-            background: colors.background,
-            card: colors.sidebar,
-            text: colors.text,
-            border: colors.border,
-            notification: colors.brand,
-          },
-          fonts: {
-            regular: { fontFamily: "System", fontWeight: "400" },
-            medium: { fontFamily: "System", fontWeight: "500" },
-            bold: { fontFamily: "System", fontWeight: "700" },
-            heavy: { fontFamily: "System", fontWeight: "900" },
-          },
-        } as any
-      }
-    >
-      <StatusBar style="light" />
-      <MainNavigator />
-    </NavigationContainer>
+    <>
+      <NavigationContainer
+        ref={navigationRef}
+        onReady={() => setNavigationReady(true)}
+        theme={
+          {
+            dark: true,
+            colors: {
+              primary: colors.brand,
+              background: colors.background,
+              card: colors.sidebar,
+              text: colors.text,
+              border: colors.border,
+              notification: colors.brand,
+            },
+            fonts: {
+              regular: { fontFamily: "System", fontWeight: "400" },
+              medium: { fontFamily: "System", fontWeight: "500" },
+              bold: { fontFamily: "System", fontWeight: "700" },
+              heavy: { fontFamily: "System", fontWeight: "900" },
+            },
+          } as any
+        }
+      >
+        <StatusBar style="light" />
+        <MainNavigator />
+      </NavigationContainer>
+
+      <Modal
+        visible={!!incomingCall}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setIncomingCall(null)}
+      >
+        <View style={styles.callOverlay}>
+          <View style={styles.callCard}>
+            <Text style={styles.callEyebrow}>INCOMING CALL</Text>
+            <Avatar
+              username={incomingCall?.callerName || "Incoming Call"}
+              pfpUrl={incomingCall?.callerPfp}
+              size={68}
+              showStatus={false}
+            />
+            <Text style={styles.callTitle}>
+              {incomingCall?.callerName || "Incoming Call"}
+            </Text>
+            <Text style={styles.callHint}>
+              Join the mobile voice room now, or decline the call.
+            </Text>
+
+            <View style={styles.callActions}>
+              <Pressable
+                style={[
+                  styles.callActionSecondary,
+                  decliningCall && styles.callActionDisabled,
+                ]}
+                onPress={declineIncomingCall}
+                disabled={decliningCall}
+              >
+                <Text style={styles.callActionSecondaryText}>
+                  {decliningCall ? "Declining..." : "Decline"}
+                </Text>
+              </Pressable>
+              <Pressable
+                style={[
+                  styles.callActionPrimary,
+                  answeringCall && styles.callActionDisabled,
+                ]}
+                onPress={acceptIncomingCall}
+                disabled={answeringCall}
+              >
+                <Text style={styles.callActionPrimaryText}>
+                  {answeringCall ? "Joining..." : "Join"}
+                </Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+    </>
   );
 }
 
 // ─── Root export ──────────────────────────────────────────────────────────────
+
+const styles = StyleSheet.create({
+  callOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(7, 13, 25, 0.76)",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 24,
+  },
+  callCard: {
+    width: "100%",
+    maxWidth: 360,
+    borderRadius: 28,
+    padding: 24,
+    alignItems: "center",
+    gap: 12,
+    backgroundColor: colors.sidebar,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  callEyebrow: {
+    color: colors.brand,
+    fontSize: 11,
+    fontWeight: "700",
+    letterSpacing: 0.9,
+  },
+  callTitle: {
+    color: colors.text,
+    fontSize: 24,
+    fontWeight: "800",
+    textAlign: "center",
+  },
+  callHint: {
+    color: colors.textDim,
+    fontSize: 14,
+    textAlign: "center",
+    lineHeight: 20,
+  },
+  callActions: {
+    width: "100%",
+    flexDirection: "row",
+    gap: 12,
+    marginTop: 8,
+  },
+  callActionPrimary: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 999,
+    backgroundColor: colors.brand,
+    paddingVertical: 14,
+  },
+  callActionPrimaryText: {
+    color: "#fff",
+    fontWeight: "700",
+  },
+  callActionSecondary: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 999,
+    backgroundColor: colors.elev,
+    borderWidth: 1,
+    borderColor: colors.border,
+    paddingVertical: 14,
+  },
+  callActionSecondaryText: {
+    color: colors.text,
+    fontWeight: "700",
+  },
+  callActionDisabled: {
+    opacity: 0.55,
+  },
+});
 
 export default function App() {
   return (

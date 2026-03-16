@@ -22,6 +22,12 @@ export function parseDeepLink(inputUrl: string): DeepLinkTarget | null {
     return { kind: "join", code: parts[1] };
   }
 
+  if (parts[0] === "friends") return { kind: "friends" };
+
+  if (parts[0] === "dm" && parts[1]) {
+    return { kind: "dm", threadId: parts[1] };
+  }
+
   if (parts[0] === "server" && parts[1]) {
     return { kind: "server", serverId: parts[1] };
   }

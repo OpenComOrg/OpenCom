@@ -41,6 +41,7 @@ type ChannelScreenProps = {
   onBack: () => void;
   onViewPins?: () => void;
   onViewMembers?: () => void;
+  onJoinVoice?: (server: CoreServer, guild: Guild, channel: Channel) => void;
 };
 
 type ReplyTarget = {
@@ -267,8 +268,8 @@ function VoiceMembersPanel({ voiceStates }: { voiceStates: VoiceState[] }) {
             {voiceStates.length} {voiceStates.length === 1 ? "person is" : "people are"} in the room
           </Text>
           <Text style={voiceStyles.heroText}>
-            Track who is active here, then jump to the web or desktop app for
-            the full live call stage and screen sharing.
+            Track who is active here and jump into the live mobile room when
+            you want the full roster and publisher view.
           </Text>
         </View>
 
@@ -312,7 +313,7 @@ function VoiceMembersPanel({ voiceStates }: { voiceStates: VoiceState[] }) {
         </View>
         <View style={voiceStyles.summaryPill}>
           <Text style={voiceStyles.summaryLabel}>Shares</Text>
-          <Text style={voiceStyles.summaryValue}>Web/Desktop</Text>
+          <Text style={voiceStyles.summaryValue}>Live now</Text>
         </View>
       </View>
 
@@ -344,7 +345,7 @@ function VoiceMembersPanel({ voiceStates }: { voiceStates: VoiceState[] }) {
       ))}
       <View style={voiceStyles.note}>
         <Text style={voiceStyles.noteText}>
-          🖥️ Voice calling is available on the web and desktop apps.
+          Mobile can now join the live room and follow active publishers.
         </Text>
       </View>
     </ScrollView>
@@ -553,6 +554,7 @@ export function ChannelScreen({
   onBack,
   onViewPins,
   onViewMembers,
+  onJoinVoice,
 }: ChannelScreenProps) {
   const { api, me, presenceByUserId } = useAuth();
 
@@ -928,10 +930,18 @@ export function ChannelScreen({
           <SurfaceCard style={styles.voiceIntro}>
             <Text style={styles.voiceIntroTitle}>Voice stage</Text>
             <Text style={styles.voiceIntroText}>
-              This mobile view now mirrors the live call stage layout. Audio,
-              live screen shares, and fullscreen viewing still run on the web
-              and desktop clients.
+              Jump into the mobile voice room to join the live roster, follow
+              who is speaking, and track active screen-share or camera
+              publishers.
             </Text>
+            {onJoinVoice ? (
+              <Pressable
+                style={styles.voiceJoinBtn}
+                onPress={() => onJoinVoice(server, guild, channel)}
+              >
+                <Text style={styles.voiceJoinBtnText}>Open live room</Text>
+              </Pressable>
+            ) : null}
           </SurfaceCard>
           <VoiceMembersPanel voiceStates={voiceStates} />
         </View>
@@ -1138,6 +1148,18 @@ const styles = StyleSheet.create({
     ...typography.body,
     color: colors.textDim,
     lineHeight: 22,
+  },
+  voiceJoinBtn: {
+    marginTop: spacing.md,
+    alignSelf: "flex-start",
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+    borderRadius: radii.full,
+    backgroundColor: colors.brand,
+  },
+  voiceJoinBtnText: {
+    color: "#fff",
+    fontWeight: "700",
   },
   chatIntro: {
     marginBottom: spacing.md,

@@ -5,6 +5,7 @@ import crypto from "crypto";
 import { env } from "../env.js";
 import { signMembershipToken } from "../membershipToken.js";
 import { isOfficialAccountUserId } from "../officialAccount.js";
+import { sendMobilePushToUser } from "../pushNotifications.js";
 
 // Error Code Reference:
 // 404: Active call not found
@@ -41,6 +42,11 @@ type PrivateCallStatusResult = {
 };
 
 const PRIVATE_CALL_STALE_GRACE_MS = 45_000;
+
+function buildAppDeepLink(path: string) {
+  const normalized = String(path || "").replace(/^\/+/, "");
+  return `opencom://${normalized}`;
+}
 
 function is_private_call_active(call: Pick<PrivateCallRow, "active" | "ended_at">) {
   return !!call.active && !call.ended_at;
@@ -467,6 +473,18 @@ export async function CallRoutes(
       env.CORE_NODE_SYNC_SECRET
     );
 
+    const callerRows = await q<{
+      username: string;
+      display_name: string | null;
+      pfp_url: string | null;
+    }>(
+      `SELECT username,display_name,pfp_url FROM users WHERE id=:userId LIMIT 1`,
+      { userId }
+    );
+    const callerName =
+      callerRows[0]?.display_name || callerRows[0]?.username || "Unknown";
+    const callerPfp = callerRows[0]?.pfp_url ?? null;
+
     if (broadcastToUser) {
       const createdAt = new Date().toISOString();
 
@@ -492,12 +510,30 @@ export async function CallRoutes(
           guildId: callResult.guild_id,
           nodeBaseUrl: callResult.node_base_url,
           callerId: userId,
+          callerName,
+          callerPfp,
           targetId: target_id,
           createdAt
         };
         await broadcastToUser(userId, "PRIVATE_CALL_CREATE", callPayload);
         await broadcastToUser(target_id, "PRIVATE_CALL_CREATE", callPayload);
       }
+    }
+
+    if (callResult) {
+      await sendMobilePushToUser({
+        userId: target_id,
+        title: "Incoming call",
+        body: `${callerName} is calling you`,
+        data: {
+          deepLink: buildAppDeepLink(`dm/${thread[0].id}`),
+          kind: "call",
+          callId: callResult.call_id,
+          callerId: userId,
+          callerName,
+          threadId: thread[0].id
+        }
+      });
     }
 
     if (!nodeConfigured) {

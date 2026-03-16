@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { SafeAvatar } from "./ui/SafeAvatar";
+import { MicrophoneIcon } from "./ui/VoiceIcons";
 
 // ─── Tiny ring-tone generator (no external deps) ─────────────────────────────
 function useRingTone(active) {
@@ -328,7 +329,7 @@ export function ActiveCallBar({ call, isMuted, duration = 0, onMute, onEnd }) {
           transition: "background 0.15s",
         }}
       >
-        {isMuted ? "🔇" : "🎤"}
+        <MicrophoneIcon muted={isMuted} size={16} />
       </button>
 
       {/* End call */}

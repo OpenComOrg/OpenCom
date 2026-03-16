@@ -490,6 +490,8 @@ export const AUDIO_OUTPUT_DEVICE_KEY = "opencom_audio_output_device";
 export const NOISE_SUPPRESSION_KEY = "opencom_noise_suppression";
 export const NOISE_SUPPRESSION_PRESET_KEY = "opencom_noise_suppression_preset";
 export const NOISE_SUPPRESSION_CONFIG_KEY = "opencom_noise_suppression_config";
+export const VOICE_NOISE_CANCELLATION_MODE_KEY =
+  "opencom_noise_cancellation_mode";
 export const VOICE_MEMBER_AUDIO_PREFS_KEY = "opencom_voice_member_audio_prefs";
 // Kept for backward compatibility with any persisted/runtime references from older bundles.
 export const SERVER_VOICE_GATEWAY_PREFS_KEY =
@@ -820,6 +822,60 @@ export function getDesktopBridge() {
   return window.opencomDesktopBridge || null;
 }
 
+export async function requestSystemNotificationPermission() {
+  const bridge = getDesktopBridge();
+  if (bridge?.notify) return "granted";
+  if (typeof window === "undefined" || typeof Notification === "undefined") {
+    return "unsupported";
+  }
+  if (Notification.permission === "granted") return "granted";
+  if (Notification.permission === "denied") return "denied";
+  try {
+    return await Notification.requestPermission();
+  } catch {
+    return "default";
+  }
+}
+
+export async function showSystemNotification(input = {}) {
+  const title = String(input?.title || "").trim() || "OpenCom";
+  const body = String(input?.body || "").trim();
+  const tag = String(input?.tag || "").trim() || undefined;
+  const silent = input?.silent === true;
+  const onClick =
+    typeof input?.onClick === "function" ? input.onClick : undefined;
+
+  if (typeof window !== "undefined" && typeof Notification !== "undefined") {
+    let permission = Notification.permission;
+    if (permission === "default") {
+      permission = await requestSystemNotificationPermission();
+    }
+    if (permission === "granted") {
+      try {
+        const notification = new Notification(title, { body, silent, tag });
+        notification.onclick = () => {
+          try {
+            window.focus();
+          } catch {}
+          notification.close();
+          onClick?.();
+        };
+        return true;
+      } catch {}
+    }
+  }
+
+  const bridge = getDesktopBridge();
+  if (bridge?.notify) {
+    try {
+      await bridge.notify({ title, body, silent, tag });
+      return true;
+    } catch {}
+  }
+
+  return false;
+}
+
 export function getVoiceGatewayWsCandidates(
   serverBaseUrl,
   includeDirectNodeWsFallback = false,
@@ -1086,6 +1142,169 @@ export function getNoiseSuppressionPresetConfigForUi(preset) {
   return (
     VOICE_NOISE_SUPPRESSION_PRESETS[key] ||
     VOICE_NOISE_SUPPRESSION_PRESETS[VOICE_NOISE_SUPPRESSION_DEFAULT_PRESET]
+  );
+}
+
+export function normalizeVoiceNoiseCancellationMode(value) {
+  return String(value || "").trim().toLowerCase() === "advanced"
+    ? "advanced"
+    : "smart";
+}
+
+function clampUnitInterval(value) {
+  return Math.max(0, Math.min(1, Number(value) || 0));
+}
+
+function interpolateNoiseValue(a, b, t, digits = 3) {
+  const mixed = Number(a) + (Number(b) - Number(a)) * clampUnitInterval(t);
+  const scale = 10 ** digits;
+  return Math.round(mixed * scale) / scale;
+}
+
+function interpolateNoiseConfig(fromConfig, toConfig, t) {
+  return {
+    gateOpenRms: interpolateNoiseValue(
+      fromConfig.gateOpenRms,
+      toConfig.gateOpenRms,
+      t,
+      3,
+    ),
+    gateCloseRms: interpolateNoiseValue(
+      fromConfig.gateCloseRms,
+      toConfig.gateCloseRms,
+      t,
+      3,
+    ),
+    gateAttack: interpolateNoiseValue(
+      fromConfig.gateAttack,
+      toConfig.gateAttack,
+      t,
+      2,
+    ),
+    gateRelease: interpolateNoiseValue(
+      fromConfig.gateRelease,
+      toConfig.gateRelease,
+      t,
+      2,
+    ),
+    highpassHz: Math.round(
+      interpolateNoiseValue(fromConfig.highpassHz, toConfig.highpassHz, t, 0),
+    ),
+    lowpassHz: Math.round(
+      interpolateNoiseValue(fromConfig.lowpassHz, toConfig.lowpassHz, t, 0),
+    ),
+    compressorThreshold: Math.round(
+      interpolateNoiseValue(
+        fromConfig.compressorThreshold,
+        toConfig.compressorThreshold,
+        t,
+        0,
+      ),
+    ),
+    compressorKnee: Math.round(
+      interpolateNoiseValue(fromConfig.compressorKnee, toConfig.compressorKnee, t, 0),
+    ),
+    compressorRatio: interpolateNoiseValue(
+      fromConfig.compressorRatio,
+      toConfig.compressorRatio,
+      t,
+      1,
+    ),
+    compressorAttack: interpolateNoiseValue(
+      fromConfig.compressorAttack,
+      toConfig.compressorAttack,
+      t,
+      3,
+    ),
+    compressorRelease: interpolateNoiseValue(
+      fromConfig.compressorRelease,
+      toConfig.compressorRelease,
+      t,
+      3,
+    ),
+  };
+}
+
+export function buildSmartNoiseSuppressionProfile({
+  micGain = 100,
+  micSensitivity = 50,
+  localAudioProcessingInfo = null,
+} = {}) {
+  const supported = !!localAudioProcessingInfo?.supported?.noiseSuppression;
+  const applied = localAudioProcessingInfo?.applied?.noiseSuppression === true;
+
+  let intensity = 0.5;
+  intensity += Math.max(-0.14, Math.min(0.28, (Number(micGain || 100) - 100) / 120));
+  intensity += Math.max(
+    -0.16,
+    Math.min(0.22, (50 - Number(micSensitivity || 50)) / 90),
+  );
+  if (!supported) intensity += 0.12;
+  if (applied) intensity -= 0.06;
+  intensity = clampUnitInterval(intensity);
+
+  const light = getNoiseSuppressionPresetConfigForUi("light");
+  const balanced = getNoiseSuppressionPresetConfigForUi("balanced");
+  const strict = getNoiseSuppressionPresetConfigForUi("strict");
+
+  let preset = "balanced";
+  let label = "Balanced cleanup";
+  let summary =
+    "Auto-tuned to keep voices natural while trimming steady room noise.";
+  let config = balanced;
+
+  if (intensity >= 0.5) {
+    config = interpolateNoiseConfig(
+      balanced,
+      strict,
+      (intensity - 0.5) / 0.5,
+    );
+  } else {
+    config = interpolateNoiseConfig(light, balanced, intensity / 0.5);
+  }
+
+  if (intensity >= 0.68) {
+    preset = "strict";
+    label = "Max cleanup";
+    summary =
+      "Auto-tuned for louder mics or noisier rooms, with stronger gating and filtering.";
+  } else if (intensity <= 0.34) {
+    preset = "light";
+    label = "Voice-first cleanup";
+    summary =
+      "Auto-tuned to preserve more ambience when your mic setup already sounds fairly clean.";
+  }
+
+  if (!supported) {
+    summary += " Browser-level noise suppression is unavailable, so the client filter is doing more of the work.";
+  }
+
+  return {
+    preset,
+    label,
+    summary,
+    intensity,
+    config: normalizeNoiseSuppressionConfigForUi(config, preset),
+  };
+}
+
+export function isNoiseSuppressionConfigEquivalent(a, b) {
+  const keys = [
+    ["gateOpenRms", 0.0005],
+    ["gateCloseRms", 0.0005],
+    ["gateAttack", 0.005],
+    ["gateRelease", 0.005],
+    ["highpassHz", 1],
+    ["lowpassHz", 1],
+    ["compressorThreshold", 1],
+    ["compressorKnee", 1],
+    ["compressorRatio", 0.05],
+    ["compressorAttack", 0.0005],
+    ["compressorRelease", 0.0005],
+  ];
+  return keys.every(
+    ([key, epsilon]) =>
+      Math.abs(Number(a?.[key] || 0) - Number(b?.[key] || 0)) <= epsilon,
   );
 }
 

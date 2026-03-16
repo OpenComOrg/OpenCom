@@ -26,6 +26,7 @@ import { pushRoutes } from "./routes/push.js";
 import { themeRoutes } from "./routes/themes.js";
 import { blogRoutes } from "./routes/blogs.js";
 import { FavouriteGifRoutes } from "./routes/FavouriteGifs.js";
+import { klipyRoutes } from "./routes/klipy.js";
 import { emoteRoutes } from "./routes/emotes.js";
 import { env } from "./env.js";
 import { makeRedis } from "./redis.js";
@@ -78,6 +79,7 @@ await downloadRoutes(app);
 await pushRoutes(app);
 await themeRoutes(app);
 await emoteRoutes(app);
+await klipyRoutes(app);
 await CallRoutes(app, gw.broadcastToUser);
 await FavouriteGifRoutes(app);
 

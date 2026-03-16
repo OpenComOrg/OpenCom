@@ -124,6 +124,8 @@ export type DmMessageApi = {
 export type DeepLinkTarget =
   | { kind: "login" }
   | { kind: "join"; code: string }
+  | { kind: "friends" }
+  | { kind: "dm"; threadId: string }
   | { kind: "server"; serverId: string }
   | { kind: "channel"; serverId: string; guildId: string; channelId: string };
 
@@ -176,6 +178,14 @@ export type VoiceState = {
   muted: boolean;
   deafened: boolean;
   speaking?: boolean;
+};
+
+export type VoiceProducerSource = "microphone" | "camera" | "screen";
+
+export type VoiceProducerInfo = {
+  producerId: string;
+  userId: string;
+  source: VoiceProducerSource;
 };
 
 // Invites
@@ -275,6 +285,34 @@ export type GatewayCallEnded = {
   callId: string;
 };
 
+export type PrivateCallCreateResult = {
+  success: boolean;
+  call_id?: string;
+  channel_id?: string;
+  guild_id?: string;
+  node_base_url?: string;
+  warning?: string;
+  message?: string;
+};
+
+export type PrivateCallJoinResult = {
+  success: boolean;
+  membershipToken?: string;
+  nodeBaseUrl?: string;
+  guildId?: string;
+  channelId?: string;
+  callId?: string;
+  error?: string | boolean;
+};
+
+export type PrivateCallStatusResult = {
+  success: boolean;
+  active?: boolean;
+  connected?: boolean;
+  connectedUserIds?: string[];
+  staleReason?: string | null;
+};
+
 export type GatewaySelfStatus = {
   type: "SELF_STATUS";
   status: string;
@@ -292,6 +330,7 @@ export type GatewayFriendAccepted = {
   type: "FRIEND_ACCEPTED";
   friendId: string;
   username: string;
+  threadId?: string;
 };
 
 export type GatewayEvent =
@@ -360,6 +399,51 @@ export type NodeGatewayVoiceSpeaking = {
   speaking: boolean;
 };
 
+export type NodeGatewayVoiceJoined = {
+  type: "VOICE_JOINED";
+  guildId: string;
+  channelId: string;
+  requestId?: string;
+  producers: VoiceProducerInfo[];
+};
+
+export type NodeGatewayVoiceLeft = {
+  type: "VOICE_LEFT";
+  ok: boolean;
+};
+
+export type NodeGatewayVoiceNewProducer = {
+  type: "VOICE_NEW_PRODUCER";
+  guildId: string;
+  channelId: string;
+  userId: string;
+  producerId: string;
+  source: VoiceProducerSource;
+};
+
+export type NodeGatewayVoiceProducerClosed = {
+  type: "VOICE_PRODUCER_CLOSED";
+  guildId: string;
+  channelId: string;
+  userId: string;
+  producerId: string;
+};
+
+export type NodeGatewayVoiceUserLeft = {
+  type: "VOICE_USER_LEFT";
+  guildId: string;
+  channelId: string;
+  userId: string;
+};
+
+export type NodeGatewayVoiceError = {
+  type: "VOICE_ERROR";
+  error: string;
+  code?: string;
+  details?: string;
+  requestId?: string;
+};
+
 export type NodeGatewayEvent =
   | NodeGatewayMessageCreate
   | NodeGatewayMessageUpdate
@@ -367,4 +451,10 @@ export type NodeGatewayEvent =
   | NodeGatewayVoiceStateUpdate
   | NodeGatewayVoiceJoin
   | NodeGatewayVoiceLeave
-  | NodeGatewayVoiceSpeaking;
+  | NodeGatewayVoiceSpeaking
+  | NodeGatewayVoiceJoined
+  | NodeGatewayVoiceLeft
+  | NodeGatewayVoiceNewProducer
+  | NodeGatewayVoiceProducerClosed
+  | NodeGatewayVoiceUserLeft
+  | NodeGatewayVoiceError;

@@ -31,6 +31,7 @@ type DmChatScreenProps = {
   thread: DmThreadApi;
   onBack: () => void;
   onViewPins?: () => void;
+  onStartCall?: (thread: DmThreadApi) => void;
 };
 
 type ReplyTarget = {
@@ -205,6 +206,7 @@ export function DmChatScreen({
   thread,
   onBack,
   onViewPins,
+  onStartCall,
 }: DmChatScreenProps) {
   const {
     api,
@@ -451,11 +453,22 @@ export function DmChatScreen({
             />
           }
           right={
-            onViewPins ? (
-              <Pressable onPress={onViewPins} style={styles.headerBtn} hitSlop={8}>
-                <Text style={styles.headerBtnText}>📌</Text>
-              </Pressable>
-            ) : undefined
+            <View style={styles.headerActions}>
+              {onStartCall ? (
+                <Pressable
+                  onPress={() => onStartCall(thread)}
+                  style={styles.headerBtn}
+                  hitSlop={8}
+                >
+                  <Text style={styles.headerBtnText}>📞</Text>
+                </Pressable>
+              ) : null}
+              {onViewPins ? (
+                <Pressable onPress={onViewPins} style={styles.headerBtn} hitSlop={8}>
+                  <Text style={styles.headerBtnText}>📌</Text>
+                </Pressable>
+              ) : null}
+            </View>
           }
         />
 
@@ -609,6 +622,10 @@ const styles = StyleSheet.create({
   },
 
   // Header
+  headerActions: {
+    flexDirection: "row",
+    gap: spacing.sm,
+  },
   header: {
     flexDirection: "row",
     alignItems: "center",

@@ -52,6 +52,12 @@ type UseNodeGatewayOptions = {
   enabled?: boolean;
 };
 
+export type CoreGatewayController = {
+  connected: boolean;
+  ready: boolean;
+  sendDispatch: (t: string, d?: Record<string, unknown>) => boolean;
+};
+
 export type NodeGatewayController = {
   connected: boolean;
   ready: boolean;
@@ -153,13 +159,16 @@ export function useCoreGateway({
   accessToken,
   onEvent,
   enabled = true,
-}: UseCoreGatewayOptions): void {
+}: UseCoreGatewayOptions): CoreGatewayController {
   const wsRef = useRef<WebSocket | null>(null);
   const heartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const reconnectRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const attemptRef = useRef(0);
   const disposedRef = useRef(false);
   const onEventRef = useRef(onEvent);
+  const [connected, setConnected] = useState(false);
+  const [ready, setReady] = useState(false);
+  const readyRef = useRef(false);
   onEventRef.current = onEvent;
 
   const cleanup = useCallback(() => {
@@ -172,10 +181,19 @@ export function useCoreGateway({
       reconnectRef.current = null;
     }
     if (wsRef.current) {
+      wsRef.current.onopen = null;
+      wsRef.current.onmessage = null;
+      wsRef.current.onerror = null;
+      wsRef.current.onclose = null;
       try {
         wsRef.current.close();
       } catch {}
       wsRef.current = null;
+    }
+    readyRef.current = false;
+    if (!disposedRef.current) {
+      setConnected(false);
+      setReady(false);
     }
   }, []);
 
@@ -194,6 +212,7 @@ export function useCoreGateway({
     wsRef.current = ws;
 
     ws.onopen = () => {
+      setConnected(true);
       ws.send(JSON.stringify({ op: "IDENTIFY", d: { accessToken } }));
     };
 
@@ -214,13 +233,22 @@ export function useCoreGateway({
             ws.send(JSON.stringify({ op: "HEARTBEAT" }));
           }
         }, interval);
+        return;
+      }
+
+      if (msg.op === "READY") {
         attemptRef.current = 0;
+        readyRef.current = true;
+        setReady(true);
         return;
       }
 
       if (isDispatchMessage(msg) && msg.t) {
         const d = msg.d ?? {};
         switch (msg.t) {
+          case "PRESENCE_SYNC_REQUEST":
+            onEventRef.current({ type: "PRESENCE_SYNC_REQUEST" });
+            break;
           case "SELF_STATUS":
             onEventRef.current({
               type: "SELF_STATUS",
@@ -324,6 +352,11 @@ export function useCoreGateway({
     };
 
     ws.onclose = () => {
+      readyRef.current = false;
+      if (!disposedRef.current) {
+        setConnected(false);
+        setReady(false);
+      }
       if (heartbeatRef.current) {
         clearInterval(heartbeatRef.current);
         heartbeatRef.current = null;
@@ -343,6 +376,24 @@ export function useCoreGateway({
       cleanup();
     };
   }, [enabled, wsUrl, accessToken]); // eslint-disable-line
+
+  const sendDispatch = useCallback(
+    (t: string, d: Record<string, unknown> = {}) => {
+      const ws = wsRef.current;
+      if (!ws || ws.readyState !== WebSocket.OPEN || !readyRef.current) {
+        return false;
+      }
+      ws.send(JSON.stringify({ op: "DISPATCH", t, d }));
+      return true;
+    },
+    [],
+  );
+
+  return {
+    connected,
+    ready,
+    sendDispatch,
+  };
 }
 
 // ─── Node gateway hook ───────────────────────────────────────────────────────
@@ -384,6 +435,10 @@ export function useNodeGateway({
       setReady(false);
     }
     if (wsRef.current) {
+      wsRef.current.onopen = null;
+      wsRef.current.onmessage = null;
+      wsRef.current.onerror = null;
+      wsRef.current.onclose = null;
       try {
         wsRef.current.close();
       } catch {}

@@ -20,7 +20,6 @@ import {
   TopBar,
 } from "../components/chrome";
 import { useAuth } from "../context/AuthContext";
-import { useCoreGateway, httpToCoreGatewayWs } from "../hooks/useGateway";
 import { Avatar } from "../components/Avatar";
 import type { DmMessageApi, DmThreadApi } from "../types";
 import { colors, radii, spacing, typography } from "../theme";
@@ -128,12 +127,10 @@ const replyStyles = StyleSheet.create({
 function MessageItem({
   message,
   myId,
-  participantId,
   onLongPress,
 }: {
   message: DmMessageApi;
   myId: string;
-  participantId: string;
   onLongPress: (message: DmMessageApi, isOwn: boolean) => void;
 }) {
   const isOwn = message.authorId === myId;
@@ -211,12 +208,11 @@ export function DmChatScreen({
   const {
     api,
     me,
-    coreApiUrl,
-    tokens,
     presenceByUserId,
     upsertDmMessage,
     removeDmMessage,
     dmMessages,
+    setDmMessages,
   } = useAuth();
 
   // ── State ──────────────────────────────────────────────────────────────────
@@ -232,19 +228,20 @@ export function DmChatScreen({
 
   const listRef = useRef<FlatList>(null);
   const isAtBottomRef = useRef(true);
+  const lastVisibleMessageIdRef = useRef("");
 
   // ── Derived ────────────────────────────────────────────────────────────────
   const participantPresence = presenceByUserId[thread.participantId];
-  const gatewayWsUrl = httpToCoreGatewayWs(coreApiUrl);
+  const cachedThreadMessages = dmMessages[thread.id];
 
   // ── Load messages ──────────────────────────────────────────────────────────
   const loadMessages = useCallback(async () => {
     try {
       const data = await api.getDmMessages(thread.id, { limit: PAGE_SIZE });
-      // API returns newest-first; store oldest-first for display
-      const msgs = (data.messages ?? []).slice().reverse() as DmMessageApi[];
+      const msgs = (data.messages ?? []) as DmMessageApi[];
       setMessages(msgs);
       setHasMore(data.hasMore ?? false);
+      lastVisibleMessageIdRef.current = msgs[msgs.length - 1]?.id ?? "";
       // Sync to global cache
       msgs.forEach((m) => upsertDmMessage(thread.id, m));
     } catch {
@@ -261,55 +258,61 @@ export function DmChatScreen({
         limit: PAGE_SIZE,
         before: oldest.createdAt,
       });
-      const older = (data.messages ?? []).slice().reverse() as DmMessageApi[];
+      const older = (data.messages ?? []) as DmMessageApi[];
       setMessages((prev) => [...older, ...prev]);
+      setDmMessages((prev) => {
+        const existing = prev[thread.id] ?? [];
+        const seen = new Set(existing.map((message) => message.id));
+        const olderNewestFirst = [...older].reverse();
+        const merged = [...existing];
+        for (const message of olderNewestFirst) {
+          if (seen.has(message.id)) continue;
+          seen.add(message.id);
+          merged.push(message);
+        }
+        return { ...prev, [thread.id]: merged };
+      });
       setHasMore(data.hasMore ?? false);
     } catch {
       setStatus("Failed to load older messages.");
     } finally {
       setLoadingOlder(false);
     }
-  }, [api, thread.id, messages, loadingOlder, hasMore]);
+  }, [api, thread.id, messages, loadingOlder, hasMore, setDmMessages]);
 
   useEffect(() => {
+    const cachedMessages = cachedThreadMessages
+      ? [...cachedThreadMessages].reverse()
+      : [];
     setLoading(true);
-    setMessages([]);
+    setMessages(cachedMessages);
     setHasMore(false);
     setReplyTarget(null);
+    lastVisibleMessageIdRef.current =
+      cachedMessages[cachedMessages.length - 1]?.id ?? "";
+    if (cachedMessages.length > 0) {
+      setLoading(false);
+    }
     loadMessages().finally(() => setLoading(false));
   }, [thread.id]); // eslint-disable-line
 
-  // ── Real-time gateway ──────────────────────────────────────────────────────
-  useCoreGateway({
-    wsUrl: gatewayWsUrl,
-    accessToken: tokens?.accessToken ?? null,
-    enabled: !!tokens?.accessToken,
-    onEvent: useCallback(
-      (event) => {
-        if (event.type === "DM_NEW_MESSAGE" && event.threadId === thread.id) {
-          const msg = event.message as DmMessageApi;
-          setMessages((prev) => {
-            if (prev.some((m) => m.id === msg.id)) return prev;
-            return [...prev, msg];
-          });
-          upsertDmMessage(thread.id, msg);
-          if (isAtBottomRef.current) {
-            setTimeout(
-              () => listRef.current?.scrollToEnd({ animated: true }),
-              50,
-            );
-          }
-        } else if (
-          event.type === "DM_MESSAGE_DELETED" &&
-          event.threadId === thread.id
-        ) {
-          setMessages((prev) => prev.filter((m) => m.id !== event.messageId));
-          removeDmMessage(thread.id, event.messageId);
-        }
-      },
-      [thread.id, upsertDmMessage, removeDmMessage],
-    ),
-  });
+  useEffect(() => {
+    if (!cachedThreadMessages) return;
+    const orderedMessages = [...cachedThreadMessages].reverse();
+    const newestMessageId =
+      orderedMessages[orderedMessages.length - 1]?.id ?? "";
+    const shouldScroll =
+      !!newestMessageId &&
+      newestMessageId !== lastVisibleMessageIdRef.current &&
+      isAtBottomRef.current;
+
+    setMessages(orderedMessages);
+    lastVisibleMessageIdRef.current = newestMessageId;
+
+    if (shouldScroll) {
+      setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 50);
+    }
+  }, [cachedThreadMessages]);
 
   // ── Send message ───────────────────────────────────────────────────────────
   const onSend = useCallback(async () => {
@@ -510,7 +513,6 @@ export function DmChatScreen({
             <MessageItem
               message={item}
               myId={me?.id ?? ""}
-              participantId={thread.participantId}
               onLongPress={openContextMenu}
             />
           )}

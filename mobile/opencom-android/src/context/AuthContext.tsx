@@ -8,7 +8,7 @@ import {
 } from "react";
 import { createApiClient } from "../api";
 import { resolveCoreApiUrl } from "../config";
-import { loadTokens, saveTokens, clearTokens } from "../storage";
+import { saveTokens, clearTokens } from "../storage";
 import type {
   AuthTokens,
   CoreServer,
@@ -45,6 +45,8 @@ export type AuthContextValue = {
   // Self status (set by user)
   selfStatus: UserStatus;
   setSelfStatus: (status: UserStatus) => void;
+  selfCustomStatus: string | null;
+  setSelfCustomStatus: (customStatus: string | null) => void;
 
   // Servers
   servers: CoreServer[];
@@ -81,7 +83,8 @@ function normalizeUserStatus(value: string | null | undefined): UserStatus {
   if (
     normalized === "idle" ||
     normalized === "dnd" ||
-    normalized === "offline"
+    normalized === "offline" ||
+    normalized === "invisible"
   ) {
     return normalized;
   }
@@ -96,6 +99,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [me, setMe] = useState<{ id: string; username: string } | null>(null);
   const [myProfile, setMyProfile] = useState<MyProfile | null>(null);
   const [selfStatus, setSelfStatus] = useState<UserStatus>("online");
+  const [selfCustomStatus, setSelfCustomStatus] = useState<string | null>(null);
   const [servers, setServers] = useState<CoreServer[]>([]);
   const [presenceByUserId, setPresenceByUserId] = useState<PresenceMap>({});
   const [dmThreads, setDmThreads] = useState<DmThreadApi[]>([]);
@@ -113,6 +117,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setMe(null);
       setMyProfile(null);
       setSelfStatus("online");
+      setSelfCustomStatus(null);
       setServers([]);
       setPresenceByUserId({});
       setDmThreads([]);
@@ -152,7 +157,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setServers(serversData.servers || []);
     const selfPresence = presenceData.presence?.[meData.id];
     if (selfPresence?.status) {
-      setSelfStatus(normalizeUserStatus(selfPresence.status));
+      const normalizedStatus = normalizeUserStatus(selfPresence.status);
+      setSelfStatus(normalizedStatus);
+      setSelfCustomStatus(selfPresence.customStatus ?? null);
+      setPresenceByUserId((prev) => ({
+        ...prev,
+        [meData.id]: {
+          status: normalizedStatus,
+          customStatus: selfPresence.customStatus ?? null,
+        },
+      }));
+    } else {
+      setSelfCustomStatus(null);
     }
   }, [api]);
 
@@ -239,6 +255,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       refreshMyProfile,
       selfStatus,
       setSelfStatus,
+      selfCustomStatus,
+      setSelfCustomStatus,
       servers,
       setServers,
       refreshServers,
@@ -260,6 +278,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       myProfile,
       refreshMyProfile,
       selfStatus,
+      selfCustomStatus,
       servers,
       refreshServers,
       presenceByUserId,

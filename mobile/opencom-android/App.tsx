@@ -17,7 +17,11 @@ import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 
 import { AuthProvider, useAuth } from "./src/context/AuthContext";
-import { useCoreGateway, httpToCoreGatewayWs } from "./src/hooks/useGateway";
+import {
+  useCoreGateway,
+  httpToCoreGatewayWs,
+  type CoreGatewayController,
+} from "./src/hooks/useGateway";
 import { AppTabBar } from "./src/components/chrome";
 import { Avatar } from "./src/components/Avatar";
 
@@ -533,7 +537,10 @@ function AppContent() {
     refreshMyProfile,
     api,
     coreApiUrl,
+    selfStatus,
+    selfCustomStatus,
     setSelfStatus,
+    setSelfCustomStatus,
     updatePresence,
     dmThreads,
     upsertDmMessage,
@@ -551,6 +558,7 @@ function AppContent() {
   const [decliningCall, setDecliningCall] = useState(false);
   const navigationRef = useRef<any>(null);
   const pendingDeepLinkRef = useRef<DeepLinkTarget | null>(null);
+  const coreGatewayRef = useRef<CoreGatewayController | null>(null);
 
   const getApiErrorCode = useCallback((error: unknown) => {
     const raw = error instanceof Error ? error.message : String(error || "");
@@ -723,23 +731,42 @@ function AppContent() {
     [openDmThreadById, queueIncomingCall],
   );
 
+  const sendSelfPresence = useCallback(() => {
+    if (!tokens?.accessToken || !coreGatewayRef.current?.ready) return false;
+    return coreGatewayRef.current.sendDispatch("SET_PRESENCE", {
+      status: selfStatus,
+      customStatus: selfCustomStatus ?? null,
+    });
+  }, [tokens?.accessToken, selfStatus, selfCustomStatus]);
+
   // ── Core gateway ─────────────────────────────────────────────────────────────
   // Handles real-time DMs, presence, and call events globally.
-  useCoreGateway({
+  const coreGateway = useCoreGateway({
     wsUrl: gatewayWsUrl,
     accessToken: tokens?.accessToken ?? null,
     enabled: !!tokens?.accessToken,
     onEvent: useCallback(
       (event) => {
         switch (event.type) {
+          case "PRESENCE_SYNC_REQUEST":
+            sendSelfPresence();
+            break;
+
           case "SELF_STATUS":
-            setSelfStatus(
-              event.status === "idle" ||
+            {
+              const normalizedStatus =
+                event.status === "idle" ||
                 event.status === "dnd" ||
-                event.status === "offline"
-                ? event.status
-                : "online",
-            );
+                event.status === "offline" ||
+                event.status === "invisible"
+                  ? event.status
+                  : "online";
+              setSelfStatus(normalizedStatus);
+              setSelfCustomStatus(event.customStatus ?? null);
+              if (me?.id) {
+                updatePresence(me.id, normalizedStatus, event.customStatus);
+              }
+            }
             break;
 
           case "PRESENCE_UPDATE":
@@ -794,16 +821,25 @@ function AppContent() {
         }
       },
       [
+        api,
+        me?.id,
+        queueIncomingCall,
+        removeDmMessage,
+        sendSelfPresence,
+        setDmThreads,
+        setSelfCustomStatus,
+        setSelfStatus,
         updatePresence,
         upsertDmMessage,
-        removeDmMessage,
-        setDmThreads,
-        api,
-        queueIncomingCall,
-        setSelfStatus,
       ],
     ),
   });
+  coreGatewayRef.current = coreGateway;
+
+  useEffect(() => {
+    if (!coreGateway.ready) return;
+    sendSelfPresence();
+  }, [coreGateway.ready, sendSelfPresence]);
 
   // ── Auth helpers ──────────────────────────────────────────────────────────────
 
@@ -993,6 +1029,7 @@ function AppContent() {
 
       if (stored) {
         try {
+          await setTokens(stored);
           await refreshServers();
           // Load full profile in the background
           refreshMyProfile().catch(() => {});

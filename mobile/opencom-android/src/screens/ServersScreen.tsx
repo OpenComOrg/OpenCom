@@ -322,7 +322,11 @@ export function ServersScreen({
   // ── Auto-select first server ───────────────────────────────────────────────
 
   useEffect(() => {
-    if (servers.length > 0 && !selectedServerId) {
+    if (servers.length === 0) {
+      if (selectedServerId) setSelectedServerId("");
+      return;
+    }
+    if (!servers.some((server) => server.id === selectedServerId)) {
       setSelectedServerId(servers[0].id);
     }
   }, [servers, selectedServerId]);

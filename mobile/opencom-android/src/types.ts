@@ -235,6 +235,7 @@ export type MemberProfile = {
 
 // Gateway events from the core gateway
 export type GatewayEventType =
+  | "PRESENCE_SYNC_REQUEST"
   | "PRESENCE_UPDATE"
   | "DM_NEW_MESSAGE"
   | "DM_MESSAGE_DELETED"
@@ -244,6 +245,10 @@ export type GatewayEventType =
   | "SELF_STATUS"
   | "FRIEND_REQUEST"
   | "FRIEND_ACCEPTED";
+
+export type GatewayPresenceSyncRequest = {
+  type: "PRESENCE_SYNC_REQUEST";
+};
 
 export type GatewayPresenceUpdate = {
   type: "PRESENCE_UPDATE";
@@ -334,6 +339,7 @@ export type GatewayFriendAccepted = {
 };
 
 export type GatewayEvent =
+  | GatewayPresenceSyncRequest
   | GatewayPresenceUpdate
   | GatewayDmNewMessage
   | GatewayDmMessageDeleted

@@ -256,7 +256,7 @@ export function createApiClient(input: {
         type: "image/jpeg",
       });
       const response = await coreRequestRaw(
-        `/v1/me/profile/upload/${fieldName}`,
+        `/v1/me/profile/${fieldName}`,
         {
           method: "POST",
           rawBody: formData,

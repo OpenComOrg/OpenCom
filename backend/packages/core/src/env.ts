@@ -81,6 +81,7 @@ const Env = z.object({
   AUTH_EMAIL_VERIFICATION_TOKEN_TTL_MINUTES: z.coerce.number().int().min(5).max(1440).default(60),
   AUTH_PASSWORD_RESET_TOKEN_TTL_MINUTES: z.coerce.number().int().min(5).max(1440).default(60),
   APP_BASE_URL: z.string().url().default("http://localhost:5173"),
+  SUPPORT_BASE_URL: z.string().url().default("https://support.opencom.online"),
   SMTP_HOST: z.preprocess(emptyToUndefined, z.string().min(1).optional()),
   SMTP_PORT: z.coerce.number().int().min(1).max(65535).default(587),
   SMTP_SECURE: boolFlag.default(false),

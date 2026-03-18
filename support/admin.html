@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OpenCom Support Admin</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body class="support-body support-body-admin">
+    <div class="support-bg support-bg-admin"></div>
+    <div class="support-page">
+      <header class="support-topbar">
+        <a class="support-brand" href="https://opencom.online" target="_blank" rel="noreferrer">
+          <span class="support-brand-mark" aria-hidden="true"></span>
+          <span class="support-brand-copy">
+            <strong>OpenCom</strong>
+            <span>Support Admin</span>
+          </span>
+        </a>
+        <nav class="support-topbar-actions" aria-label="Support admin links">
+          <a class="support-topbar-link" href="/">Public Portal</a>
+          <a class="support-topbar-link" href="https://opencom.online" target="_blank" rel="noreferrer">Platform</a>
+          <details class="support-utility">
+            <summary class="support-topbar-link">Environment</summary>
+            <div class="support-utility-card">
+              <p class="panel-kicker">Portal config</p>
+              <form id="admin-core-api-form" class="stack-form">
+                <label>
+                  Core API
+                  <input id="admin-core-api-input" type="url" placeholder="https://api.opencom.online" />
+                </label>
+                <button type="submit" class="secondary-btn">Save API base</button>
+              </form>
+            </div>
+          </details>
+        </nav>
+      </header>
+
+      <header class="hero hero-admin">
+        <div class="hero-copy">
+          <p class="eyebrow">OpenCom Support Admin</p>
+          <h1>Run the support queue from one OpenCom workspace.</h1>
+          <p class="lede">
+            This panel is for platform staff handling support operations. Sign in with an OpenCom account, then use platform-admin access, support permissions, or the panel password to unlock ticket management.
+          </p>
+          <div class="chip-row">
+            <span class="chip dark">Queue operations</span>
+            <span class="chip cool">Email-aware replies</span>
+            <span class="chip warm">Internal notes</span>
+          </div>
+          <div class="hero-stat-grid">
+            <article class="hero-stat">
+              <span>Triage</span>
+              <strong>Filter by status, category, priority, assignment, or search</strong>
+            </article>
+            <article class="hero-stat">
+              <span>Ownership</span>
+              <strong>Assign tickets to yourself or route them to the right staff member</strong>
+            </article>
+            <article class="hero-stat">
+              <span>Workflow</span>
+              <strong>Handle requester replies and internal-only notes in one thread</strong>
+            </article>
+          </div>
+          <div class="hero-action-row">
+            <a class="primary-btn hero-btn-link" href="#support-auth">Sign in</a>
+            <a class="secondary-btn hero-btn-link" href="#support-queue">Jump to queue</a>
+          </div>
+        </div>
+      </header>
+
+      <section class="support-utility-bar support-utility-bar-admin">
+        <p id="admin-session-summary" class="support-session-pill">Not signed in.</p>
+        <p id="admin-status-banner" class="status-banner status-banner-inline info">Sign in to access the support queue.</p>
+      </section>
+
+      <span id="support-auth" class="support-anchor"></span>
+      <section id="admin-auth-card" class="card card-auth">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Authentication</p>
+            <h2>Sign in to support admin</h2>
+            <p class="section-subcopy">Use an OpenCom account first. If the account does not already have support access, load the panel password to unlock the queue.</p>
+          </div>
+        </div>
+        <div class="admin-auth-grid">
+          <form id="admin-login-form" class="support-form auth-panel">
+            <label>
+              OpenCom email
+              <input id="admin-login-email" type="email" autocomplete="email" required />
+            </label>
+            <label>
+              Password
+              <input id="admin-login-password" type="password" autocomplete="current-password" required />
+            </label>
+            <button type="submit" class="primary-btn">Sign in</button>
+          </form>
+
+          <form id="admin-panel-password-form" class="support-form auth-panel">
+            <label>
+              Panel password
+              <input id="admin-panel-password-input" type="password" autocomplete="off" />
+            </label>
+            <button type="submit" class="secondary-btn">Save panel password</button>
+            <button type="button" id="admin-clear-panel-password-btn" class="ghost-btn">Clear panel password</button>
+          </form>
+        </div>
+        <div class="action-row action-row-end">
+          <button type="button" id="admin-logout-btn" class="ghost-btn">Log out</button>
+        </div>
+      </section>
+
+      <span id="support-queue" class="support-anchor"></span>
+      <section id="admin-app-shell" class="admin-shell hidden">
+        <aside class="card admin-sidebar">
+          <div class="section-head">
+            <div>
+              <p class="eyebrow">Queue</p>
+              <h2>Incoming tickets</h2>
+              <p class="section-subcopy">Filter, search, and open the next ticket into the workspace.</p>
+            </div>
+            <button type="button" id="admin-refresh-btn" class="secondary-btn">Refresh</button>
+          </div>
+
+          <div id="admin-overview-cards" class="mini-card-grid"></div>
+
+          <form id="admin-filter-form" class="support-form support-form-tight">
+            <div class="form-grid">
+              <label>
+                Status
+                <select id="admin-filter-status"></select>
+              </label>
+              <label>
+                Category
+                <select id="admin-filter-category"></select>
+              </label>
+              <label>
+                Priority
+                <select id="admin-filter-priority"></select>
+              </label>
+              <label>
+                Assignment
+                <select id="admin-filter-assignee">
+                  <option value="">All tickets</option>
+                  <option value="__me__">Assigned to me</option>
+                  <option value="__unassigned__">Unassigned only</option>
+                </select>
+              </label>
+            </div>
+            <label>
+              Search
+              <input id="admin-filter-query" type="text" maxlength="120" placeholder="Reference, email, username, subject..." />
+            </label>
+            <button type="submit" class="secondary-btn">Apply filters</button>
+          </form>
+
+          <div id="admin-ticket-list" class="ticket-list"></div>
+        </aside>
+
+        <section class="card admin-detail">
+          <div class="section-head">
+            <div>
+              <p class="eyebrow">Workspace</p>
+              <h2 id="admin-detail-title">Select a ticket</h2>
+              <p class="section-subcopy">Review requester details, update ticket metadata, and send replies from one thread.</p>
+            </div>
+            <div id="admin-detail-badges" class="chip-row chip-row-tight"></div>
+          </div>
+
+          <div id="admin-detail-empty" class="empty-state">
+            Pick a ticket from the queue to manage its status, assignee, and thread.
+          </div>
+
+          <div id="admin-detail-content" class="hidden">
+            <div id="admin-detail-summary" class="detail-grid"></div>
+
+            <form id="admin-ticket-meta-form" class="support-form support-form-tight">
+              <div class="form-grid">
+                <label>
+                  Subject
+                  <input id="admin-meta-subject" type="text" maxlength="180" required />
+                </label>
+                <label>
+                  Category
+                  <select id="admin-meta-category"></select>
+                </label>
+                <label>
+                  Priority
+                  <select id="admin-meta-priority"></select>
+                </label>
+                <label>
+                  Status
+                  <select id="admin-meta-status"></select>
+                </label>
+                <label>
+                  Assigned staff user ID
+                  <input id="admin-meta-assigned-user-id" type="text" maxlength="64" />
+                </label>
+              </div>
+              <div class="action-row">
+                <button type="submit" class="primary-btn">Save ticket changes</button>
+                <button type="button" id="admin-assign-me-btn" class="secondary-btn">Assign to me</button>
+                <button type="button" id="admin-clear-assignee-btn" class="ghost-btn">Clear assignee</button>
+              </div>
+            </form>
+
+            <div id="admin-message-list" class="message-stack"></div>
+
+            <form id="admin-reply-form" class="support-form">
+              <div class="form-grid">
+                <label>
+                  Next status
+                  <select id="admin-reply-next-status">
+                    <option value="">Keep current</option>
+                  </select>
+                </label>
+                <label class="checkbox-line">
+                  <input id="admin-reply-internal" type="checkbox" />
+                  Internal note only
+                </label>
+              </div>
+              <label>
+                Reply
+                <textarea id="admin-reply-message" rows="6" maxlength="5000" required placeholder="Write a staff reply or internal note."></textarea>
+              </label>
+              <div class="action-row">
+                <button type="submit" class="primary-btn">Send update</button>
+                <span class="helper-copy">Public replies email the requester. Internal notes stay staff-only.</span>
+              </div>
+            </form>
+          </div>
+        </section>
+      </section>
+    </div>
+
+    <script type="module" src="./admin.js"></script>
+  </body>
+</html>

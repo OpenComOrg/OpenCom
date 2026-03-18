@@ -7,6 +7,7 @@ export const PLATFORM_PANEL_PERMISSIONS = [
   "manage_boosts",
   "send_official_messages",
   "manage_blogs",
+  "manage_support",
 ] as const;
 
 export type PlatformPanelPermission =

@@ -32,6 +32,11 @@ const PANEL_PERMISSION_OPTIONS = [
     label: "Manage blogs",
     description: "Create, edit, publish, and delete blog posts.",
   },
+  {
+    id: "manage_support",
+    label: "Manage support",
+    description: "Access the support-admin panel and handle ticket workflows.",
+  },
 ];
 
 const STAFF_TEMPLATES = [
@@ -54,6 +59,11 @@ const STAFF_TEMPLATES = [
     id: "community-lead",
     title: "Community Lead",
     permissions: ["moderate_users", "send_official_messages", "manage_blogs"],
+  },
+  {
+    id: "support-agent",
+    title: "Support Agent",
+    permissions: ["manage_support"],
   },
 ];
 

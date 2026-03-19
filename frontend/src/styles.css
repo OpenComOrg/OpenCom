@@ -316,6 +316,37 @@ button.danger { background: linear-gradient(135deg, #eb5d73, #c84159); }
   width: 100%;
 }
 
+.landing-mobile-panel {
+  width: min(100%, 980px);
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(280px, 0.9fr);
+  gap: var(--space-md);
+  padding: clamp(1.1rem, 2vw, 1.6rem);
+  border-radius: calc(var(--radius) * 1.15);
+  border: 1px solid rgba(115, 134, 255, 0.28);
+  background:
+    radial-gradient(circle at top left, rgba(115, 134, 255, 0.2), transparent 42%),
+    linear-gradient(145deg, rgba(18, 31, 57, 0.97), rgba(10, 18, 36, 0.99));
+  box-shadow: 0 20px 42px rgba(3, 8, 22, 0.34);
+}
+
+.landing-mobile-copy {
+  display: grid;
+  gap: var(--space-xs);
+}
+
+.landing-mobile-copy h2 {
+  margin: 0;
+  font-size: clamp(1.55rem, 3vw, 2.1rem);
+  line-height: 1.05;
+}
+
+.landing-mobile-actions {
+  display: grid;
+  gap: var(--space-xs);
+  align-content: center;
+}
+
 .landing-feature {
   padding: clamp(1rem, 2.4vw, 1.35rem);
   border-radius: var(--radius);
@@ -486,6 +517,10 @@ button.danger { background: linear-gradient(135deg, #eb5d73, #c84159); }
     justify-content: center;
   }
 
+  .landing-mobile-panel {
+    grid-template-columns: 1fr;
+  }
+
   .landing-open-source-panel,
   .landing-cta-panel {
     align-items: flex-start;
@@ -551,6 +586,7 @@ button.danger { background: linear-gradient(135deg, #eb5d73, #c84159); }
 
   .landing-action-row .landing-btn,
   .landing-open-source-panel .landing-btn,
+  .landing-mobile-actions .landing-btn,
   .download-wrapper .landing-btn {
     flex: 1;
     min-width: 0;

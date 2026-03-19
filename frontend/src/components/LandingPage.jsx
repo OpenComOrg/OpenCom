@@ -6,6 +6,9 @@ export function LandingPage({
   setDownloadsMenuOpen,
   downloadTargets,
   preferredDownloadTarget,
+  mobileDownloadTarget,
+  isMobileVisitor,
+  isAndroidVisitor,
   onOpenApp,
   onOpenClient,
   onOpenTerms,
@@ -28,6 +31,13 @@ export function LandingPage({
       copy: "Drop into voice when text is not enough, with low-friction controls and status visibility."
     }
   ];
+  const handleOpenDownloads = () => {
+    setDownloadsMenuOpen(true);
+    downloadMenuRef?.current?.scrollIntoView?.({
+      behavior: "smooth",
+      block: "start",
+    });
+  };
 
   return (
     <div className="landing-page">
@@ -42,6 +52,53 @@ export function LandingPage({
         </div>
       </header>
       <main className="landing-main">
+        {isMobileVisitor && (
+          <section className="landing-mobile-panel">
+            <div className="landing-mobile-copy">
+              <p className="landing-kicker">Mobile browser detected</p>
+              <h2>Choose the best way to use OpenCom on this device.</h2>
+              <p className="landing-hint">
+                {isAndroidVisitor
+                  ? "Continue in the web client right now, or install the Android app for a smoother mobile experience."
+                  : "Continue in the web client right now, or jump to the downloads section for the best install option on your devices."}
+              </p>
+            </div>
+            <div className="landing-mobile-actions">
+              <button
+                type="button"
+                className="landing-btn landing-btn-primary"
+                onClick={onOpenClient}
+              >
+                Continue to web client
+              </button>
+              {isAndroidVisitor ? (
+                <a
+                  href={
+                    mobileDownloadTarget?.href ||
+                    preferredDownloadTarget?.href ||
+                    downloadTargets[0]?.href ||
+                    "#"
+                  }
+                  className="landing-btn landing-btn-secondary"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  {mobileDownloadTarget
+                    ? `Download ${mobileDownloadTarget.label}`
+                    : "View downloads"}
+                </a>
+              ) : (
+                <button
+                  type="button"
+                  className="landing-btn landing-btn-secondary"
+                  onClick={handleOpenDownloads}
+                >
+                  View downloads
+                </button>
+              )}
+            </div>
+          </section>
+        )}
         <section className="landing-hero">
           <p className="landing-kicker">Smart chat for teams, friends, and communities</p>
           <h1 className="landing-headline">Stay in sync without the noise.</h1>

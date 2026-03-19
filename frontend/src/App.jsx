@@ -47,7 +47,12 @@ import { SafeAvatar } from "./components/ui/SafeAvatar";
 import { HeadphonesIcon, MicrophoneIcon } from "./components/ui/VoiceIcons";
 import { ThemeStudioApp } from "./theme/ThemeStudioApp.jsx";
 import { ServerAdminApp } from "./admin/ServerAdminApp.jsx";
-import { DOWNLOAD_TARGETS, getPreferredDownloadTarget } from "./lib/downloads";
+import {
+  DOWNLOAD_TARGETS,
+  getDeviceDownloadContext,
+  getMobileDownloadTarget,
+  getPreferredDownloadTarget,
+} from "./lib/downloads";
 import {
   BUILTIN_EMOTES,
   BUILTIN_EMOTE_CATEGORIES,
@@ -907,10 +912,17 @@ export function App() {
     () => getPreferredDownloadTarget(DOWNLOAD_TARGETS),
     [],
   );
+  const mobileDownloadTarget = useMemo(
+    () => getMobileDownloadTarget(DOWNLOAD_TARGETS),
+    [],
+  );
+  const deviceDownloadContext = useMemo(() => getDeviceDownloadContext(), []);
   const isDesktopRuntime = useMemo(() => {
     if (typeof window === "undefined") return false;
     return window.location.protocol === "file:" || shouldSkipLandingPage();
   }, []);
+  const isMobileVisitor = deviceDownloadContext.isMobile && !isDesktopRuntime;
+  const isAndroidVisitor = deviceDownloadContext.isAndroid && !isDesktopRuntime;
   const loadedClientExtensionIdsRef = useRef(new Set());
   const desktopSessionLoadedRef = useRef(false);
   const extensionPanelsRef = useRef([]);
@@ -12254,6 +12266,9 @@ export function App() {
         setDownloadsMenuOpen={setDownloadsMenuOpen}
         downloadTargets={DOWNLOAD_TARGETS}
         preferredDownloadTarget={preferredDownloadTarget}
+        mobileDownloadTarget={mobileDownloadTarget}
+        isMobileVisitor={isMobileVisitor}
+        isAndroidVisitor={isAndroidVisitor}
         onOpenApp={openAppEntryRoute}
         onOpenClient={openAppEntryRoute}
         onOpenTerms={() => navigateAppRoute(APP_ROUTE_TERMS)}

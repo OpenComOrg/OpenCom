@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Image, StyleSheet, Text, View } from "react-native";
 import { colors, shadows } from "../theme";
+import { resolveCoreImageUrl } from "../urls";
 
 type AvatarProps = {
   username?: string | null;
@@ -45,16 +46,17 @@ export function Avatar({
   const badgeOffset = Math.round(badgeSize * 0.1);
   const borderRadius = size / 2;
   const badgeColor = status ? (STATUS_COLORS[status] ?? STATUS_COLORS.offline) : STATUS_COLORS.offline;
+  const resolvedPfpUrl = resolveCoreImageUrl(pfpUrl);
 
   useEffect(() => {
     setImageFailed(false);
-  }, [pfpUrl]);
+  }, [resolvedPfpUrl]);
 
   return (
     <View style={{ width: size, height: size }}>
-      {pfpUrl && !imageFailed ? (
+      {resolvedPfpUrl && !imageFailed ? (
         <Image
-          source={{ uri: pfpUrl }}
+          source={{ uri: resolvedPfpUrl }}
           style={[
             styles.image,
             {

@@ -14,15 +14,23 @@ import {
   TextInput,
   View,
 } from "react-native";
+import { File } from "expo-file-system";
 import {
   ScreenBackground,
   StatusBanner,
   SurfaceCard,
   TopBar,
 } from "../components/chrome";
+import { MessageAttachments } from "../components/MessageAttachments";
 import { useAuth } from "../context/AuthContext";
 import { useNodeGateway, httpToNodeGatewayWs } from "../hooks/useGateway";
 import { Avatar } from "../components/Avatar";
+import {
+  formatBytes,
+  getAttachmentDisplayName,
+  guessMimeTypeFromFileName,
+  isFilePickerCancellation,
+} from "../attachments";
 import type {
   Channel,
   ChannelMessage,
@@ -54,6 +62,13 @@ type ContextMenuState = {
   message: ChannelMessage;
   isOwn: boolean;
 } | null;
+
+type PendingAttachment = {
+  localId: string;
+  remoteId: string;
+  name: string;
+  size: number | null;
+};
 
 const PAGE_SIZE = 50;
 
@@ -477,10 +492,12 @@ const voiceStyles = StyleSheet.create({
 // ─── Message item ─────────────────────────────────────────────────────────────
 
 function MessageItem({
+  server,
   message,
   myId,
   onLongPress,
 }: {
+  server: CoreServer;
   message: ChannelMessage;
   myId: string;
   onLongPress: (message: ChannelMessage, isOwn: boolean) => void;
@@ -527,17 +544,15 @@ function MessageItem({
               {message.edited ? "  (edited)" : ""}
             </Text>
           </View>
-          <Text style={styles.messageContent}>{message.content}</Text>
+          {message.content ? (
+            <Text style={styles.messageContent}>{message.content}</Text>
+          ) : null}
           {message.attachments && message.attachments.length > 0 && (
-            <View style={styles.attachments}>
-              {message.attachments.map((a) => (
-            <View key={a.id} style={styles.attachmentChip}>
-              <Text style={styles.attachmentName} numberOfLines={1}>
-                    📎 {a.fileName ?? a.filename ?? "attachment"}
-              </Text>
-            </View>
-          ))}
-            </View>
+            <MessageAttachments
+              attachments={message.attachments}
+              scope="server"
+              server={server}
+            />
           )}
         </View>
       </View>
@@ -565,6 +580,7 @@ export function ChannelScreen({
   const [hasMore, setHasMore] = useState(false);
   const [composer, setComposer] = useState("");
   const [sending, setSending] = useState(false);
+  const [uploadingAttachment, setUploadingAttachment] = useState(false);
   const [status, setStatus] = useState("");
   const [replyTarget, setReplyTarget] = useState<ReplyTarget | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuState>(null);
@@ -573,6 +589,9 @@ export function ChannelScreen({
     content: string;
   } | null>(null);
   const [voiceStates, setVoiceStates] = useState<VoiceState[]>([]);
+  const [pendingAttachments, setPendingAttachments] = useState<
+    PendingAttachment[]
+  >([]);
 
   const listRef = useRef<FlatList>(null);
   const isAtBottomRef = useRef(true);
@@ -633,6 +652,7 @@ export function ChannelScreen({
     setMessages([]);
     setHasMore(false);
     setReplyTarget(null);
+    setPendingAttachments([]);
 
     const run = async () => {
       if (isVoice) {
@@ -745,17 +765,77 @@ export function ChannelScreen({
   });
 
   // ── Send message ───────────────────────────────────────────────────────────
+  const pickAttachment = useCallback(async () => {
+    if (uploadingAttachment) return;
+    if (pendingAttachments.length >= 10) {
+      setStatus("You can attach up to 10 files per message.");
+      return;
+    }
+
+    setUploadingAttachment(true);
+    setStatus("");
+    try {
+      const picked = await File.pickFileAsync();
+      const file = Array.isArray(picked) ? picked[0] : picked;
+      const name = getAttachmentDisplayName({
+        fileName: file?.name,
+        filename: file?.name,
+      });
+      if (!file?.uri) throw new Error("FILE_PICK_FAILED");
+
+      setStatus(`Uploading ${name}...`);
+      const uploaded = await api.uploadServerAttachment(
+        server,
+        channel.id,
+        file.uri,
+        name,
+        guessMimeTypeFromFileName(name, file.type),
+      );
+      setPendingAttachments((current) => [
+        ...current,
+        {
+          localId: `${Date.now()}-${uploaded.id}`,
+          remoteId: uploaded.id,
+          name,
+          size: file.size ?? null,
+        },
+      ]);
+      setStatus(`${name} is ready to send.`);
+    } catch (error) {
+      if (!isFilePickerCancellation(error)) {
+        setStatus("Failed to attach that file.");
+      }
+    } finally {
+      setUploadingAttachment(false);
+    }
+  }, [
+    api,
+    channel.id,
+    pendingAttachments.length,
+    server,
+    uploadingAttachment,
+  ]);
+
+  const removePendingAttachment = useCallback((localId: string) => {
+    setPendingAttachments((current) =>
+      current.filter((attachment) => attachment.localId !== localId),
+    );
+  }, []);
+
   const onSend = useCallback(async () => {
     const content = composer.trim();
-    if (!content || sending) return;
+    const attachmentIds = pendingAttachments.map((attachment) => attachment.remoteId);
+    if ((!content && attachmentIds.length === 0) || sending) return;
     setSending(true);
     setStatus("");
     try {
       await api.sendMessage(server, channel.id, content, {
         replyToId: replyTarget?.id ?? null,
+        attachmentIds,
       });
       setComposer("");
       setReplyTarget(null);
+      setPendingAttachments([]);
       // Real-time will add the message, but also refresh as fallback
       await loadMessages();
       setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 100);
@@ -764,7 +844,16 @@ export function ChannelScreen({
     } finally {
       setSending(false);
     }
-  }, [api, composer, server, channel.id, replyTarget, sending, loadMessages]);
+  }, [
+    api,
+    channel.id,
+    composer,
+    loadMessages,
+    pendingAttachments,
+    replyTarget,
+    sending,
+    server,
+  ]);
 
   // ── Context menu (long press) ──────────────────────────────────────────────
   const openContextMenu = useCallback(
@@ -1022,6 +1111,7 @@ export function ChannelScreen({
           }
           renderItem={({ item }) => (
             <MessageItem
+              server={server}
               message={item}
               myId={me?.id ?? ""}
               onLongPress={openContextMenu}
@@ -1042,7 +1132,44 @@ export function ChannelScreen({
           <ReplyBar target={replyTarget} onClear={() => setReplyTarget(null)} />
         ) : null}
 
+        {pendingAttachments.length > 0 ? (
+          <View style={styles.pendingAttachmentsRow}>
+            {pendingAttachments.map((attachment) => (
+              <View key={attachment.localId} style={styles.pendingAttachmentChip}>
+                <View style={styles.pendingAttachmentCopy}>
+                  <Text style={styles.pendingAttachmentName} numberOfLines={1}>
+                    {attachment.name}
+                  </Text>
+                  <Text style={styles.pendingAttachmentMeta} numberOfLines={1}>
+                    {formatBytes(attachment.size) || "Ready to send"}
+                  </Text>
+                </View>
+                <Pressable
+                  onPress={() => removePendingAttachment(attachment.localId)}
+                  hitSlop={8}
+                >
+                  <Text style={styles.pendingAttachmentRemove}>✕</Text>
+                </Pressable>
+              </View>
+            ))}
+          </View>
+        ) : null}
+
         <View style={styles.composerRow}>
+          <Pressable
+            style={[
+              styles.attachBtn,
+              uploadingAttachment && styles.attachBtnDisabled,
+            ]}
+            onPress={pickAttachment}
+            disabled={uploadingAttachment}
+          >
+            {uploadingAttachment ? (
+              <ActivityIndicator size="small" color={colors.brand} />
+            ) : (
+              <Text style={styles.attachBtnText}>＋</Text>
+            )}
+          </Pressable>
           <TextInput
             value={composer}
             onChangeText={setComposer}
@@ -1056,10 +1183,13 @@ export function ChannelScreen({
           <Pressable
             style={[
               styles.sendBtn,
-              (!composer.trim() || sending) && styles.sendBtnDisabled,
+              ((!composer.trim() && pendingAttachments.length === 0) || sending) &&
+                styles.sendBtnDisabled,
             ]}
             onPress={onSend}
-            disabled={!composer.trim() || sending}
+            disabled={
+              (!composer.trim() && pendingAttachments.length === 0) || sending
+            }
           >
             {sending ? (
               <ActivityIndicator size="small" color="#fff" />
@@ -1278,6 +1408,22 @@ const styles = StyleSheet.create({
     borderTopColor: colors.border,
     gap: spacing.sm,
   },
+  attachBtn: {
+    width: 46,
+    height: 46,
+    borderRadius: radii.md,
+    backgroundColor: colors.elev,
+    borderWidth: 1,
+    borderColor: colors.border,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  attachBtnDisabled: { opacity: 0.6 },
+  attachBtnText: {
+    fontSize: 24,
+    color: colors.brand,
+    lineHeight: 24,
+  },
   composerInput: {
     flex: 1,
     backgroundColor: colors.input,
@@ -1301,6 +1447,42 @@ const styles = StyleSheet.create({
   },
   sendBtnDisabled: { opacity: 0.5 },
   sendBtnText: { color: "#fff", fontWeight: "700" },
+  pendingAttachmentsRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: spacing.xs,
+    paddingHorizontal: spacing.md,
+    paddingTop: spacing.sm,
+  },
+  pendingAttachmentChip: {
+    maxWidth: "100%",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    borderRadius: radii.md,
+    backgroundColor: colors.elev,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  pendingAttachmentCopy: {
+    maxWidth: 190,
+  },
+  pendingAttachmentName: {
+    ...typography.caption,
+    color: colors.text,
+    fontWeight: "700",
+  },
+  pendingAttachmentMeta: {
+    ...typography.label,
+    color: colors.textDim,
+  },
+  pendingAttachmentRemove: {
+    color: colors.textDim,
+    fontSize: 14,
+    fontWeight: "700",
+  },
 
   // Context menu
   contextOverlay: {

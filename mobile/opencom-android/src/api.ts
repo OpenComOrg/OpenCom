@@ -247,13 +247,15 @@ export function createApiClient(input: {
     async uploadProfileImage(
       uri: string,
       fieldName: "pfp" | "banner",
+      options?: { filename?: string; mimeType?: string | null },
     ): Promise<{ url: string }> {
       const formData = new FormData();
-      const filename = uri.split("/").pop() || "upload.jpg";
+      const filename =
+        options?.filename || uri.split("/").pop() || `${fieldName}.jpg`;
       (formData as any).append("file", {
         uri,
         name: filename,
-        type: "image/jpeg",
+        type: options?.mimeType || "image/jpeg",
       });
       const response = await coreRequestRaw(
         `/v1/me/profile/${fieldName}`,
@@ -263,7 +265,14 @@ export function createApiClient(input: {
         },
       );
       if (!response.ok) throw new Error(await response.text());
-      return response.json();
+      const data = (await response.json()) as {
+        url?: string;
+        pfpUrl?: string;
+        bannerUrl?: string;
+      };
+      const url = data.url || data.pfpUrl || data.bannerUrl || "";
+      if (!url) throw new Error("UPLOAD_FAILED");
+      return { url };
     },
 
     // ─── Presence / Status ────────────────────────────────────────────────────
@@ -509,7 +518,15 @@ export function createApiClient(input: {
         { method: "POST", rawBody: formData },
       );
       if (!response.ok) throw new Error(await response.text());
-      return response.json();
+      const data = (await response.json()) as {
+        id?: string;
+        attachmentId?: string;
+        url?: string;
+      };
+      return {
+        id: data.id || data.attachmentId || "",
+        url: data.url || "",
+      };
     },
 
     // ─── Pinned Messages (server) ─────────────────────────────────────────────
@@ -856,7 +873,15 @@ export function createApiClient(input: {
         { method: "POST", rawBody: formData },
       );
       if (!response.ok) throw new Error(await response.text());
-      return response.json();
+      const data = (await response.json()) as {
+        id?: string;
+        attachmentId?: string;
+        url?: string;
+      };
+      return {
+        id: data.id || data.attachmentId || "",
+        url: data.url || "",
+      };
     },
 
     // ─── Pinned DM messages ───────────────────────────────────────────────────

@@ -9,6 +9,7 @@ import {
 import { createApiClient } from "../api";
 import { resolveCoreApiUrl } from "../config";
 import { saveTokens, clearTokens } from "../storage";
+import { normalizeServerList } from "../urls";
 import type {
   AuthTokens,
   CoreServer,
@@ -154,7 +155,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       })),
     ]);
     setMe({ id: meData.id, username: meData.username });
-    setServers(serversData.servers || []);
+    setServers(normalizeServerList(serversData.servers || []));
     const selfPresence = presenceData.presence?.[meData.id];
     if (selfPresence?.status) {
       const normalizedStatus = normalizeUserStatus(selfPresence.status);

@@ -15,6 +15,7 @@ import {
   SurfaceCard,
   TopBar,
 } from "../components/chrome";
+import { MessageAttachments } from "../components/MessageAttachments";
 import { useAuth } from "../context/AuthContext";
 import { Avatar } from "../components/Avatar";
 import type { CoreServer, Channel, DmThreadApi, PinnedMessage } from "../types";
@@ -63,10 +64,14 @@ function PinCard({
   pin,
   onUnpin,
   canUnpin,
+  mode,
+  server,
 }: {
   pin: PinnedMessage;
   onUnpin: (pin: PinnedMessage) => void;
   canUnpin: boolean;
+  mode: "channel" | "dm";
+  server?: CoreServer;
 }) {
   return (
     <View style={styles.card}>
@@ -96,19 +101,21 @@ function PinCard({
 
       <View style={styles.cardDivider} />
 
-      <Text style={styles.cardContent}>{pin.content}</Text>
+      {pin.content ? <Text style={styles.cardContent}>{pin.content}</Text> : null}
 
-      {pin.attachments && pin.attachments.length > 0 && (
-        <View style={styles.attachments}>
-          {pin.attachments.map((a) => (
-            <View key={a.id} style={styles.attachmentChip}>
-              <Text style={styles.attachmentName} numberOfLines={1}>
-                📎 {a.fileName ?? a.filename ?? "attachment"}
-              </Text>
-            </View>
-          ))}
-        </View>
-      )}
+      {pin.attachments && pin.attachments.length > 0
+        ? mode === "channel" && server
+          ? (
+              <MessageAttachments
+                attachments={pin.attachments}
+                scope="server"
+                server={server}
+              />
+            )
+          : (
+              <MessageAttachments attachments={pin.attachments} scope="core" />
+            )
+        : null}
     </View>
   );
 }
@@ -220,7 +227,13 @@ export function PinnedMessagesScreen(props: PinnedMessagesScreenProps) {
           }
           ItemSeparatorComponent={() => <View style={styles.separator} />}
           renderItem={({ item }) => (
-            <PinCard pin={item} canUnpin onUnpin={handleUnpin} />
+            <PinCard
+              pin={item}
+              canUnpin
+              onUnpin={handleUnpin}
+              mode={mode}
+              server={mode === "channel" ? props.server : undefined}
+            />
           )}
         />
       )}

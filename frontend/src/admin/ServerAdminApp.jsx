@@ -36,6 +36,80 @@ const PERMISSION_FLAGS = {
   ADMINISTRATOR: { bit: 1n << 60n, name: "Administrator" },
 };
 
+const TEXT_CHANNEL_PERMISSION_FLAGS = [
+  "VIEW_CHANNEL",
+  "SEND_MESSAGES",
+  "ATTACH_FILES",
+];
+
+const VOICE_CHANNEL_PERMISSION_FLAGS = [
+  "VIEW_CHANNEL",
+  "CONNECT",
+  "SPEAK",
+];
+
+const CATEGORY_PERMISSION_FLAGS = [
+  "VIEW_CHANNEL",
+  "SEND_MESSAGES",
+  "ATTACH_FILES",
+  "CONNECT",
+  "SPEAK",
+];
+
+function permissionFlagsForChannel(channel) {
+  if (channel?.type === "voice") return VOICE_CHANNEL_PERMISSION_FLAGS;
+  if (channel?.type === "category") return CATEGORY_PERMISSION_FLAGS;
+  return TEXT_CHANNEL_PERMISSION_FLAGS;
+}
+
+function overwritePermissionState(overwrite, flag) {
+  const meta = PERMISSION_FLAGS[flag];
+  if (!meta) return "inherit";
+  const allowBits = BigInt(overwrite?.allow || "0");
+  const denyBits = BigInt(overwrite?.deny || "0");
+  if (denyBits & meta.bit) return "deny";
+  if (allowBits & meta.bit) return "allow";
+  return "inherit";
+}
+
+function nextOverwriteBits(current, flag, state) {
+  const meta = PERMISSION_FLAGS[flag];
+  if (!meta) return current;
+  let allow = current.allow & ~meta.bit;
+  let deny = current.deny & ~meta.bit;
+  if (state === "allow") allow |= meta.bit;
+  if (state === "deny") deny |= meta.bit;
+  return { allow, deny };
+}
+
+function PermissionStatePills({ state, onChange }) {
+  return (
+    <div className="server-admin-state-pills" role="group" aria-label="Permission state">
+      <button
+        type="button"
+        className={state === "inherit" ? "active" : ""}
+        onClick={() => onChange("inherit")}
+      >
+        Inherit
+      </button>
+      <button
+        type="button"
+        className={state === "allow" ? "active is-allow" : "is-allow"}
+        onClick={() => onChange("allow")}
+      >
+        Allow
+      </button>
+      <button
+        type="button"
+        className={state === "deny" ? "active is-deny" : "is-deny"}
+        onClick={() => onChange("deny")}
+      >
+        Deny
+      </button>
+    </div>
+  );
+}
+
 function MetricCard({ label, value, hint }) {
   return (
     <article className="server-admin-stat server-admin-stat-card">
@@ -196,7 +270,17 @@ async function nodeApi(baseUrl, path, token, options = {}) {
   return response.json();
 }
 
-export function ServerAdminApp() {
+export function ServerAdminApp({
+  embedded = false,
+  preferredServerId = "",
+  preferredGuildId = "",
+  preferredTab = "overview",
+  preferredChannelId = "",
+  preferredChannelAction = "",
+  intentNonce = 0,
+  onSelectServer = null,
+  onExit = null,
+}) {
   const [token, setToken] = useState(localStorage.getItem("opencom_access_token") || "");
   const [status, setStatus] = useState({ message: "", type: "info" });
   const [servers, setServers] = useState([]);
@@ -228,14 +312,13 @@ export function ServerAdminApp() {
   const [editRoleColor, setEditRoleColor] = useState("");
   const [editRolePermissions, setEditRolePermissions] = useState({});
   const [editingChannelId, setEditingChannelId] = useState("");
-  const [channelDraft, setChannelDraft] = useState({ name: "", parentId: "" });
+  const [channelDraft, setChannelDraft] = useState({ name: "", parentId: "", syncPermissions: true });
   const [channelPermissionChannelId, setChannelPermissionChannelId] = useState("");
   const [serverProfileForm, setServerProfileForm] = useState({ name: "", logoUrl: "", bannerUrl: "" });
-  const [newWorkspaceName, setNewWorkspaceName] = useState("");
-  const [workspaceRenameName, setWorkspaceRenameName] = useState("");
   const [newChannelName, setNewChannelName] = useState("");
   const [newChannelType, setNewChannelType] = useState("text");
   const [newChannelParentId, setNewChannelParentId] = useState("");
+  const [newChannelSyncPermissions, setNewChannelSyncPermissions] = useState(true);
   const [newEmoteName, setNewEmoteName] = useState("");
   const [newEmoteUrl, setNewEmoteUrl] = useState("");
   const [inviteCustomCode, setInviteCustomCode] = useState("");
@@ -249,11 +332,12 @@ export function ServerAdminApp() {
 
   useEffect(() => {
     if (typeof document === "undefined") return undefined;
+    if (embedded) return undefined;
     document.body.classList.add("server-admin-mode");
     return () => {
       document.body.classList.remove("server-admin-mode");
     };
-  }, []);
+  }, [embedded]);
 
   useEffect(() => {
     function syncTokenFromStorage() {
@@ -270,7 +354,7 @@ export function ServerAdminApp() {
     }
     loadServers();
     loadExtensionCatalog();
-  }, [token]);
+  }, [token, preferredServerId]);
 
   useEffect(() => {
     const selectedServer = servers.find((server) => server.id === selectedServerId);
@@ -295,8 +379,6 @@ export function ServerAdminApp() {
   }, [selectedServerId, token, servers]);
 
   useEffect(() => {
-    const selectedGuild = guilds.find((guild) => guild.id === selectedGuildId);
-    setWorkspaceRenameName(selectedGuild?.name || "");
     setEditingChannelId("");
     setChannelPermissionChannelId("");
     setEditingRoleId("");
@@ -320,8 +402,23 @@ export function ServerAdminApp() {
     }
   }, [activeTab, selectedGuildId, selectedServerId, token]);
 
+  useEffect(() => {
+    if (!preferredTab) return;
+    if (SERVER_TABS.some((tab) => tab.id === preferredTab)) {
+      setActiveTab(preferredTab);
+    }
+  }, [intentNonce, preferredTab]);
+
+  useEffect(() => {
+    if (!preferredGuildId) return;
+    if (guilds.some((guild) => guild.id === preferredGuildId)) {
+      setSelectedGuildId(preferredGuildId);
+    }
+  }, [intentNonce, preferredGuildId, guilds]);
+
   const selectedServer = servers.find((server) => server.id === selectedServerId) || null;
   const selectedGuild = guilds.find((guild) => guild.id === selectedGuildId) || null;
+  const activeScopeLabel = selectedGuild?.name || selectedServer?.name || "Server";
   const members = guildState?.members || [];
   const roles = guildState?.roles || [];
   const channels = guildState?.channels || [];
@@ -349,22 +446,62 @@ export function ServerAdminApp() {
   const groupedChannels = groupChannels(visibleChannels);
   const selectedPermissionChannel = channels.find((channel) => channel.id === channelPermissionChannelId) || null;
 
+  useEffect(() => {
+    if (!intentNonce) return;
+    if (!preferredChannelId) {
+      setEditingChannelId("");
+      setChannelPermissionChannelId("");
+      return;
+    }
+    const targetChannel = channels.find((channel) => channel.id === preferredChannelId);
+    if (!targetChannel) return;
+    if (preferredChannelAction === "permissions") {
+      setChannelPermissionChannelId(targetChannel.id);
+      setEditingChannelId("");
+      return;
+    }
+    if (preferredChannelAction === "edit") {
+      openChannelEditor(targetChannel);
+      setChannelPermissionChannelId("");
+      return;
+    }
+    setEditingChannelId("");
+    setChannelPermissionChannelId("");
+  }, [intentNonce, preferredChannelId, preferredChannelAction, channels]);
+
+  function selectServer(serverId) {
+    setSelectedServerId(serverId);
+    setActiveTab("overview");
+    setMemberQuery("");
+    setRoleQuery("");
+    setChannelQuery("");
+    if (typeof onSelectServer === "function") onSelectServer(serverId);
+  }
+
   async function loadServers() {
     try {
       const data = await api("/v1/servers", token);
-      const ownedServers = normalizeServerList(data.servers || []).filter((server) => {
+      const manageableServers = normalizeServerList(data.servers || []).filter((server) => {
         const membershipRoles = Array.isArray(server?.roles) ? server.roles.map((role) => String(role).toLowerCase()) : [];
-        return membershipRoles.includes("owner");
+        return (
+          membershipRoles.includes("owner")
+          || membershipRoles.includes("platform_admin")
+          || membershipRoles.includes("admin")
+          || membershipRoles.includes("server_admin")
+        );
       });
-      setServers(ownedServers);
+      setServers(manageableServers);
       setSelectedServerId((current) => {
-        if (current && ownedServers.some((server) => server.id === current)) return current;
-        return ownedServers[0]?.id || "";
+        if (preferredServerId && manageableServers.some((server) => server.id === preferredServerId)) {
+          return preferredServerId;
+        }
+        if (current && manageableServers.some((server) => server.id === current)) return current;
+        return manageableServers[0]?.id || "";
       });
-      if (!ownedServers.length) {
-        showStatus("No owned servers found yet.", "info");
+      if (!manageableServers.length) {
+        showStatus("No manageable servers found yet.", "info");
       } else {
-        showStatus("Server admin panel ready.", "success");
+        showStatus(embedded ? "Server management ready." : "Server admin panel ready.", "success");
       }
     } catch (error) {
       showStatus(`Failed to load servers: ${error.message}`, "error");
@@ -385,7 +522,7 @@ export function ServerAdminApp() {
       });
       if (!nextGuilds.length) setGuildState(null);
     } catch (error) {
-      showStatus(`Failed to load workspaces: ${error.message}`, "error");
+      showStatus(`Failed to load server data: ${error.message}`, "error");
       setGuilds([]);
       setSelectedGuildId("");
       setGuildState(null);
@@ -401,7 +538,7 @@ export function ServerAdminApp() {
       setGuildState(state);
     } catch (error) {
       setGuildState(null);
-      showStatus(`Failed to load workspace state: ${error.message}`, "error");
+      showStatus(`Failed to load server state: ${error.message}`, "error");
     } finally {
       setGuildStateLoading(false);
     }
@@ -561,61 +698,6 @@ export function ServerAdminApp() {
     }
   }
 
-  async function createWorkspace() {
-    const server = servers.find((entry) => entry.id === selectedServerId);
-    if (!server?.baseUrl || !server?.membershipToken || !newWorkspaceName.trim()) return;
-    try {
-      const data = await nodeApi(server.baseUrl, "/v1/guilds", server.membershipToken, {
-        method: "POST",
-        body: JSON.stringify({ name: newWorkspaceName.trim(), createDefaultVoice: true }),
-      });
-      setNewWorkspaceName("");
-      await loadGuilds();
-      if (data?.guildId) setSelectedGuildId(data.guildId);
-      showStatus("Workspace created.", "success");
-    } catch (error) {
-      showStatus(`Workspace creation failed: ${error.message}`, "error");
-    }
-  }
-
-  async function renameWorkspace() {
-    const server = servers.find((entry) => entry.id === selectedServerId);
-    if (!server?.baseUrl || !server?.membershipToken || !selectedGuildId || !workspaceRenameName.trim()) return;
-    try {
-      await nodeApi(server.baseUrl, `/v1/guilds/${selectedGuildId}`, server.membershipToken, {
-        method: "PATCH",
-        body: JSON.stringify({ name: workspaceRenameName.trim() }),
-      });
-      await loadGuilds();
-      await refreshGuildState();
-      showStatus("Workspace renamed.", "success");
-    } catch (error) {
-      showStatus(`Workspace rename failed: ${error.message}`, "error");
-    }
-  }
-
-  async function deleteWorkspace(guildId) {
-    const server = servers.find((entry) => entry.id === selectedServerId);
-    const targetGuild = guilds.find((guild) => guild.id === guildId);
-    if (!server?.baseUrl || !server?.membershipToken || !guildId || !targetGuild) return;
-    if (selectedServer?.defaultGuildId && selectedServer.defaultGuildId === guildId) {
-      showStatus("The default workspace cannot be deleted from this panel.", "error");
-      return;
-    }
-    const confirmed = window.confirm(`Delete workspace "${targetGuild.name}"? This removes its channels, roles, and messages.`);
-    if (!confirmed) return;
-    try {
-      await nodeApi(server.baseUrl, `/v1/guilds/${guildId}`, server.membershipToken, {
-        method: "DELETE",
-      });
-      await loadGuilds();
-      setGuildState(null);
-      showStatus("Workspace deleted.", "success");
-    } catch (error) {
-      showStatus(`Workspace deletion failed: ${error.message}`, "error");
-    }
-  }
-
   async function createChannel() {
     const server = servers.find((entry) => entry.id === selectedServerId);
     if (!server?.baseUrl || !server?.membershipToken || !selectedGuildId || !newChannelName.trim()) return;
@@ -626,11 +708,16 @@ export function ServerAdminApp() {
           name: newChannelName.trim(),
           type: newChannelType,
           parentId: newChannelType === "category" ? null : (newChannelParentId || null),
+          syncPermissions:
+            newChannelType !== "category" && !!newChannelParentId
+              ? !!newChannelSyncPermissions
+              : false,
         }),
       });
       setNewChannelName("");
       setNewChannelType("text");
       setNewChannelParentId("");
+      setNewChannelSyncPermissions(true);
       await refreshGuildState();
       showStatus("Channel created.", "success");
     } catch (error) {
@@ -643,6 +730,7 @@ export function ServerAdminApp() {
     setChannelDraft({
       name: channel.name || "",
       parentId: channel.parent_id || "",
+      syncPermissions: !!channel.parent_id,
     });
   }
 
@@ -655,10 +743,12 @@ export function ServerAdminApp() {
         body: JSON.stringify({
           name: channelDraft.name.trim(),
           parentId: channelDraft.parentId || null,
+          syncPermissions:
+            !!channelDraft.parentId && !!channelDraft.syncPermissions,
         }),
       });
       setEditingChannelId("");
-      setChannelDraft({ name: "", parentId: "" });
+      setChannelDraft({ name: "", parentId: "", syncPermissions: true });
       await refreshGuildState();
       showStatus("Channel updated.", "success");
     } catch (error) {
@@ -726,6 +816,24 @@ export function ServerAdminApp() {
     }
   }
 
+  async function syncCategoryChildrenPermissions(channelId) {
+    const server = servers.find((entry) => entry.id === selectedServerId);
+    if (!server?.baseUrl || !server?.membershipToken || !channelId) return;
+    try {
+      const data = await nodeApi(server.baseUrl, `/v1/channels/${channelId}/sync-children-permissions`, server.membershipToken, {
+        method: "POST",
+        body: "{}",
+      });
+      await refreshGuildState();
+      showStatus(
+        `Applied category permissions to ${Number(data?.childCount || 0)} channel(s).`,
+        "success",
+      );
+    } catch (error) {
+      showStatus(`Category permission sync failed: ${error.message}`, "error");
+    }
+  }
+
   async function patchChannelOverwrite(channelId, targetType, targetId, mutate) {
     const server = servers.find((entry) => entry.id === selectedServerId);
     if (!server?.baseUrl || !server?.membershipToken || !channelId || !targetId) return;
@@ -758,39 +866,10 @@ export function ServerAdminApp() {
     }
   }
 
-  async function setEveryoneVisibility(channelId, visible) {
-    const everyoneRole = roles.find((role) => role.is_everyone);
-    if (!everyoneRole) {
-      showStatus("Could not find the @everyone role for this workspace.", "error");
-      return;
-    }
-    await patchChannelOverwrite(channelId, "role", everyoneRole.id, (current) => {
-      let allow = current.allow;
-      let deny = current.deny;
-      if (visible) {
-        allow &= ~PERMISSION_FLAGS.VIEW_CHANNEL.bit;
-        deny &= ~PERMISSION_FLAGS.VIEW_CHANNEL.bit;
-      } else {
-        allow &= ~PERMISSION_FLAGS.VIEW_CHANNEL.bit;
-        deny |= PERMISSION_FLAGS.VIEW_CHANNEL.bit;
-      }
-      return { allow, deny };
-    });
-  }
-
-  async function setRoleChannelPermission(channelId, roleId, flag, enabled) {
-    await patchChannelOverwrite(channelId, "role", roleId, (current) => {
-      let allow = current.allow;
-      let deny = current.deny;
-      if (enabled) {
-        allow |= PERMISSION_FLAGS[flag].bit;
-        deny &= ~PERMISSION_FLAGS[flag].bit;
-      } else {
-        allow &= ~PERMISSION_FLAGS[flag].bit;
-        deny &= ~PERMISSION_FLAGS[flag].bit;
-      }
-      return { allow, deny };
-    });
+  async function setChannelPermissionState(channelId, targetType, targetId, flag, state) {
+    await patchChannelOverwrite(channelId, targetType, targetId, (current) =>
+      nextOverwriteBits(current, flag, state),
+    );
   }
 
   async function createRole() {
@@ -1162,58 +1241,74 @@ export function ServerAdminApp() {
   }
 
   return (
-    <div className="server-admin-layout">
-      <aside className="server-admin-sidebar">
-        <div className="server-admin-brand">
-          <h2>Server Ops</h2>
-          <p>One place to tune up workspaces, channels, moderation, assets, and extensions.</p>
-        </div>
-
-        <div className="server-admin-sidebar-body">
-          <div className="server-admin-sidebar-head">
-            <p>Your Servers</p>
-            <span>{servers.length}</span>
+    <div className={`server-admin-layout ${embedded ? "embedded" : ""}`}>
+      {!embedded ? (
+        <aside className="server-admin-sidebar">
+          <div className="server-admin-brand">
+            <h2>Server Ops</h2>
+            <p>One place to tune up channels, moderation, assets, permissions, and extensions.</p>
           </div>
 
-          {servers.length === 0 ? (
-            <EmptyState>No owned servers yet.</EmptyState>
-          ) : (
-            servers.map((server) => (
-              <button
-                key={server.id}
-                className={`server-admin-server-btn ${selectedServerId === server.id ? "active" : ""}`}
-                onClick={() => {
-                  setSelectedServerId(server.id);
-                  setActiveTab("overview");
-                  setMemberQuery("");
-                  setRoleQuery("");
-                  setChannelQuery("");
-                }}
-              >
-                <strong>{server.name}</strong>
-                <span>{server.baseUrl}</span>
-              </button>
-            ))
-          )}
-        </div>
+          <div className="server-admin-sidebar-body">
+            <div className="server-admin-sidebar-head">
+              <p>Your Servers</p>
+              <span>{servers.length}</span>
+            </div>
 
-        <div className={`server-admin-sidebar-status ${status.type}`}>
-          {status.message || "Ready."}
-        </div>
-      </aside>
+            {servers.length === 0 ? (
+              <EmptyState>No manageable servers yet.</EmptyState>
+            ) : (
+              servers.map((server) => (
+                <button
+                  key={server.id}
+                  className={`server-admin-server-btn ${selectedServerId === server.id ? "active" : ""}`}
+                  onClick={() => selectServer(server.id)}
+                >
+                  <strong>{server.name}</strong>
+                  <span>{server.baseUrl}</span>
+                </button>
+              ))
+            )}
+          </div>
+
+          <div className={`server-admin-sidebar-status ${status.type}`}>
+            {status.message || "Ready."}
+          </div>
+        </aside>
+      ) : null}
 
       <main className="server-admin-main">
         {!selectedServer ? (
           <div className="server-admin-empty">Select a server to start managing it.</div>
         ) : (
           <>
+            {embedded ? (
+              <div className="server-admin-embedded-shell">
+                <div className="server-admin-embedded-copy">
+                  <span className="server-admin-embedded-kicker">Embedded Flow</span>
+                  <strong>Server Admin</strong>
+                  <p>Manage channels, permissions, roles, invites, and extensions without leaving the main app.</p>
+                </div>
+                <div className="server-admin-row-actions">
+                  {typeof onExit === "function" ? (
+                    <button type="button" className="server-admin-action-btn" onClick={onExit}>
+                      Back to app
+                    </button>
+                  ) : null}
+                </div>
+                <div className={`server-admin-status-inline ${status.type}`}>
+                  {status.message || "Ready."}
+                </div>
+              </div>
+            ) : null}
+
             <header className="server-admin-top">
               <div className="server-admin-top-meta">
                 <h1>{selectedServer.name}</h1>
                 <p>{selectedServer.baseUrl}</p>
                 <div className="server-admin-chip-row">
-                  <span className="server-admin-chip">Owner panel</span>
-                  <span className="server-admin-chip">{guilds.length} workspaces</span>
+                  <span className="server-admin-chip">Management panel</span>
+                  <span className="server-admin-chip">{channels.length} channels</span>
                   <span className="server-admin-chip">{enabledExtensions.length} enabled extensions</span>
                   <span className={`server-admin-chip ${selectedServer.globalEmotesEnabled ? "success" : ""}`}>
                     Global emotes {selectedServer.globalEmotesEnabled ? "on" : "off"}
@@ -1221,31 +1316,33 @@ export function ServerAdminApp() {
                 </div>
               </div>
 
-              <div className="server-admin-guild-pick">
-                <label htmlFor="server-admin-guild-select">Active Workspace</label>
-                <select
-                  id="server-admin-guild-select"
-                  value={selectedGuildId}
-                  onChange={(event) => setSelectedGuildId(event.target.value)}
-                  disabled={guilds.length === 0}
-                >
-                  {guilds.length === 0 ? <option value="">No workspaces</option> : null}
-                  {guilds.map((guild) => (
-                    <option key={guild.id} value={guild.id}>
-                      {guild.name}
-                    </option>
-                  ))}
-                </select>
+              <div className="server-admin-top-actions">
+                {embedded ? (
+                  <div className="server-admin-guild-pick">
+                    <label htmlFor="server-admin-server-select-inline">Server</label>
+                    <select
+                      id="server-admin-server-select-inline"
+                      value={selectedServerId}
+                      onChange={(event) => selectServer(event.target.value)}
+                      disabled={servers.length === 0}
+                    >
+                      {servers.map((server) => (
+                        <option key={server.id} value={server.id}>
+                          {server.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                ) : null}
               </div>
             </header>
 
             <div className="server-admin-stats">
               <MetricCard label="Server" value={selectedServer.name} hint={selectedServer.roles?.includes("boost") ? "Boost active" : "Standard access"} />
-              <MetricCard label="Workspaces" value={guilds.length} hint={selectedServer.defaultGuildId ? "Default workspace linked" : "No default workspace"} />
-              <MetricCard label="Members" value={members.length} hint={selectedGuild ? selectedGuild.name : "Pick a workspace"} />
-              <MetricCard label="Roles" value={roles.filter((role) => !role.is_everyone).length} hint={selectedGuild ? "Assignable roles" : "Pick a workspace"} />
+              <MetricCard label="Members" value={members.length} hint={activeScopeLabel} />
+              <MetricCard label="Roles" value={roles.filter((role) => !role.is_everyone).length} hint="Assignable roles" />
               <MetricCard label="Channels" value={channels.length} hint={guildStateLoading ? "Refreshing" : "Visible to you"} />
-              <MetricCard label="Custom Emotes" value={emotes.length} hint={selectedServer.globalEmotesEnabled ? "Global sharing on" : "Workspace only"} />
+              <MetricCard label="Custom Emotes" value={emotes.length} hint={selectedServer.globalEmotesEnabled ? "Global sharing on" : "Server only"} />
             </div>
 
             <div className="server-admin-tabs">
@@ -1367,78 +1464,17 @@ export function ServerAdminApp() {
 
                     <article className="server-admin-card">
                       <div className="server-admin-card-head">
-                        <h2>Workspaces</h2>
-                        <p>Create, rename, select, and retire workspaces on this server node.</p>
-                      </div>
-                      <div className="server-admin-inline-form">
-                        <input
-                          value={newWorkspaceName}
-                          onChange={(event) => setNewWorkspaceName(event.target.value)}
-                          placeholder="New workspace name"
-                        />
-                        <button className="server-admin-confirm-btn" onClick={createWorkspace}>
-                          Create workspace
-                        </button>
-                      </div>
-
-                      {selectedGuild ? (
-                        <div className="server-admin-inline-form">
-                          <input
-                            value={workspaceRenameName}
-                            onChange={(event) => setWorkspaceRenameName(event.target.value)}
-                            placeholder="Rename selected workspace"
-                          />
-                          <button className="server-admin-action-btn" onClick={renameWorkspace}>
-                            Rename
-                          </button>
-                        </div>
-                      ) : null}
-
-                      <div className="server-admin-workspace-list">
-                        {guilds.length === 0 ? (
-                          <EmptyState>No workspaces on this server yet.</EmptyState>
-                        ) : (
-                          guilds.map((guild) => (
-                            <div
-                              key={guild.id}
-                              className={`server-admin-workspace-item ${selectedGuildId === guild.id ? "active" : ""}`}
-                            >
-                              <div>
-                                <strong>{guild.name}</strong>
-                                <p>{guild.id}</p>
-                              </div>
-                              <div className="server-admin-row-actions">
-                                <button className="server-admin-action-btn" onClick={() => setSelectedGuildId(guild.id)}>
-                                  Select
-                                </button>
-                                <button
-                                  className="server-admin-action-btn danger"
-                                  onClick={() => deleteWorkspace(guild.id)}
-                                  disabled={selectedServer.defaultGuildId === guild.id}
-                                  title={selectedServer.defaultGuildId === guild.id ? "Default workspace cannot be deleted here." : "Delete workspace"}
-                                >
-                                  Delete
-                                </button>
-                              </div>
-                            </div>
-                          ))
-                        )}
-                      </div>
-                    </article>
-
-                    <article className="server-admin-card">
-                      <div className="server-admin-card-head">
                         <h2>Server Signals</h2>
                         <p>Quick health checks for the management surface you are editing.</p>
                       </div>
                       <div className="server-admin-detail-list">
                         <div>
-                          <span>Selected workspace</span>
-                          <strong>{selectedGuild?.name || "None selected"}</strong>
+                          <span>Active server</span>
+                          <strong>{activeScopeLabel}</strong>
                         </div>
                         <div>
-                          <span>Default workspace</span>
-                          <strong>{guilds.find((guild) => guild.id === selectedServer.defaultGuildId)?.name || selectedServer.defaultGuildId || "Not set"}</strong>
+                          <span>Default space</span>
+                          <strong>{guilds.find((guild) => guild.id === selectedServer.defaultGuildId)?.name || activeScopeLabel}</strong>
                         </div>
                         <div>
                           <span>Enabled extensions</span>
@@ -1457,14 +1493,14 @@ export function ServerAdminApp() {
               {activeTab === "channels" && (
                 <div className="server-admin-section">
                   {!selectedGuildId ? (
-                    <div className="server-admin-empty">Choose a workspace to manage channels.</div>
+                    <div className="server-admin-empty">Server data is still loading for channel management.</div>
                   ) : (
                     <>
                       <div className="server-admin-panel-grid">
                         <article className="server-admin-card">
                           <div className="server-admin-card-head">
                             <h2>Create Channel</h2>
-                            <p>Add text, voice, or category channels to the active workspace.</p>
+                            <p>Add text, voice, or category channels to this server.</p>
                           </div>
                           <div className="server-admin-form-grid">
                             <label>
@@ -1494,6 +1530,16 @@ export function ServerAdminApp() {
                                     </option>
                                   ))}
                                 </select>
+                              </label>
+                            ) : null}
+                            {newChannelType !== "category" && newChannelParentId ? (
+                              <label className="server-admin-checkbox">
+                                <input
+                                  type="checkbox"
+                                  checked={newChannelSyncPermissions}
+                                  onChange={(event) => setNewChannelSyncPermissions(event.target.checked)}
+                                />
+                                <span>Inherit the parent category permissions on create</span>
                               </label>
                             ) : null}
                           </div>
@@ -1540,6 +1586,9 @@ export function ServerAdminApp() {
                                       onChange={(event) => setChannelDraft((current) => ({ ...current, name: event.target.value }))}
                                       placeholder="Channel name"
                                     />
+                                    <button className="server-admin-confirm-btn" onClick={() => syncCategoryChildrenPermissions(category.id)}>
+                                      Apply to children
+                                    </button>
                                     <button className="server-admin-confirm-btn" onClick={() => saveChannel(category.id)}>
                                       Save
                                     </button>
@@ -1583,6 +1632,21 @@ export function ServerAdminApp() {
                                             </option>
                                           ))}
                                         </select>
+                                        {channelDraft.parentId ? (
+                                          <label className="server-admin-checkbox">
+                                            <input
+                                              type="checkbox"
+                                              checked={!!channelDraft.syncPermissions}
+                                              onChange={(event) =>
+                                                setChannelDraft((current) => ({
+                                                  ...current,
+                                                  syncPermissions: event.target.checked,
+                                                }))
+                                              }
+                                            />
+                                            <span>Sync parent permissions</span>
+                                          </label>
+                                        ) : null}
                                         <button className="server-admin-confirm-btn" onClick={() => saveChannel(channel.id)}>
                                           Save
                                         </button>
@@ -1627,6 +1691,21 @@ export function ServerAdminApp() {
                                         </option>
                                       ))}
                                     </select>
+                                    {channelDraft.parentId ? (
+                                      <label className="server-admin-checkbox">
+                                        <input
+                                          type="checkbox"
+                                          checked={!!channelDraft.syncPermissions}
+                                          onChange={(event) =>
+                                            setChannelDraft((current) => ({
+                                              ...current,
+                                              syncPermissions: event.target.checked,
+                                            }))
+                                          }
+                                        />
+                                        <span>Sync parent permissions</span>
+                                      </label>
+                                    ) : null}
                                     <button className="server-admin-confirm-btn" onClick={() => saveChannel(channel.id)}>
                                       Save
                                     </button>
@@ -1648,66 +1727,67 @@ export function ServerAdminApp() {
                           <div className="server-admin-card-head">
                             <h2>Channel Access</h2>
                             <p>
-                              Fine-tune explicit visibility and send overrides for <strong>{selectedPermissionChannel.name}</strong>.
+                              Fine-tune explicit allow, deny, or inherit states for <strong>{selectedPermissionChannel.name}</strong>.
                             </p>
                           </div>
 
-                          <div className="server-admin-toggle-list">
-                            <div className="server-admin-toggle-row">
-                              <div>
-                                <strong>@everyone visibility</strong>
-                                <p>Disable this to make the channel private by default.</p>
-                              </div>
-                              <label className="server-admin-switch">
-                                <input
-                                  type="checkbox"
-                                  checked={!Boolean(
-                                    BigInt(findOverwrite(overwrites, selectedPermissionChannel.id, "role", roles.find((role) => role.is_everyone)?.id || "")?.deny || "0")
-                                    & PERMISSION_FLAGS.VIEW_CHANNEL.bit,
-                                  )}
-                                  onChange={(event) => setEveryoneVisibility(selectedPermissionChannel.id, event.target.checked)}
-                                />
-                                <span>{`${
-                                  !Boolean(
-                                    BigInt(findOverwrite(overwrites, selectedPermissionChannel.id, "role", roles.find((role) => role.is_everyone)?.id || "")?.deny || "0")
-                                    & PERMISSION_FLAGS.VIEW_CHANNEL.bit,
-                                  ) ? "Visible" : "Hidden"
-                                }`}</span>
-                              </label>
-                            </div>
+                          <div className="server-admin-row-actions">
+                            {selectedPermissionChannel.parent_id ? (
+                              <button
+                                type="button"
+                                className="server-admin-action-btn"
+                                onClick={() => syncChannelPermissions(selectedPermissionChannel.id)}
+                              >
+                                Sync from parent category
+                              </button>
+                            ) : null}
+                            {selectedPermissionChannel.type === "category" ? (
+                              <button
+                                type="button"
+                                className="server-admin-action-btn success"
+                                onClick={() => syncCategoryChildrenPermissions(selectedPermissionChannel.id)}
+                              >
+                                Apply category permissions to children
+                              </button>
+                            ) : null}
+                          </div>
 
-                            {roles.filter((role) => !role.is_everyone).sort(compareRolesDescending).map((role) => {
+                          <div className="server-admin-toggle-list">
+                            {[...roles].sort(compareRolesDescending).map((role) => {
                               const overwrite = findOverwrite(overwrites, selectedPermissionChannel.id, "role", role.id);
-                              const allowBits = BigInt(overwrite?.allow || "0");
+                              const targetFlags = permissionFlagsForChannel(selectedPermissionChannel);
                               return (
                                 <div key={role.id} className="server-admin-toggle-row">
                                   <div>
-                                    <strong>{role.name}</strong>
-                                    <p>{selectedPermissionChannel.type === "voice" ? "Voice access overrides" : "Text access overrides"}</p>
+                                    <strong>{role.is_everyone ? "@everyone" : role.name}</strong>
+                                    <p>
+                                      {role.is_everyone
+                                        ? "Baseline permissions for the whole server."
+                                        : selectedPermissionChannel.type === "voice"
+                                          ? "Voice access overrides"
+                                          : selectedPermissionChannel.type === "category"
+                                            ? "Category defaults you can push down to child channels."
+                                            : "Text access overrides"}
+                                    </p>
                                   </div>
                                   <div className="server-admin-toggle-actions">
-                                    <label className="server-admin-switch">
-                                      <input
-                                        type="checkbox"
-                                        checked={Boolean(allowBits & PERMISSION_FLAGS.VIEW_CHANNEL.bit)}
-                                        onChange={(event) =>
-                                          setRoleChannelPermission(selectedPermissionChannel.id, role.id, "VIEW_CHANNEL", event.target.checked)
-                                        }
-                                      />
-                                      <span>Allow view</span>
-                                    </label>
-                                    {selectedPermissionChannel.type === "text" ? (
-                                      <label className="server-admin-switch">
-                                        <input
-                                          type="checkbox"
-                                          checked={Boolean(allowBits & PERMISSION_FLAGS.SEND_MESSAGES.bit)}
-                                          onChange={(event) =>
-                                            setRoleChannelPermission(selectedPermissionChannel.id, role.id, "SEND_MESSAGES", event.target.checked)
+                                    {targetFlags.map((flag) => (
+                                      <div key={`${role.id}-${flag}`} className="server-admin-permission-pill-group">
+                                        <span>{PERMISSION_FLAGS[flag].name}</span>
+                                        <PermissionStatePills
+                                          state={overwritePermissionState(overwrite, flag)}
+                                          onChange={(state) =>
+                                            setChannelPermissionState(
+                                              selectedPermissionChannel.id,
+                                              "role",
+                                              role.id,
+                                              flag,
+                                              state,
+                                            )
                                           }
                                         />
-                                        <span>Allow send</span>
-                                      </label>
-                                    ) : null}
+                                      </div>
+                                    ))}
                                   </div>
                                 </div>
                               );
@@ -1723,7 +1803,7 @@ export function ServerAdminApp() {
               {activeTab === "members" && (
                 <div className="server-admin-section">
                   {!selectedGuildId ? (
-                    <div className="server-admin-empty">Choose a workspace to manage members.</div>
+                    <div className="server-admin-empty">Server data is still loading for member management.</div>
                   ) : (
                     <>
                       <div className="server-admin-section-head">
@@ -1848,7 +1928,7 @@ export function ServerAdminApp() {
               {activeTab === "roles" && (
                 <div className="server-admin-section">
                   {!selectedGuildId ? (
-                    <div className="server-admin-empty">Choose a workspace to manage roles.</div>
+                    <div className="server-admin-empty">Server data is still loading for role management.</div>
                   ) : (
                     <>
                       <div className="server-admin-role-toolbar">
@@ -1964,13 +2044,13 @@ export function ServerAdminApp() {
               {activeTab === "assets" && (
                 <div className="server-admin-section">
                   {!selectedGuildId ? (
-                    <div className="server-admin-empty">Choose a workspace to manage assets.</div>
+                    <div className="server-admin-empty">Server data is still loading for asset management.</div>
                   ) : (
                     <div className="server-admin-panel-grid">
                       <article className="server-admin-card">
                         <div className="server-admin-card-head">
                           <h2>Global Emotes</h2>
-                          <p>Let this server's custom emotes work outside its own workspace.</p>
+                          <p>Let this server's custom emotes work outside this server when sharing is enabled.</p>
                         </div>
                         <div className="server-admin-toggle-row">
                           <div>
@@ -1989,7 +2069,7 @@ export function ServerAdminApp() {
                       <article className="server-admin-card">
                         <div className="server-admin-card-head">
                           <h2>Create Emote</h2>
-                          <p>Upload or paste an image URL for workspace custom emotes.</p>
+                          <p>Upload or paste an image URL for this server's custom emotes.</p>
                         </div>
                         <div className="server-admin-form-grid">
                           <label>
@@ -2026,8 +2106,8 @@ export function ServerAdminApp() {
 
                       <article className="server-admin-card server-admin-card-span-2">
                         <div className="server-admin-card-head">
-                          <h2>Workspace Emotes</h2>
-                          <p>Review, remove, and verify custom emotes available on this workspace.</p>
+                          <h2>Server Emotes</h2>
+                          <p>Review, remove, and verify custom emotes available on this server.</p>
                         </div>
 
                         <div className="server-admin-emote-grid">
@@ -2222,7 +2302,7 @@ export function ServerAdminApp() {
               {activeTab === "moderation" && (
                 <div className="server-admin-section">
                   {!selectedGuildId ? (
-                    <div className="server-admin-empty">Choose a workspace to review moderation controls.</div>
+                    <div className="server-admin-empty">Server data is still loading for moderation controls.</div>
                   ) : (
                     <div className="server-admin-panel-grid">
                       <article className="server-admin-card">
@@ -2270,12 +2350,12 @@ export function ServerAdminApp() {
                       <article className="server-admin-card">
                         <div className="server-admin-card-head">
                           <h2>Banned Users</h2>
-                          <p>Review bans on this workspace and reverse them when needed.</p>
+                          <p>Review bans on this server and reverse them when needed.</p>
                         </div>
                         {bansLoading ? (
                           <EmptyState>Loading bans...</EmptyState>
                         ) : bans.length === 0 ? (
-                          <EmptyState>No banned users on this workspace.</EmptyState>
+                          <EmptyState>No banned users on this server.</EmptyState>
                         ) : (
                           <div className="server-admin-ban-list">
                             {bans.map((ban) => (

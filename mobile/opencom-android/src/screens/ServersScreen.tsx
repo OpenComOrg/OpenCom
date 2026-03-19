@@ -25,6 +25,7 @@ import { useAuth } from "../context/AuthContext";
 import { Avatar } from "../components/Avatar";
 import type { Channel, CoreServer, Guild, VoiceState } from "../types";
 import { colors, radii, spacing, typography } from "../theme";
+import { resolveCoreImageUrl } from "../urls";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -98,6 +99,7 @@ function ServerPill({
   onPress: () => void;
   onLongPress: () => void;
 }) {
+  const resolvedLogoUrl = resolveCoreImageUrl(server.logoUrl);
   return (
     <Pressable
       style={({ pressed }) => [
@@ -115,9 +117,9 @@ function ServerPill({
           selected && styles.serverPillIconWrapActive,
         ]}
       >
-        {server.logoUrl ? (
+        {resolvedLogoUrl ? (
           <Image
-            source={{ uri: server.logoUrl }}
+            source={{ uri: resolvedLogoUrl }}
             style={styles.serverPillIcon}
             resizeMode="cover"
           />
@@ -236,19 +238,21 @@ function ServerHeader({
   server: CoreServer;
   onOptionsPress: () => void;
 }) {
+  const resolvedBannerUrl = resolveCoreImageUrl(server.bannerUrl);
+  const resolvedLogoUrl = resolveCoreImageUrl(server.logoUrl);
   return (
     <SurfaceCard style={styles.serverHeader} padded={false}>
-      {server.bannerUrl ? (
+      {resolvedBannerUrl ? (
         <Image
-          source={{ uri: server.bannerUrl }}
+          source={{ uri: resolvedBannerUrl }}
           style={styles.serverBanner}
           resizeMode="cover"
         />
       ) : null}
       <View style={styles.serverHeaderContent}>
-        {server.logoUrl ? (
+        {resolvedLogoUrl ? (
           <Image
-            source={{ uri: server.logoUrl }}
+            source={{ uri: resolvedLogoUrl }}
             style={styles.serverLogo}
             resizeMode="cover"
           />

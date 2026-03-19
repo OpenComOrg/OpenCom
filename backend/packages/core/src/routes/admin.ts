@@ -3,6 +3,7 @@ import { z } from "zod";
 import { q } from "../db.js";
 import { parseBody } from "../validation.js";
 import { getActiveManualBoostGrant, getBoostTrialWindow, reconcileBoostBadge } from "../boost.js";
+import { env } from "../env.js";
 import { buildOfficialBadgeDetail, getOfficialAccount, isOfficialAccountName, isOfficialBadgeId } from "../officialAccount.js";
 import {
   OFFICIAL_MESSAGE_MAX_LENGTH,
@@ -22,9 +23,22 @@ import {
   serializePlatformPermissions,
 } from "../platformStaff.js";
 import { getAdminStatsSnapshot } from "../adminStats.js";
+import { saveProfileImageFromBuffer } from "../storage.js";
+import { sendAccountBanEmail } from "../mail.js";
+import path from "node:path";
 
 const PLATFORM_ADMIN_BADGE = "PLATFORM_ADMIN";
 const PLATFORM_FOUNDER_BADGE = "PLATFORM_FOUNDER";
+const RESERVED_BADGE_IDS = new Set([
+  "OFFICIAL",
+  "official",
+  "PLATFORM_ADMIN",
+  "platform_admin",
+  "PLATFORM_FOUNDER",
+  "platform_founder",
+  "platform_owner",
+  "boost",
+]);
 const BOOST_GRANT_TYPE = z.enum(["permanent", "temporary"]);
 const BOOST_TRIAL_WINDOW_BODY = z.object({
   startsAt: z.string().datetime().nullable(),
@@ -35,6 +49,124 @@ const OFFICIAL_WELCOME_MESSAGE_BODY = z.object({
   content: z.string().max(OFFICIAL_MESSAGE_MAX_LENGTH),
 });
 type BroadcastToUser = (targetUserId: string, t: string, d: any) => Promise<void>;
+
+type BadgeDefinitionRow = {
+  badge_id: string;
+  display_name: string;
+  description: string | null;
+  icon: string | null;
+  image_url: string | null;
+  bg_color: string | null;
+  fg_color: string | null;
+  created_by_user_id: string | null;
+  updated_by_user_id: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+const BADGE_IMAGE_MIME_ALIASES: Record<string, string> = {
+  "image/jpg": "image/jpeg",
+  "image/pjpeg": "image/jpeg",
+  "image/jfif": "image/jpeg",
+  "image/x-png": "image/png",
+  "image/x-ms-bmp": "image/bmp",
+};
+
+const ALLOWED_BADGE_IMAGE_MIMES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+  "image/svg+xml",
+  "image/bmp",
+]);
+
+const optionalTrimmedString = (max: number) =>
+  z.preprocess((value) => {
+    if (value == null) return undefined;
+    const trimmed = String(value).trim();
+    return trimmed ? trimmed : undefined;
+  }, z.string().max(max).optional());
+
+const nullableTrimmedString = (max: number) =>
+  z.preprocess((value) => {
+    if (value == null) return null;
+    const trimmed = String(value).trim();
+    return trimmed ? trimmed : null;
+  }, z.string().max(max).nullable());
+
+function mapMailError(error: unknown): string {
+  const code = String((error as Error)?.message || "").trim();
+  if (code === "SMTP_NOT_CONFIGURED") return "SMTP_NOT_CONFIGURED";
+  if (code === "SMTP_AUTH_FAILED") return "SMTP_AUTH_FAILED";
+  if (code === "SMTP_CONNECTION_FAILED") return "SMTP_CONNECTION_FAILED";
+  if (code === "EMAIL_SEND_FAILED") return "EMAIL_SEND_FAILED";
+  return "EMAIL_SEND_FAILED";
+}
+
+function isValidBadgeImageReference(value: string) {
+  const trimmed = String(value || "").trim();
+  if (!trimmed) return false;
+  if (/^https?:\/\//i.test(trimmed)) {
+    try {
+      const parsed = new URL(trimmed);
+      return parsed.protocol === "http:" || parsed.protocol === "https:";
+    } catch {
+      return false;
+    }
+  }
+  if (trimmed.startsWith("/")) return true;
+  if (trimmed.startsWith("users/")) return true;
+  return false;
+}
+
+function normalizeBadgeImageReference(value: string | null | undefined) {
+  const trimmed = String(value || "").trim();
+  if (!trimmed) return null;
+  const base = env.PROFILE_IMAGE_BASE_URL.replace(/\/$/, "");
+  if (trimmed.startsWith("users/")) return `${base}/${trimmed}`;
+  if (trimmed.startsWith("/users/")) return `${base}${trimmed}`;
+  return trimmed;
+}
+
+function serializeBadgeDefinition(row: BadgeDefinitionRow) {
+  return {
+    badgeId: row.badge_id,
+    displayName: row.display_name,
+    description: row.description || null,
+    icon: row.icon || null,
+    imageUrl: normalizeBadgeImageReference(row.image_url),
+    bgColor: row.bg_color || null,
+    fgColor: row.fg_color || null,
+    createdByUserId: row.created_by_user_id || null,
+    updatedByUserId: row.updated_by_user_id || null,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function badgeImageMimeFromFilename(filename: string) {
+  const ext = path.extname(filename || "").toLowerCase();
+  const map: Record<string, string> = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+    ".svg": "image/svg+xml",
+    ".bmp": "image/bmp",
+  };
+  return map[ext] ?? null;
+}
+
+function normalizeBadgeImageMime(mimeType: string | undefined, filename: string | undefined) {
+  const rawMime = String(mimeType || "").trim().toLowerCase();
+  const canonicalMime = BADGE_IMAGE_MIME_ALIASES[rawMime] ?? rawMime;
+  if (canonicalMime && ALLOWED_BADGE_IMAGE_MIMES.has(canonicalMime)) return canonicalMime;
+  const filenameMime = badgeImageMimeFromFilename(filename || "");
+  if (filenameMime && ALLOWED_BADGE_IMAGE_MIMES.has(filenameMime)) return filenameMime;
+  return null;
+}
 
 async function setBadge(userId: string, badge: string, enabled: boolean) {
   if (enabled) {
@@ -73,6 +205,26 @@ const staffAssignmentBodySchema = z.object({
   title: z.string().trim().min(2).max(96),
   permissions: z.array(PANEL_PERMISSION_ENUM).min(1).max(PLATFORM_PANEL_PERMISSIONS.length),
   notes: z.string().trim().max(255).optional(),
+});
+
+const badgeIdSchema = z
+  .string()
+  .trim()
+  .min(2)
+  .max(64)
+  .regex(/^[A-Za-z0-9_:-]+$/, "Badge ID can only contain letters, numbers, underscores, colons, and dashes.");
+
+const badgeDefinitionBodySchema = z.object({
+  displayName: z.string().trim().min(1).max(64),
+  description: nullableTrimmedString(160).optional(),
+  icon: nullableTrimmedString(24).optional(),
+  imageUrl: z.preprocess((value) => {
+    if (value == null) return null;
+    const trimmed = String(value).trim();
+    return trimmed ? trimmed : null;
+  }, z.string().max(600).refine((value) => isValidBadgeImageReference(value), "Invalid badge image reference.").nullable().optional()),
+  bgColor: nullableTrimmedString(40).optional(),
+  fgColor: nullableTrimmedString(40).optional(),
 });
 
 export async function adminRoutes(app: FastifyInstance, broadcastToUser?: BroadcastToUser) {
@@ -156,6 +308,125 @@ export async function adminRoutes(app: FastifyInstance, broadcastToUser?: Broadc
     return { users };
   });
 
+  app.get("/v1/admin/badge-definitions", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
+    try {
+      await requirePanelPermission(req, "manage_badges");
+    } catch {
+      return rep.code(403).send({ error: "FORBIDDEN" });
+    }
+
+    const definitions = await q<BadgeDefinitionRow>(
+      `SELECT badge_id, display_name, description, icon, image_url, bg_color, fg_color,
+              created_by_user_id, updated_by_user_id, created_at, updated_at
+       FROM badge_definitions
+       ORDER BY updated_at DESC, badge_id ASC`
+    );
+
+    return {
+      definitions: definitions.map(serializeBadgeDefinition),
+    };
+  });
+
+  app.post("/v1/admin/badge-definitions/upload", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
+    try {
+      await requirePanelPermission(req, "manage_badges");
+    } catch {
+      return rep.code(403).send({ error: "FORBIDDEN" });
+    }
+
+    const actorId = req.user.sub as string;
+    const data = await req.file();
+    if (!data) return rep.code(400).send({ error: "MISSING_FILE" });
+
+    const mime = normalizeBadgeImageMime(data.mimetype, data.filename);
+    if (!mime) {
+      return rep.code(400).send({ error: "INVALID_IMAGE_TYPE", allowed: [...ALLOWED_BADGE_IMAGE_MIMES] });
+    }
+
+    const buffer = await data.toBuffer();
+    const saved = saveProfileImageFromBuffer(env.PROFILE_IMAGE_STORAGE_DIR, actorId, "asset", buffer, mime);
+    if (!saved) return rep.code(500).send({ error: "SAVE_FAILED" });
+
+    return {
+      imageUrl: `${env.PROFILE_IMAGE_BASE_URL}/${saved}`,
+    };
+  });
+
+  app.put("/v1/admin/badge-definitions/:badgeId", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
+    try {
+      await requirePanelPermission(req, "manage_badges");
+    } catch {
+      return rep.code(403).send({ error: "FORBIDDEN" });
+    }
+
+    const actorId = req.user.sub as string;
+    const { badgeId } = z.object({ badgeId: badgeIdSchema }).parse(req.params);
+    if (RESERVED_BADGE_IDS.has(badgeId)) {
+      return rep.code(400).send({ error: "BADGE_ID_RESERVED" });
+    }
+
+    const body = parseBody(badgeDefinitionBodySchema, req.body);
+    const definitionParams = {
+      badgeId,
+      displayName: body.displayName.trim(),
+      description: body.description ?? null,
+      icon: body.icon ?? null,
+      imageUrl: normalizeBadgeImageReference(body.imageUrl),
+      bgColor: body.bgColor ?? null,
+      fgColor: body.fgColor ?? null,
+      actorId,
+    };
+
+    await q(
+      `INSERT INTO badge_definitions (
+         badge_id, display_name, description, icon, image_url, bg_color, fg_color,
+         created_by_user_id, updated_by_user_id
+       ) VALUES (
+         :badgeId, :displayName, :description, :icon, :imageUrl, :bgColor, :fgColor,
+         :actorId, :actorId
+       )
+       ON DUPLICATE KEY UPDATE
+         display_name=VALUES(display_name),
+         description=VALUES(description),
+         icon=VALUES(icon),
+         image_url=VALUES(image_url),
+         bg_color=VALUES(bg_color),
+         fg_color=VALUES(fg_color),
+         updated_by_user_id=VALUES(updated_by_user_id),
+         updated_at=CURRENT_TIMESTAMP`,
+      definitionParams
+    );
+
+    const rows = await q<BadgeDefinitionRow>(
+      `SELECT badge_id, display_name, description, icon, image_url, bg_color, fg_color,
+              created_by_user_id, updated_by_user_id, created_at, updated_at
+       FROM badge_definitions
+       WHERE badge_id=:badgeId
+       LIMIT 1`,
+      { badgeId }
+    );
+
+    return {
+      definition: rows[0] ? serializeBadgeDefinition(rows[0]) : null,
+    };
+  });
+
+  app.delete("/v1/admin/badge-definitions/:badgeId", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
+    try {
+      await requirePanelPermission(req, "manage_badges");
+    } catch {
+      return rep.code(403).send({ error: "FORBIDDEN" });
+    }
+
+    const { badgeId } = z.object({ badgeId: badgeIdSchema }).parse(req.params);
+    if (RESERVED_BADGE_IDS.has(badgeId)) {
+      return rep.code(400).send({ error: "BADGE_ID_RESERVED" });
+    }
+
+    await q(`DELETE FROM badge_definitions WHERE badge_id=:badgeId`, { badgeId });
+    return { ok: true };
+  });
+
   app.get("/v1/admin/users/:userId/detail", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
     try {
       await requirePanelAccess(req);
@@ -174,14 +445,36 @@ export async function adminRoutes(app: FastifyInstance, broadcastToUser?: Broadc
     );
     if (!userRows.length) return rep.code(404).send({ error: "USER_NOT_FOUND" });
 
-    const badges = await q<{ badge: string; created_at: string | null }>(
-      `SELECT badge,created_at FROM user_badges WHERE user_id=:userId ORDER BY created_at DESC`,
+    const badges = await q<{
+      badge: string;
+      created_at: string | null;
+      display_name: string | null;
+      description: string | null;
+      icon: string | null;
+      image_url: string | null;
+      bg_color: string | null;
+      fg_color: string | null;
+    }>(
+      `SELECT ub.badge, ub.created_at, bd.display_name, bd.description, bd.icon, bd.image_url, bd.bg_color, bd.fg_color
+       FROM user_badges ub
+       LEFT JOIN badge_definitions bd ON bd.badge_id=ub.badge
+       WHERE ub.user_id=:userId
+       ORDER BY ub.created_at DESC`,
       { userId }
     );
 
     const derivedBadges = [...badges];
     if (isOfficialAccountName(userRows[0].username) && !derivedBadges.some((badge) => isOfficialBadgeId(badge.badge))) {
-      derivedBadges.unshift({ badge: "OFFICIAL", created_at: null });
+      derivedBadges.unshift({
+        badge: "OFFICIAL",
+        created_at: null,
+        display_name: "OFFICIAL",
+        description: "Official OpenCom account badge.",
+        icon: "✓",
+        image_url: null,
+        bg_color: "#1292ff",
+        fg_color: "#ffffff",
+      });
     }
 
     return {
@@ -198,7 +491,10 @@ export async function adminRoutes(app: FastifyInstance, broadcastToUser?: Broadc
     const { userId } = z.object({ userId: z.string().min(3) }).parse(req.params);
     const { enabled } = parseBody(z.object({ enabled: z.boolean() }), req.body);
 
-    const target = await q<{ id: string }>(`SELECT id FROM users WHERE id=:userId`, { userId });
+    const target = await q<{ id: string; email: string; username: string }>(
+      `SELECT id,email,username FROM users WHERE id=:userId`,
+      { userId }
+    );
     if (!target.length) return rep.code(404).send({ error: "USER_NOT_FOUND" });
 
     if (enabled) {
@@ -224,7 +520,10 @@ export async function adminRoutes(app: FastifyInstance, broadcastToUser?: Broadc
 
     const { userId } = parseBody(z.object({ userId: z.string().min(3) }), req.body);
 
-    const target = await q<{ id: string }>(`SELECT id FROM users WHERE id=:userId`, { userId });
+    const target = await q<{ id: string; email: string; username: string }>(
+      `SELECT id,email,username FROM users WHERE id=:userId`,
+      { userId }
+    );
     if (!target.length) return rep.code(404).send({ error: "USER_NOT_FOUND" });
 
     const prev = await q<{ founder_user_id: string | null }>(`SELECT founder_user_id FROM platform_config WHERE id=1`);
@@ -291,7 +590,10 @@ export async function adminRoutes(app: FastifyInstance, broadcastToUser?: Broadc
 
     if (userId === actorId) return rep.code(400).send({ error: "CANNOT_BAN_SELF" });
 
-    const target = await q<{ id: string }>(`SELECT id FROM users WHERE id=:userId`, { userId });
+    const target = await q<{ id: string; email: string; username: string }>(
+      `SELECT id,email,username FROM users WHERE id=:userId`,
+      { userId }
+    );
     if (!target.length) return rep.code(404).send({ error: "USER_NOT_FOUND" });
 
     const founder = await q<{ founder_user_id: string | null }>(`SELECT founder_user_id FROM platform_config WHERE id=1 LIMIT 1`);
@@ -315,7 +617,22 @@ export async function adminRoutes(app: FastifyInstance, broadcastToUser?: Broadc
       { userId }
     );
 
-    return { ok: true, userId, banned: true };
+    let emailDelivery = { state: "skipped", error: null as string | null };
+    try {
+      await sendAccountBanEmail(target[0].email, {
+        username: target[0].username,
+        reason: body.reason || null,
+      });
+      emailDelivery = { state: "sent", error: null };
+    } catch (error) {
+      const mapped = mapMailError(error);
+      emailDelivery =
+        mapped === "SMTP_NOT_CONFIGURED"
+          ? { state: "unavailable", error: mapped }
+          : { state: "failed", error: mapped };
+    }
+
+    return { ok: true, userId, banned: true, emailDelivery };
   });
 
   app.delete("/v1/admin/users/:userId/account-ban", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {

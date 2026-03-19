@@ -4,7 +4,7 @@ export function AddServerModal({
   addServerTab,
   setAddServerTab,
   canAccessServerAdminPanel,
-  resolveStaticPageHref,
+  onOpenServerAdmin,
   joinInviteCode,
   setJoinInviteCode,
   previewInvite,
@@ -65,15 +65,16 @@ export function AddServerModal({
                   Create yours
                 </button>
                 {canAccessServerAdminPanel && (
-                  <a
-                    href={resolveStaticPageHref("server-admin.html")}
-                    target="_blank"
-                    rel="noopener noreferrer"
+                  <button
+                    type="button"
                     className="add-server-admin-link"
-                    onClick={(e) => e.stopPropagation()}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onOpenServerAdmin && onOpenServerAdmin();
+                    }}
                   >
                     🔧 Admin
-                  </a>
+                  </button>
                 )}
               </div>
             </header>

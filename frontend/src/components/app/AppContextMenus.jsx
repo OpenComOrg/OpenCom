@@ -3,6 +3,7 @@ export function AppContextMenus({
   addMessageReaction,
   setReplyTarget,
   setDmReplyTarget,
+  reportMessage,
   setMessageContextMenu,
   togglePinMessage,
   setStatus,
@@ -33,6 +34,8 @@ export function AppContextMenus({
   setMemberContextMenu,
   serverContextMenu,
   openServerFromContext,
+  canAccessServerAdminPanel,
+  openServerAdmin,
   canManageServer,
   activeServerId,
   workingGuildId,
@@ -97,6 +100,18 @@ export function AppContextMenus({
               Reply
             </button>
           )}
+          {!messageContextMenu.message.mine &&
+            messageContextMenu.message.authorId && (
+              <button
+                className="danger"
+                onClick={() => {
+                  reportMessage(messageContextMenu.message);
+                  setMessageContextMenu(null);
+                }}
+              >
+                Report Message
+              </button>
+            )}
           <button
             onClick={() => {
               togglePinMessage(messageContextMenu.message);
@@ -324,6 +339,20 @@ export function AppContextMenus({
           style={{ top: serverContextMenu.y, left: serverContextMenu.x }}
           onClick={(event) => event.stopPropagation()}
         >
+          {(() => {
+            const contextRoles = Array.isArray(serverContextMenu.server?.roles)
+              ? serverContextMenu.server.roles.map((role) =>
+                  String(role || "").toLowerCase(),
+                )
+              : [];
+            const canOpenContextServerAdmin =
+              canAccessServerAdminPanel &&
+              (contextRoles.includes("owner") ||
+                contextRoles.includes("platform_admin") ||
+                contextRoles.includes("admin") ||
+                contextRoles.includes("server_admin"));
+            return (
+              <>
           <button
             onClick={() => openServerFromContext(serverContextMenu.server.id)}
           >
@@ -393,6 +422,16 @@ export function AppContextMenus({
           >
             Server Settings
           </button>
+          {canOpenContextServerAdmin && (
+            <button
+              onClick={() => {
+                openServerAdmin(serverContextMenu.server.id);
+                setServerContextMenu(null);
+              }}
+            >
+              Open Server Admin
+            </button>
+          )}
           <button
             className="danger"
             onClick={() => leaveServer(serverContextMenu.server)}
@@ -407,6 +446,9 @@ export function AppContextMenus({
               Delete Server
             </button>
           )}
+              </>
+            );
+          })()}
         </div>
       )}
 
@@ -425,9 +467,12 @@ export function AppContextMenus({
               </button>
               <button
                 onClick={() => {
-                  setChannelPermsChannelId(channelContextMenu.channel.id);
-                  setSettingsOpen(true);
-                  setSettingsTab("server");
+                  openServerAdmin(activeServerId, {
+                    tab: "channels",
+                    guildId: workingGuildId,
+                    channelId: channelContextMenu.channel.id,
+                    channelAction: "permissions",
+                  });
                   setChannelContextMenu(null);
                 }}
               >

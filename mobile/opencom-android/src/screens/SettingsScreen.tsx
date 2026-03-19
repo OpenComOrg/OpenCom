@@ -11,9 +11,14 @@ import {
   TextInput,
   View,
 } from "react-native";
+import { File } from "expo-file-system";
 import { useAuth } from "../context/AuthContext";
 import { Avatar } from "../components/Avatar";
 import { ScreenBackground, SurfaceCard, TopBar } from "../components/chrome";
+import {
+  guessMimeTypeFromFileName,
+  isFilePickerCancellation,
+} from "../attachments";
 import type { UserStatus } from "../types";
 import { colors, radii, spacing, typography } from "../theme";
 
@@ -249,6 +254,8 @@ function ProfileTab() {
   const [pfpUrl, setPfpUrl] = useState(myProfile?.pfp_url ?? "");
   const [bannerUrl, setBannerUrl] = useState(myProfile?.banner_url ?? "");
   const [saving, setSaving] = useState(false);
+  const [uploadingAvatar, setUploadingAvatar] = useState(false);
+  const [uploadingBanner, setUploadingBanner] = useState(false);
   const [status, setStatus] = useState("");
 
   // Sync form when profile loads
@@ -262,6 +269,63 @@ function ProfileTab() {
   useEffect(() => {
     refreshMyProfile();
   }, []); // eslint-disable-line
+
+  const handleUploadImage = useCallback(
+    async (fieldName: "pfp" | "banner") => {
+      if (fieldName === "pfp" ? uploadingAvatar : uploadingBanner) return;
+      if (fieldName === "pfp") setUploadingAvatar(true);
+      else setUploadingBanner(true);
+
+      try {
+        const picked = await File.pickFileAsync();
+        const file = Array.isArray(picked) ? picked[0] : picked;
+        if (!file?.uri) throw new Error("FILE_PICK_FAILED");
+
+        setStatus(
+          fieldName === "pfp"
+            ? "Uploading avatar..."
+            : "Uploading banner...",
+        );
+
+        const result = await api.uploadProfileImage(
+          file.uri,
+          fieldName,
+          {
+            filename: file.name,
+            mimeType: guessMimeTypeFromFileName(file.name, file.type),
+          },
+        );
+        if (fieldName === "pfp") {
+          setPfpUrl(result.url);
+          if (myProfile) {
+            setMyProfile({ ...myProfile, pfp_url: result.url });
+          }
+        } else {
+          setBannerUrl(result.url);
+          if (myProfile) {
+            setMyProfile({ ...myProfile, banner_url: result.url });
+          }
+        }
+        setStatus(
+          fieldName === "pfp"
+            ? "Avatar uploaded!"
+            : "Banner uploaded!",
+        );
+      } catch (error) {
+        if (!isFilePickerCancellation(error)) {
+          setStatus(
+            fieldName === "pfp"
+              ? "Failed to upload avatar."
+              : "Failed to upload banner.",
+          );
+        }
+      } finally {
+        if (fieldName === "pfp") setUploadingAvatar(false);
+        else setUploadingBanner(false);
+      }
+    },
+    [api, myProfile, setMyProfile, uploadingAvatar, uploadingBanner],
+  );
 
   const handleSave = useCallback(async () => {
     if (saving) return;
@@ -363,6 +427,20 @@ function ProfileTab() {
             autoCorrect={false}
             keyboardType="url"
           />
+          <Pressable
+            style={[
+              styles.secondaryBtn,
+              uploadingAvatar && styles.saveBtnDisabled,
+            ]}
+            onPress={() => handleUploadImage("pfp")}
+            disabled={uploadingAvatar}
+          >
+            {uploadingAvatar ? (
+              <ActivityIndicator size="small" color={colors.text} />
+            ) : (
+              <Text style={styles.secondaryBtnText}>Upload avatar</Text>
+            )}
+          </Pressable>
         </View>
 
         <View style={[styles.inputGroup, styles.inputGroupLast]}>
@@ -377,6 +455,20 @@ function ProfileTab() {
             autoCorrect={false}
             keyboardType="url"
           />
+          <Pressable
+            style={[
+              styles.secondaryBtn,
+              uploadingBanner && styles.saveBtnDisabled,
+            ]}
+            onPress={() => handleUploadImage("banner")}
+            disabled={uploadingBanner}
+          >
+            {uploadingBanner ? (
+              <ActivityIndicator size="small" color={colors.text} />
+            ) : (
+              <Text style={styles.secondaryBtnText}>Upload banner</Text>
+            )}
+          </Pressable>
         </View>
       </Section>
 
@@ -1014,6 +1106,21 @@ const styles = StyleSheet.create({
     color: "#fff",
     fontWeight: "700",
     fontSize: 15,
+  },
+  secondaryBtn: {
+    minHeight: 42,
+    marginTop: spacing.xs,
+    borderRadius: radii.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.elev,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  secondaryBtnText: {
+    color: colors.text,
+    fontWeight: "700",
+    fontSize: 14,
   },
 
   // Feedback

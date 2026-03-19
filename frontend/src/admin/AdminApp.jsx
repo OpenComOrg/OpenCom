@@ -5,7 +5,50 @@ import { AdminOverviewDashboard } from "./AdminOverviewDashboard.jsx";
 
 const CORE_API = import.meta.env.VITE_CORE_API_URL || "https://api.opencom.online";
 
-const KNOWN_BADGES = ["OFFICIAL", "PLATFORM_ADMIN", "PLATFORM_FOUNDER"];
+const BUILTIN_BADGE_DEFINITIONS = [
+  {
+    badgeId: "OFFICIAL",
+    displayName: "OFFICIAL",
+    description: "Reserved official OpenCom account badge.",
+    icon: "✓",
+    imageUrl: "",
+    bgColor: "#1292ff",
+    fgColor: "#ffffff",
+    reserved: true,
+  },
+  {
+    badgeId: "PLATFORM_ADMIN",
+    displayName: "Platform Admin",
+    description: "Platform-wide administrative access.",
+    icon: "🔨",
+    imageUrl: "",
+    bgColor: "#2d6cdf",
+    fgColor: "#ffffff",
+    reserved: true,
+  },
+  {
+    badgeId: "PLATFORM_FOUNDER",
+    displayName: "Platform Founder",
+    description: "Founder-level platform badge.",
+    icon: "👑",
+    imageUrl: "",
+    bgColor: "#355ad6",
+    fgColor: "#ffffff",
+    reserved: true,
+  },
+  {
+    badgeId: "boost",
+    displayName: "Boost",
+    description: "OpenCom Boost supporter badge.",
+    icon: "➕",
+    imageUrl: "",
+    bgColor: "#4f7ecf",
+    fgColor: "#ffffff",
+    reserved: true,
+  },
+];
+const KNOWN_BADGES = BUILTIN_BADGE_DEFINITIONS.map((badge) => badge.badgeId);
+const RESERVED_BADGE_IDS = new Set(BUILTIN_BADGE_DEFINITIONS.map((badge) => badge.badgeId));
 const PANEL_PERMISSION_OPTIONS = [
   {
     id: "moderate_users",
@@ -32,6 +75,11 @@ const PANEL_PERMISSION_OPTIONS = [
     label: "Manage blogs",
     description: "Create, edit, publish, and delete blog posts.",
   },
+  {
+    id: "manage_support",
+    label: "Manage support",
+    description: "Access the support-admin panel and handle ticket workflows.",
+  },
 ];
 
 const STAFF_TEMPLATES = [
@@ -55,6 +103,11 @@ const STAFF_TEMPLATES = [
     title: "Community Lead",
     permissions: ["moderate_users", "send_official_messages", "manage_blogs"],
   },
+  {
+    id: "support-agent",
+    title: "Support Agent",
+    permissions: ["manage_support"],
+  },
 ];
 
 const EMPTY_BLOG_DRAFT = {
@@ -66,6 +119,72 @@ const EMPTY_BLOG_DRAFT = {
   content: "## Intro\n\nWrite the update here.\n",
   status: "draft",
 };
+
+const EMPTY_BADGE_DRAFT = {
+  badgeId: "",
+  displayName: "",
+  description: "",
+  icon: "🏷️",
+  imageUrl: "",
+  bgColor: "#3a4f72",
+  fgColor: "#ffffff",
+};
+
+function createBadgeDraft(input = {}) {
+  return {
+    badgeId: String(input.badgeId || "").trim(),
+    displayName: String(input.displayName || "").trim(),
+    description: String(input.description || "").trim(),
+    icon: String(input.icon || "").trim(),
+    imageUrl: String(input.imageUrl || "").trim(),
+    bgColor: String(input.bgColor || "").trim(),
+    fgColor: String(input.fgColor || "").trim(),
+  };
+}
+
+function getBadgePreview(input = {}) {
+  return {
+    badgeId: String(input.badgeId || "").trim(),
+    displayName: String(input.displayName || input.badgeId || "Badge").trim(),
+    description: String(input.description || "").trim(),
+    icon: String(input.icon || "").trim() || "🏷️",
+    imageUrl: String(input.imageUrl || "").trim(),
+    bgColor: String(input.bgColor || "").trim() || "#3a4f72",
+    fgColor: String(input.fgColor || "").trim() || "#ffffff",
+  };
+}
+
+function resolveBadgeImageUrl(value = "") {
+  const trimmed = String(value || "").trim();
+  if (!trimmed) return "";
+  if (
+    trimmed.startsWith("data:") ||
+    trimmed.startsWith("http://") ||
+    trimmed.startsWith("https://")
+  ) {
+    return trimmed;
+  }
+  if (trimmed.startsWith("users/")) {
+    return `${CORE_API.replace(/\/$/, "")}/v1/profile-images/${trimmed}`;
+  }
+  if (trimmed.startsWith("/users/")) {
+    return `${CORE_API.replace(/\/$/, "")}/v1/profile-images${trimmed}`;
+  }
+  if (trimmed.startsWith("/")) {
+    return `${CORE_API.replace(/\/$/, "")}${trimmed}`;
+  }
+  return trimmed;
+}
+
+function describeApiError(payload, fallback) {
+  if (payload?.error === "VALIDATION_ERROR" && Array.isArray(payload.issues) && payload.issues.length) {
+    return payload.issues
+      .slice(0, 2)
+      .map((issue) => String(issue?.message || "Invalid value."))
+      .join(" ");
+  }
+  return payload?.error || fallback;
+}
 
 function slugifyBlogTitle(value = "") {
   return String(value || "")
@@ -101,10 +220,11 @@ function formatAdminDateTime(value = "") {
 
 async function api(path, token, panelPassword, options = {}) {
   const hasBody = options.body !== undefined && options.body !== null;
+  const hasFormData = typeof FormData !== "undefined" && options.body instanceof FormData;
   const trimmedPanelPassword = typeof panelPassword === "string" ? panelPassword.trim() : "";
   const response = await fetch(`${CORE_API}${path}`, {
     headers: {
-      ...(hasBody ? { "Content-Type": "application/json" } : {}),
+      ...(hasBody && !hasFormData ? { "Content-Type": "application/json" } : {}),
       Authorization: `Bearer ${token}`,
       ...(trimmedPanelPassword ? { "x-admin-panel-password": trimmedPanelPassword } : {}),
       ...(options.headers || {})
@@ -114,7 +234,7 @@ async function api(path, token, panelPassword, options = {}) {
 
   if (!response.ok) {
     const err = await response.json().catch(() => ({}));
-    throw new Error(err.error || `HTTP_${response.status}`);
+    throw new Error(describeApiError(err, `HTTP_${response.status}`));
   }
 
   return response.json();
@@ -143,9 +263,13 @@ export function AdminApp() {
   const [searching, setSearching] = useState(false);
   const [userActionBusyId, setUserActionBusyId] = useState("");
   const [badgeUserId, setBadgeUserId] = useState("");
-  const [badgeName, setBadgeName] = useState("");
   const [inspectedUser, setInspectedUser] = useState(null);
   const [inspectedBadges, setInspectedBadges] = useState([]);
+  const [badgeDefinitions, setBadgeDefinitions] = useState([]);
+  const [badgeDefinitionsLoading, setBadgeDefinitionsLoading] = useState(false);
+  const [badgeDefinitionBusy, setBadgeDefinitionBusy] = useState(false);
+  const [badgeUploadBusy, setBadgeUploadBusy] = useState(false);
+  const [badgeDraft, setBadgeDraft] = useState(EMPTY_BADGE_DRAFT);
   const [boostUserId, setBoostUserId] = useState("");
   const [boostGrantType, setBoostGrantType] = useState("temporary");
   const [boostDurationDays, setBoostDurationDays] = useState("30");
@@ -282,6 +406,9 @@ export function AdminApp() {
     if (tab === "staff" && canManageStaff) {
       loadStaffAssignments();
     }
+    if (tab === "badges" && canManageBadges) {
+      loadBadgeDefinitions();
+    }
     if (tab === "blogs" && canManageBlogs) {
       loadBlogs();
     }
@@ -291,6 +418,7 @@ export function AdminApp() {
     panelPassword,
     isPanelUnlocked,
     canManageStaff,
+    canManageBadges,
     canManageBoosts,
     canSendOfficialMessages,
     canManageBlogs,
@@ -672,24 +800,133 @@ export function AdminApp() {
     }
   }
 
-  async function setBadge(enabled) {
-    if (!badgeUserId.trim() || !badgeName.trim()) {
-      showStatus("Enter user ID and badge name.", "info");
-      return;
-    }
+  function applyBadgeDraft(input = {}) {
+    setBadgeDraft(createBadgeDraft(input));
+  }
+
+  async function loadBadgeDefinitions() {
+    setBadgeDefinitionsLoading(true);
     try {
-      await api(`/v1/admin/users/${badgeUserId.trim()}/badges`, token, panelPassword, {
-        method: "POST",
-        body: JSON.stringify({ badge: badgeName.trim(), enabled })
-      });
-      await inspectUser(badgeUserId.trim());
-      showStatus(`Badge ${enabled ? "added" : "removed"}.`, "success");
+      const data = await api("/v1/admin/badge-definitions", token, panelPassword);
+      setBadgeDefinitions(data.definitions || []);
     } catch (e) {
-      showStatus(e.message || "Badge action failed.", "error");
+      setBadgeDefinitions([]);
+      showStatus(e.message || "Failed to load badge definitions.", "error");
+    } finally {
+      setBadgeDefinitionsLoading(false);
     }
   }
 
-  async function setBadgeForUser(userId, badge, enabled) {
+  async function saveBadgeDefinition({ assignAfterSave = false } = {}) {
+    const badgeId = badgeDraft.badgeId.trim();
+    if (!badgeId) {
+      showStatus("Enter a badge ID first.", "info");
+      return;
+    }
+    if (RESERVED_BADGE_IDS.has(badgeId)) {
+      showStatus("Built-in badges can be assigned, but their definitions are managed by the platform.", "info");
+      return;
+    }
+    if (!badgeDraft.displayName.trim()) {
+      showStatus("Enter a display name for the badge.", "info");
+      return;
+    }
+    if (assignAfterSave && !badgeUserId.trim()) {
+      showStatus("Load a user before granting this badge.", "info");
+      return;
+    }
+
+    setBadgeDefinitionBusy(true);
+    try {
+      const payload = {
+        displayName: badgeDraft.displayName.trim(),
+        description: badgeDraft.description.trim() || null,
+        icon: badgeDraft.icon.trim() || null,
+        imageUrl: badgeDraft.imageUrl.trim() || null,
+        bgColor: badgeDraft.bgColor.trim() || null,
+        fgColor: badgeDraft.fgColor.trim() || null,
+      };
+      const data = await api(`/v1/admin/badge-definitions/${encodeURIComponent(badgeId)}`, token, panelPassword, {
+        method: "PUT",
+        body: JSON.stringify(payload),
+      });
+      if (data.definition) {
+        applyBadgeDraft(data.definition);
+      }
+      await loadBadgeDefinitions();
+      if (assignAfterSave) {
+        await setBadgeForUser(badgeUserId.trim(), badgeId, true, { silent: true });
+        showStatus("Badge definition saved and granted.", "success");
+      } else {
+        showStatus("Badge definition saved.", "success");
+      }
+    } catch (e) {
+      showStatus(e.message || "Failed to save badge definition.", "error");
+    } finally {
+      setBadgeDefinitionBusy(false);
+    }
+  }
+
+  async function deleteBadgeDefinition() {
+    const badgeId = badgeDraft.badgeId.trim();
+    if (!badgeId) {
+      showStatus("Choose a badge definition to delete.", "info");
+      return;
+    }
+    if (RESERVED_BADGE_IDS.has(badgeId)) {
+      showStatus("Built-in badge definitions cannot be deleted.", "info");
+      return;
+    }
+    const confirmed = window.confirm(`Delete the "${badgeId}" badge definition? Assigned users would keep the badge ID but lose this custom presentation.`);
+    if (!confirmed) return;
+
+    setBadgeDefinitionBusy(true);
+    try {
+      await api(`/v1/admin/badge-definitions/${encodeURIComponent(badgeId)}`, token, panelPassword, {
+        method: "DELETE",
+      });
+      setBadgeDefinitions((current) => current.filter((definition) => definition.badgeId !== badgeId));
+      applyBadgeDraft(EMPTY_BADGE_DRAFT);
+      showStatus("Badge definition deleted.", "success");
+    } catch (e) {
+      showStatus(e.message || "Failed to delete badge definition.", "error");
+    } finally {
+      setBadgeDefinitionBusy(false);
+    }
+  }
+
+  async function uploadBadgeImage(file) {
+    if (!file) return;
+    setBadgeUploadBusy(true);
+    try {
+      const formData = new FormData();
+      formData.set("file", file);
+      const data = await api("/v1/admin/badge-definitions/upload", token, panelPassword, {
+        method: "POST",
+        body: formData,
+      });
+      setBadgeDraft((current) => ({
+        ...current,
+        imageUrl: data.imageUrl || "",
+      }));
+      showStatus("Badge image uploaded.", "success");
+    } catch (e) {
+      showStatus(e.message || "Failed to upload badge image.", "error");
+    } finally {
+      setBadgeUploadBusy(false);
+    }
+  }
+
+  async function setBadge(enabled) {
+    const badgeId = badgeDraft.badgeId.trim();
+    if (!badgeUserId.trim() || !badgeId) {
+      showStatus("Load a user and choose a badge first.", "info");
+      return;
+    }
+    await setBadgeForUser(badgeUserId.trim(), badgeId, enabled);
+  }
+
+  async function setBadgeForUser(userId, badge, enabled, options = {}) {
     if (!userId || !badge) return;
     try {
       await api(`/v1/admin/users/${userId}/badges`, token, panelPassword, {
@@ -697,9 +934,15 @@ export function AdminApp() {
         body: JSON.stringify({ badge, enabled })
       });
       await inspectUser(userId);
-      showStatus(`Badge ${enabled ? "added" : "removed"}.`, "success");
+      if (!options.silent) {
+        showStatus(`Badge ${enabled ? "added" : "removed"}.`, "success");
+      }
     } catch (e) {
-      showStatus(e.message || "Badge action failed.", "error");
+      if (!options.silent) {
+        showStatus(e.message || "Badge action failed.", "error");
+      } else {
+        throw e;
+      }
     }
   }
 
@@ -956,6 +1199,19 @@ export function AdminApp() {
     }
   }, [tab, tabs]);
 
+  const badgeLibrary = [
+    ...BUILTIN_BADGE_DEFINITIONS,
+    ...badgeDefinitions
+      .filter((definition) => !RESERVED_BADGE_IDS.has(definition.badgeId))
+      .map((definition) => ({ ...definition, reserved: false })),
+  ];
+  const selectedBadgeId = badgeDraft.badgeId.trim();
+  const selectedBadgeReserved = RESERVED_BADGE_IDS.has(selectedBadgeId);
+  const selectedBadgeDefinition = badgeDefinitions.find((definition) => definition.badgeId === selectedBadgeId) || null;
+  const badgePreview = getBadgePreview(badgeDraft);
+  const loadedUserHasSelectedBadge =
+    !!selectedBadgeId && inspectedBadges.some((badge) => badge.badge === selectedBadgeId);
+
   const roleLabel =
     adminStatus?.platformRole === "owner"
       ? "Owner"
@@ -1056,8 +1312,12 @@ export function AdminApp() {
 
         {tab === "users" && (
           <section className="admin-section">
-            <h2>User search & platform actions</h2>
-            <p className="admin-hint">Search by username or email, then apply the actions your panel permissions allow.</p>
+            <div className="admin-section-topline">
+              <div>
+                <h2>User search & platform actions</h2>
+                <p className="admin-hint">Search by username or email, then apply the actions your panel permissions allow.</p>
+              </div>
+            </div>
             <div className="admin-search-row">
               <input placeholder="Username or email" value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => e.key === "Enter" && searchUsers()} />
               <button type="button" onClick={searchUsers} disabled={searching}>{searching ? "Searching…" : "Search"}</button>
@@ -1149,8 +1409,12 @@ export function AdminApp() {
 
         {tab === "staff" && (
           <section className="admin-section">
-            <h2>Staff roles & panel permissions</h2>
-            <p className="admin-hint">Assign focused panel access without making someone a full platform admin.</p>
+            <div className="admin-section-topline">
+              <div>
+                <h2>Staff roles & panel permissions</h2>
+                <p className="admin-hint">Assign focused panel access without making someone a full platform admin.</p>
+              </div>
+            </div>
 
             <div className="admin-cards">
               <div className="admin-card">
@@ -1251,8 +1515,12 @@ export function AdminApp() {
 
         {tab === "official" && (
           <section className="admin-section">
-            <h2>Official messages</h2>
-            <p className="admin-hint">Send platform announcements from the `opencom` no-reply account to a selected audience or everyone at once.</p>
+            <div className="admin-section-topline">
+              <div>
+                <h2>Official messages</h2>
+                <p className="admin-hint">Send platform announcements from the `opencom` no-reply account to a selected audience or everyone at once.</p>
+              </div>
+            </div>
 
             <div className="admin-cards">
               <div className="admin-card admin-card-accent">
@@ -1440,65 +1708,294 @@ export function AdminApp() {
         )}
 
         {tab === "badges" && (
-          <section className="admin-section">
-            <h2>Badge management</h2>
-            <p className="admin-hint">Search or enter a user ID, review current badges, then add/remove cleanly.</p>
-            <div className="admin-user-pick-row">
-              <input placeholder="User ID" value={badgeUserId} onChange={(e) => setBadgeUserId(e.target.value)} />
-              <button type="button" onClick={() => inspectUser(badgeUserId)}>Load user</button>
+          <section className="admin-section admin-badge-section">
+            <div className="admin-section-topline">
+              <div>
+                <h2>Badge management</h2>
+                <p className="admin-hint">
+                  Create rich badge definitions with uploaded images, then grant or remove them from a loaded user without leaving the page.
+                </p>
+              </div>
+              <div className="admin-badge-actions">
+                <button type="button" className="btn-sm" onClick={loadBadgeDefinitions} disabled={badgeDefinitionsLoading}>
+                  {badgeDefinitionsLoading ? "Refreshing…" : "Refresh library"}
+                </button>
+                <button
+                  type="button"
+                  className="btn-sm"
+                  onClick={() => applyBadgeDraft(EMPTY_BADGE_DRAFT)}
+                >
+                  New badge draft
+                </button>
+              </div>
             </div>
 
-            {inspectedUser && (
-              <div className="admin-user-card">
-                <p><strong>{inspectedUser.username || "—"}</strong> <span className="text-dim">{inspectedUser.email || "No email"}</span></p>
-                <code>{inspectedUser.id}</code>
-                <div className="admin-badge-pills">
-                  {inspectedBadges.length === 0 ? (
-                    <span className="text-dim">No badges assigned.</span>
-                  ) : (
-                    inspectedBadges.map((badge) => (
-                      <button
-                        key={`${badge.badge}-${badge.created_at}`}
-                        type="button"
-                        className="admin-badge-pill"
-                        onClick={() => {
-                          setBadgeForUser(inspectedUser.id, badge.badge, false);
-                        }}
-                        title="Click to remove this badge"
-                      >
-                        {badge.badge} ×
-                      </button>
-                    ))
-                  )}
+            <div className="admin-badge-layout">
+              <div className="admin-card admin-badge-server-card">
+                <div className="admin-card-head">
+                  <div>
+                    <h3>Grant to user</h3>
+                    <p className="text-dim">Load a user, inspect their current badges, then apply the selected badge definition.</p>
+                  </div>
+                </div>
+
+                <div className="admin-user-pick-row">
+                  <input
+                    placeholder="User ID"
+                    value={badgeUserId}
+                    onChange={(e) => setBadgeUserId(e.target.value)}
+                  />
+                  <button type="button" onClick={() => inspectUser(badgeUserId)}>
+                    Load user
+                  </button>
+                </div>
+
+                {inspectedUser ? (
+                  <div className="admin-user-card admin-user-card-featured">
+                    <div className="admin-badge-user-head">
+                      <div>
+                        <strong>{inspectedUser.username || "—"}</strong>
+                        <span>{inspectedUser.email || "No email"}</span>
+                      </div>
+                      <code>{inspectedUser.id}</code>
+                    </div>
+
+                    <div className="admin-badge-pill-grid">
+                      {inspectedBadges.length === 0 ? (
+                        <span className="text-dim">No badges assigned.</span>
+                      ) : (
+                        inspectedBadges.map((badge) => {
+                          const preview = getBadgePreview({
+                            badgeId: badge.badge,
+                            displayName: badge.display_name || badge.badge,
+                            description: badge.description || "",
+                            icon: badge.icon || "",
+                            imageUrl: badge.image_url || "",
+                            bgColor: badge.bg_color || "",
+                            fgColor: badge.fg_color || "",
+                          });
+                          return (
+                            <div
+                              key={`${badge.badge}-${badge.created_at || "assigned"}`}
+                              className={`admin-badge-assigned-row ${selectedBadgeId === badge.badge ? "active" : ""}`}
+                            >
+                              <button
+                                type="button"
+                                className="admin-badge-assigned-main"
+                                onClick={() => applyBadgeDraft(preview)}
+                              >
+                                <span
+                                  className="admin-badge-token"
+                                  style={{ background: preview.bgColor, color: preview.fgColor }}
+                                >
+                                  {preview.imageUrl ? (
+                                    <img src={resolveBadgeImageUrl(preview.imageUrl)} alt={preview.displayName} className="admin-badge-token-image" />
+                                  ) : (
+                                    preview.icon
+                                  )}
+                                </span>
+                                <span className="admin-badge-assigned-copy">
+                                  <strong>{preview.displayName}</strong>
+                                  <small>{badge.badge}</small>
+                                </span>
+                              </button>
+                              <button
+                                type="button"
+                                className="btn-sm danger"
+                                onClick={() => setBadgeForUser(inspectedUser.id, badge.badge, false)}
+                              >
+                                Remove
+                              </button>
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="admin-user-card">
+                    <p className="text-dim">Load a user to review assigned badges and grant the selected badge.</p>
+                  </div>
+                )}
+
+                <div className="admin-badge-actions">
+                  <button type="button" onClick={() => setBadge(true)} disabled={!inspectedUser || !selectedBadgeId}>
+                    {loadedUserHasSelectedBadge ? "Grant again" : "Grant selected badge"}
+                  </button>
+                  <button type="button" className="danger" onClick={() => setBadge(false)} disabled={!inspectedUser || !selectedBadgeId}>
+                    Remove selected badge
+                  </button>
                 </div>
               </div>
-            )}
 
-            <div className="admin-badge-form">
-              <input placeholder="Badge name (e.g. PLATFORM_ADMIN)" value={badgeName} onChange={(e) => setBadgeName(e.target.value)} list="known-badges" />
-              <datalist id="known-badges">
-                {KNOWN_BADGES.map((b) => <option key={b} value={b} />)}
-              </datalist>
-              <div className="admin-badge-actions">
-                <button type="button" onClick={() => setBadge(true)}>Add badge</button>
-                <button type="button" className="danger" onClick={() => setBadge(false)}>Remove badge</button>
+              <div className="admin-badge-editor-stack">
+                <div className="admin-card admin-badge-editor-card">
+                  <div className="admin-card-head">
+                    <div>
+                      <h3>Definition editor</h3>
+                      <p className="text-dim">Save a reusable badge presentation with icon, colors, and an uploaded image.</p>
+                    </div>
+                    {selectedBadgeReserved && selectedBadgeId ? (
+                      <span className="admin-inline-badge">Built-in</span>
+                    ) : null}
+                  </div>
+
+                  <div className="admin-badge-form admin-badge-form-grid">
+                    <input
+                      placeholder="Badge ID (e.g. PARTNER)"
+                      value={badgeDraft.badgeId}
+                      onChange={(e) => setBadgeDraft((current) => ({ ...current, badgeId: e.target.value }))}
+                      list="known-badges"
+                    />
+                    <input
+                      placeholder="Display name"
+                      value={badgeDraft.displayName}
+                      onChange={(e) => setBadgeDraft((current) => ({ ...current, displayName: e.target.value }))}
+                    />
+                  </div>
+
+                  <datalist id="known-badges">
+                    {KNOWN_BADGES.map((badgeId) => <option key={badgeId} value={badgeId} />)}
+                  </datalist>
+
+                  <textarea
+                    className="admin-official-textarea admin-badge-description"
+                    placeholder="Short internal description for the badge"
+                    value={badgeDraft.description}
+                    onChange={(e) => setBadgeDraft((current) => ({ ...current, description: e.target.value }))}
+                  />
+
+                  <div className="admin-badge-form admin-badge-form-grid">
+                    <input
+                      placeholder="Fallback icon / emoji"
+                      value={badgeDraft.icon}
+                      onChange={(e) => setBadgeDraft((current) => ({ ...current, icon: e.target.value }))}
+                    />
+                    <input
+                      placeholder="Uploaded image URL"
+                      value={badgeDraft.imageUrl}
+                      onChange={(e) => setBadgeDraft((current) => ({ ...current, imageUrl: e.target.value }))}
+                    />
+                    <input
+                      placeholder="Background color"
+                      value={badgeDraft.bgColor}
+                      onChange={(e) => setBadgeDraft((current) => ({ ...current, bgColor: e.target.value }))}
+                    />
+                    <input
+                      placeholder="Foreground color"
+                      value={badgeDraft.fgColor}
+                      onChange={(e) => setBadgeDraft((current) => ({ ...current, fgColor: e.target.value }))}
+                    />
+                  </div>
+
+                  <div className="admin-badge-upload-row">
+                    <label className="btn-sm admin-upload-btn">
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={async (event) => {
+                          const file = event.target.files?.[0];
+                          if (!file) return;
+                          await uploadBadgeImage(file);
+                          event.target.value = "";
+                        }}
+                      />
+                      {badgeUploadBusy ? "Uploading…" : "Upload badge image"}
+                    </label>
+                    <span className="text-dim">PNG, JPG, GIF, WEBP, SVG, and BMP are supported.</span>
+                  </div>
+
+                  <div className="admin-badge-preview-card">
+                    <div className="admin-badge-preview-pill" style={{ background: badgePreview.bgColor, color: badgePreview.fgColor }}>
+                      {badgePreview.imageUrl ? (
+                        <img src={resolveBadgeImageUrl(badgePreview.imageUrl)} alt={badgePreview.displayName} className="admin-badge-preview-image" />
+                      ) : (
+                        <span className="admin-badge-preview-icon">{badgePreview.icon}</span>
+                      )}
+                      <span>{badgePreview.displayName}</span>
+                    </div>
+                    <div className="admin-badge-preview-meta">
+                      <strong>{badgePreview.badgeId || "Badge ID"}</strong>
+                      <span>{badgePreview.description || "No description yet."}</span>
+                    </div>
+                  </div>
+
+                  <div className="admin-badge-actions">
+                    <button type="button" onClick={() => saveBadgeDefinition()} disabled={badgeDefinitionBusy || selectedBadgeReserved || !badgeDraft.badgeId.trim()}>
+                      {badgeDefinitionBusy ? "Saving…" : "Save definition"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => saveBadgeDefinition({ assignAfterSave: true })}
+                      disabled={badgeDefinitionBusy || selectedBadgeReserved || !badgeDraft.badgeId.trim() || !inspectedUser}
+                    >
+                      Save & grant
+                    </button>
+                    <button
+                      type="button"
+                      className="danger"
+                      onClick={deleteBadgeDefinition}
+                      disabled={badgeDefinitionBusy || selectedBadgeReserved || !selectedBadgeDefinition}
+                    >
+                      Delete definition
+                    </button>
+                  </div>
+
+                  {selectedBadgeReserved ? (
+                    <p className="admin-note">This is a built-in badge. You can assign or remove it, but its visual definition is managed by the platform.</p>
+                  ) : null}
+                </div>
+
+                <div className="admin-card">
+                  <div className="admin-card-head">
+                    <div>
+                      <h3>Badge library</h3>
+                      <p className="text-dim">Pick a built-in badge or reuse a saved custom definition.</p>
+                    </div>
+                  </div>
+
+                  <div className="admin-badge-library-grid">
+                    {badgeLibrary.map((definition) => {
+                      const preview = getBadgePreview(definition);
+                      return (
+                        <button
+                          key={definition.badgeId}
+                          type="button"
+                          className={`admin-badge-library-card ${selectedBadgeId === definition.badgeId ? "active" : ""}`}
+                          onClick={() => applyBadgeDraft(definition)}
+                        >
+                          <span className="admin-badge-library-top">
+                            <span className="admin-badge-token" style={{ background: preview.bgColor, color: preview.fgColor }}>
+                              {preview.imageUrl ? (
+                                <img src={resolveBadgeImageUrl(preview.imageUrl)} alt={preview.displayName} className="admin-badge-token-image" />
+                              ) : (
+                                preview.icon
+                              )}
+                            </span>
+                            <span className="admin-badge-library-copy">
+                              <strong>{preview.displayName}</strong>
+                              <small>{definition.badgeId}</small>
+                            </span>
+                          </span>
+                          <span className="text-dim">{definition.description || (definition.reserved ? "Built-in badge" : "Custom badge definition")}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
               </div>
-            </div>
-            <div className="admin-quick-badges">
-              {KNOWN_BADGES.map((b) => (
-                <button key={b} type="button" className="btn-sm" onClick={() => setBadgeName(b)}>
-                  Use {b}
-                </button>
-              ))}
-              <button type="button" className="btn-sm" onClick={() => setBadgeName("boost")}>Use boost</button>
             </div>
           </section>
         )}
 
         {tab === "boost" && (
           <section className="admin-section">
-            <h2>Boost grants</h2>
-            <p className="admin-hint">Grant permanent or temporary boost without fighting Stripe sync. Manual grants are audited and revocable.</p>
+            <div className="admin-section-topline">
+              <div>
+                <h2>Boost grants</h2>
+                <p className="admin-hint">Grant permanent or temporary boost without fighting Stripe sync. Manual grants are audited and revocable.</p>
+              </div>
+            </div>
             <div className="admin-card">
               <h3>Global Boost trial</h3>
               <p className="text-dim">Anyone without active OpenCom Boost gets temporary access for this window, including new sign-ups that land inside it.</p>
@@ -1645,12 +2142,16 @@ export function AdminApp() {
 
         {tab === "blogs" && (
           <section className="admin-section">
-            <h2>Blog creator portal</h2>
-            <p className="admin-hint">
-              Draft posts here, then publish them straight to{" "}
-              <code>opencom.online/blogs/your-post-slug</code>. Post bodies use
-              Markdown.
-            </p>
+            <div className="admin-section-topline">
+              <div>
+                <h2>Blog creator portal</h2>
+                <p className="admin-hint">
+                  Draft posts here, then publish them straight to{" "}
+                  <code>opencom.online/blogs/your-post-slug</code>. Post bodies use
+                  Markdown.
+                </p>
+              </div>
+            </div>
 
             <div className="admin-blog-layout">
               <div className="admin-card">

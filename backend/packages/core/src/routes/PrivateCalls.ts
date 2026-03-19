@@ -531,6 +531,7 @@ export async function CallRoutes(
           callId: callResult.call_id,
           callerId: userId,
           callerName,
+          callerPfp,
           threadId: thread[0].id
         }
       });

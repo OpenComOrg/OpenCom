@@ -1,27 +1,70 @@
 import { PresenceUpdate } from "@ods/shared/events.js";
 import { q } from "./db.js";
 import { z } from "zod";
+import { env } from "./env.js";
 
-const RichPresence = z.object({
-  name: z.string().min(1).max(128).optional().nullable(),
-  details: z.string().max(128).optional().nullable(),
-  state: z.string().max(128).optional().nullable(),
-  largeImageUrl: z.string().url().max(1024).optional().nullable(),
-  largeImageText: z.string().max(128).optional().nullable(),
-  smallImageUrl: z.string().url().max(1024).optional().nullable(),
-  smallImageText: z.string().max(128).optional().nullable(),
+function isValidRichPresenceImageReference(value: string) {
+  const trimmed = String(value || "").trim();
+  if (!trimmed) return false;
+  if (/^https?:\/\//i.test(trimmed)) {
+    try {
+      const parsed = new URL(trimmed);
+      return parsed.protocol === "http:" || parsed.protocol === "https:";
+    } catch {
+      return false;
+    }
+  }
+  if (trimmed.startsWith("/")) return true;
+  if (trimmed.startsWith("users/")) return true;
+  return false;
+}
+
+function normalizeRichPresenceImageReference(value: string) {
+  const trimmed = String(value || "").trim();
+  if (!trimmed) return "";
+  const base = env.PROFILE_IMAGE_BASE_URL.replace(/\/$/, "");
+  if (trimmed.startsWith("users/")) return `${base}/${trimmed}`;
+  if (trimmed.startsWith("/users/")) return `${base}${trimmed}`;
+  return trimmed;
+}
+
+const richPresenceImageUrl = z.string()
+  .trim()
+  .max(1024)
+  .refine(
+    isValidRichPresenceImageReference,
+    "Use an uploaded image path or a valid http(s) URL",
+  )
+  .transform(normalizeRichPresenceImageReference);
+
+export const RichPresence = z.object({
+  name: z.string().trim().min(1).max(128).optional().nullable(),
+  details: z.string().trim().max(128).optional().nullable(),
+  state: z.string().trim().max(128).optional().nullable(),
+  largeImageUrl: richPresenceImageUrl.optional().nullable(),
+  largeImageText: z.string().trim().max(128).optional().nullable(),
+  smallImageUrl: richPresenceImageUrl.optional().nullable(),
+  smallImageText: z.string().trim().max(128).optional().nullable(),
   buttons: z.array(z.object({
-    label: z.string().min(1).max(32),
-    url: z.string().url().max(1024)
+    label: z.string().trim().min(1).max(32),
+    url: z.string().trim().url().max(1024)
   })).max(2).optional(),
   startTimestamp: z.number().int().positive().optional().nullable(),
   endTimestamp: z.number().int().positive().optional().nullable()
 }).strict();
 
-function normalizeRichPresenceInput(value: unknown) {
+export function normalizeRichPresenceInput(value: unknown) {
   if (value === undefined) return undefined;
   if (value === null) return null;
-  return RichPresence.parse(value);
+  let nextValue = value;
+  if (typeof nextValue === "string") {
+    try {
+      nextValue = JSON.parse(nextValue);
+    } catch {
+      nextValue = value;
+    }
+  }
+  return RichPresence.parse(nextValue);
 }
 
 export async function presenceUpsert(userId: string, presence: PresenceUpdate) {

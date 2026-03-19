@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OpenCom Support</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body class="support-body support-body-public">
+    <div class="support-bg support-bg-public"></div>
+    <div class="support-page">
+      <header class="support-topbar">
+        <a class="support-brand" href="https://opencom.online" target="_blank" rel="noreferrer">
+          <span class="support-brand-mark" aria-hidden="true"></span>
+          <span class="support-brand-copy">
+            <strong>OpenCom</strong>
+            <span>Support Centre</span>
+          </span>
+        </a>
+        <nav class="support-topbar-actions" aria-label="Support links">
+          <a class="support-topbar-link" href="#open-ticket">Open Ticket</a>
+          <a class="support-topbar-link" href="#track-ticket">Track Ticket</a>
+        </nav>
+      </header>
+
+      <header class="hero">
+        <div class="hero-copy">
+          <p class="eyebrow">OpenCom Support</p>
+          <h1>Open a ticket, track the thread, and stay updated by email.</h1>
+          <p class="lede">
+            Use this portal for unban requests, account issues, billing questions, bug reports, and anything else that needs follow-up from the OpenCom team.
+            Give us the email you want updates sent to, then keep your private access key so you can reopen the thread whenever you need.
+          </p>
+          <div class="chip-row">
+            <span class="chip warm">Appeals</span>
+            <span class="chip cool">Account help</span>
+            <span class="chip dark">Status tracking</span>
+          </div>
+          <div class="hero-stat-grid">
+            <article class="hero-stat">
+              <span>Single intake</span>
+              <strong>Appeals, billing, moderation, and technical issues</strong>
+            </article>
+            <article class="hero-stat">
+              <span>Staff updates</span>
+              <strong>Status changes and replies delivered to your inbox</strong>
+            </article>
+            <article class="hero-stat">
+              <span>Private access</span>
+              <strong>Reference plus access key ticket tracking</strong>
+            </article>
+          </div>
+          <div class="hero-action-row">
+            <a class="primary-btn hero-btn-link" href="#open-ticket">Start a ticket</a>
+            <a class="secondary-btn hero-btn-link" href="#track-ticket">Open existing ticket</a>
+          </div>
+        </div>
+      </header>
+
+      <section class="support-utility-bar">
+        <p id="public-status-banner" class="status-banner status-banner-inline info">Ready to open a support ticket.</p>
+        <div class="support-inline-note">
+          <strong>Private access key required</strong>
+          <span>Keep the access key from your confirmation email so you can reopen and reply to the ticket later.</span>
+        </div>
+      </section>
+
+      <main class="split-layout split-layout-public public-workspace">
+        <section id="open-ticket" class="card card-primary workspace-card workspace-card-main">
+          <div class="section-head">
+            <div>
+              <p class="eyebrow">Create a ticket</p>
+              <h2>Tell us what happened</h2>
+              <p class="section-subcopy">Use the email address where you want replies and status changes sent.</p>
+            </div>
+          </div>
+          <form id="ticket-create-form" class="support-form">
+            <div class="form-grid">
+              <label>
+                Contact email
+                <input name="contactEmail" type="email" autocomplete="email" required />
+              </label>
+              <label>
+                Your name
+                <input name="requesterName" type="text" maxlength="120" />
+              </label>
+              <label>
+                OpenCom username
+                <input name="opencomUsername" type="text" maxlength="64" placeholder="Only if this ticket is account-related" />
+              </label>
+              <label>
+                Ticket type
+                <select name="category" required></select>
+              </label>
+              <label>
+                Priority
+                <select name="priority" required></select>
+              </label>
+            </div>
+            <label>
+              Subject
+              <input name="subject" type="text" maxlength="180" minlength="4" required />
+            </label>
+            <label>
+              Details
+              <textarea name="message" rows="8" maxlength="5000" minlength="10" required placeholder="Tell us the full context, what happened, and what outcome you need."></textarea>
+            </label>
+            <div class="action-row">
+              <button type="submit" class="primary-btn">Submit ticket</button>
+              <span class="helper-copy">You’ll get a private access key for ticket tracking and replies.</span>
+            </div>
+          </form>
+          <div id="create-result" class="result-panel hidden"></div>
+        </section>
+
+        <div class="support-side-stack support-side-rail">
+          <section id="track-ticket" class="card card-secondary workspace-card workspace-card-rail">
+            <div class="section-head">
+              <div>
+                <p class="eyebrow">Track a ticket</p>
+                <h2>Open your existing thread</h2>
+                <p class="section-subcopy">Use the reference and private access key from your confirmation email.</p>
+              </div>
+            </div>
+            <form id="ticket-lookup-form" class="support-form">
+              <label>
+                Ticket reference
+                <input id="lookup-reference" name="reference" type="text" maxlength="96" minlength="8" required />
+              </label>
+              <label>
+                Private access key
+                <input id="lookup-access-key" name="accessKey" type="text" maxlength="128" minlength="12" required />
+              </label>
+              <div class="action-row">
+                <button type="submit" class="primary-btn">Open ticket</button>
+                <button type="button" id="load-recent-ticket-btn" class="secondary-btn">Load recent</button>
+              </div>
+            </form>
+            <p class="helper-copy">Keep the access key safe. Anyone with the reference and key can view the ticket thread.</p>
+          </section>
+
+          <section class="card card-tip workspace-card workspace-card-rail">
+            <div class="section-head">
+              <div>
+                <p class="eyebrow">Before you send</p>
+                <h2>What helps us resolve tickets faster</h2>
+              </div>
+            </div>
+            <div class="info-list">
+              <article class="info-item">
+                <strong>Include dates and usernames</strong>
+                <p>Add exact dates, usernames, and any server or account names involved so staff can trace the issue quickly.</p>
+              </article>
+              <article class="info-item">
+                <strong>Explain the outcome you want</strong>
+                <p>If this is an unban appeal or account issue, tell us what decision you want reviewed and why.</p>
+              </article>
+              <article class="info-item">
+                <strong>Use the same email for updates</strong>
+                <p>We send follow-ups and status changes to the contact email attached to the ticket.</p>
+              </article>
+            </div>
+          </section>
+        </div>
+      </main>
+
+      <section id="ticket-thread-card" class="card card-thread hidden">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Ticket thread</p>
+            <h2 id="ticket-thread-title">Support thread</h2>
+          </div>
+          <div id="ticket-thread-badges" class="chip-row chip-row-tight"></div>
+        </div>
+        <div id="ticket-thread-summary" class="detail-grid"></div>
+        <div id="ticket-thread-messages" class="message-stack"></div>
+        <form id="ticket-reply-form" class="support-form">
+          <label>
+            Add more information
+            <textarea id="ticket-reply-message" name="message" rows="5" maxlength="5000" minlength="2" required placeholder="Reply here if you need to add details, send extra context, or follow up."></textarea>
+          </label>
+          <div class="action-row">
+            <button type="submit" class="primary-btn">Send reply</button>
+            <span class="helper-copy">Replies automatically move the ticket back to the support queue.</span>
+          </div>
+        </form>
+      </section>
+    </div>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

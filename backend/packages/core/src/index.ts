@@ -28,10 +28,12 @@ import { blogRoutes } from "./routes/blogs.js";
 import { FavouriteGifRoutes } from "./routes/FavouriteGifs.js";
 import { klipyRoutes } from "./routes/klipy.js";
 import { emoteRoutes } from "./routes/emotes.js";
+import { supportRoutes } from "./routes/support.js";
 import { env } from "./env.js";
 import { makeRedis } from "./redis.js";
 import { presenceUpsert } from "./presence.js";
 import { CallRoutes } from "./routes/PrivateCalls.js";
+import { PresenceUpdate } from "@ods/shared/events.js";
 const app = buildHttp();
 
 const missingPrivateCallConfig = [
@@ -66,8 +68,14 @@ await serverRoutes(app);
 await jwksRoutes(app);
 await profileRoutes(app);
 await inviteRoutes(app);
-await presenceRoutes(app);
+await presenceRoutes(app, async (userId: string, presence: PresenceUpdate) => {
+  await redis.pub.publish(
+    "core:presence",
+    JSON.stringify({ userId, presence }),
+  );
+});
 await adminRoutes(app, gw.broadcastToUser);
+await supportRoutes(app);
 await blogRoutes(app);
 await dmRoutes(app, gw.broadcastDM);
 await socialRoutes(app, gw.broadcastCallSignal, gw.broadcastToUser);

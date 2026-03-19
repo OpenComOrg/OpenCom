@@ -15,6 +15,14 @@ const KlipyQuery = z.object({
     return trimmed ? trimmed : undefined;
   }, z.string().min(1).max(512).optional()),
   limit: z.coerce.number().int().min(1).max(50).default(24),
+  adMinWidth: z.coerce.number().int().min(50).max(4096).optional(),
+  adMaxWidth: z.coerce.number().int().min(50).max(4096).optional(),
+  adMinHeight: z.coerce.number().int().min(50).max(2500).optional(),
+  adMaxHeight: z.coerce.number().int().min(50).max(2500).optional(),
+  adPosition: z.coerce.number().int().min(0).max(20).optional(),
+  deviceWidth: z.coerce.number().int().min(1).max(10000).optional(),
+  deviceHeight: z.coerce.number().int().min(1).max(10000).optional(),
+  pixelRatio: z.coerce.number().positive().max(10).optional(),
 });
 
 type KlipyFormat = {
@@ -24,6 +32,7 @@ type KlipyFormat = {
 };
 
 type NormalizedKlipyMedia = {
+  type: "media";
   id: string;
   title: string;
   sourceUrl: string;
@@ -34,6 +43,17 @@ type NormalizedKlipyMedia = {
   width: number | null;
   height: number | null;
 };
+
+type NormalizedKlipyAd = {
+  type: "ad";
+  id: string;
+  content: string;
+  iframeUrl: string;
+  width: number | null;
+  height: number | null;
+};
+
+type NormalizedKlipyItem = NormalizedKlipyMedia | NormalizedKlipyAd;
 
 function cleanString(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
@@ -69,6 +89,25 @@ function firstNumber(source: unknown, paths: string[]) {
     if (Number.isFinite(value)) return value;
   }
   return null;
+}
+
+function firstBoolean(source: unknown, paths: string[]) {
+  for (const path of paths) {
+    const raw = getPathValue(source, path);
+    if (typeof raw === "boolean") return raw;
+    const normalized = cleanString(raw).toLowerCase();
+    if (normalized === "1" || normalized === "true") return true;
+    if (normalized === "0" || normalized === "false") return false;
+  }
+  return null;
+}
+
+function simpleHash(value: string) {
+  let hash = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (hash * 31 + value.charCodeAt(index)) >>> 0;
+  }
+  return hash.toString(16);
 }
 
 function inferContentTypeFromFormatKey(key: string) {
@@ -170,6 +209,7 @@ function normalizeV2Item(item: unknown, index: number): NormalizedKlipyMedia | n
     contentType;
 
   return {
+    type: "media",
     id: firstString(item, ["id"]) || `klipy-${index}-${sourceUrl}`,
     title,
     sourceUrl,
@@ -221,6 +261,7 @@ function normalizeGenericItem(item: unknown, index: number): NormalizedKlipyMedi
     contentType;
 
   return {
+    type: "media",
     id: firstString(item, ["id", "media_id", "mediaId"]) || `klipy-${index}-${sourceUrl}`,
     title:
       firstString(item, ["title", "name", "caption", "description"]) ||
@@ -235,6 +276,28 @@ function normalizeGenericItem(item: unknown, index: number): NormalizedKlipyMedi
   };
 }
 
+function normalizeAdItem(item: unknown, index: number): NormalizedKlipyAd | null {
+  const content = firstString(item, ["content", "html"]);
+  const iframeUrl = firstString(item, ["iframe_url", "iframeUrl", "url"]);
+  const width = firstNumber(item, ["width", "w"]);
+  const height = firstNumber(item, ["height", "h"]);
+  const isWebView =
+    firstBoolean(item, ["is_webview", "isWebView", "webview", "iframe"]) ?? false;
+
+  if (!content && !iframeUrl) return null;
+
+  return {
+    type: "ad",
+    id:
+      firstString(item, ["id", "ad_id", "adId"]) ||
+      `klipy-ad-${index}-${simpleHash(`${content}:${iframeUrl}:${width}:${height}:${isWebView}`)}`,
+    content,
+    iframeUrl,
+    width,
+    height,
+  };
+}
+
 function normalizeKlipyPayload(payload: unknown) {
   const results = Array.isArray((payload as any)?.results)
     ? (payload as any).results
@@ -244,14 +307,23 @@ function normalizeKlipyPayload(payload: unknown) {
         ? (payload as any).files
         : [];
 
-  const normalized: NormalizedKlipyMedia[] = [];
+  const normalized: NormalizedKlipyItem[] = [];
   const seen = new Set<string>();
   const fromV2 = Array.isArray((payload as any)?.results);
 
   results.forEach((item: unknown, index: number) => {
-    const nextItem = fromV2 ? normalizeV2Item(item, index) : normalizeGenericItem(item, index);
+    const itemType = cleanString(getPathValue(item, "type")).toLowerCase();
+    const nextItem =
+      itemType === "ad"
+        ? normalizeAdItem(item, index)
+        : fromV2
+          ? normalizeV2Item(item, index)
+          : normalizeGenericItem(item, index);
     if (!nextItem) return;
-    const dedupeKey = `${nextItem.id}:${nextItem.sourceUrl}`;
+    const dedupeKey =
+      nextItem.type === "ad"
+        ? `${nextItem.type}:${nextItem.id}:${nextItem.iframeUrl || nextItem.content}`
+        : `${nextItem.type}:${nextItem.id}:${nextItem.sourceUrl}`;
     if (seen.has(dedupeKey)) return;
     seen.add(dedupeKey);
     normalized.push(nextItem);
@@ -272,6 +344,7 @@ async function fetchKlipyPayload(
   app: FastifyInstance,
   endpoint: string,
   params: Record<string, string>,
+  requestHeaders: Record<string, string> = {},
 ) {
   const apiKey = cleanString(env.KLIPY_API_KEY);
   if (!apiKey) {
@@ -294,6 +367,7 @@ async function fetchKlipyPayload(
     const response = await fetch(url, {
       headers: {
         Accept: "application/json",
+        ...requestHeaders,
       },
       signal: controller.signal,
     });
@@ -329,6 +403,51 @@ async function fetchKlipyPayload(
   }
 }
 
+function normalizeHeaderValue(value: unknown) {
+  if (Array.isArray(value)) {
+    return cleanString(value[0]);
+  }
+  return cleanString(value);
+}
+
+function extractLanguageTag(value: unknown) {
+  const raw = normalizeHeaderValue(value);
+  if (!raw) return "";
+  const [primary] = raw.split(",");
+  const [language] = primary.split("-");
+  return cleanString(language).slice(0, 2).toUpperCase();
+}
+
+function buildKlipyRequestHeaders(req: any) {
+  const userAgent = normalizeHeaderValue(req?.headers?.["user-agent"]);
+  const acceptLanguage = normalizeHeaderValue(req?.headers?.["accept-language"]);
+  return {
+    ...(userAgent ? { "User-Agent": userAgent } : {}),
+    ...(acceptLanguage ? { "Accept-Language": acceptLanguage } : {}),
+  };
+}
+
+function buildKlipyAdParams(query: z.infer<typeof KlipyQuery>, req: any, userId: string) {
+  const params: Record<string, string> = {};
+  if (!userId) return params;
+
+  params.customer_id = userId;
+
+  if (query.adMinWidth) params["ad-min-width"] = String(query.adMinWidth);
+  if (query.adMaxWidth) params["ad-max-width"] = String(query.adMaxWidth);
+  if (query.adMinHeight) params["ad-min-height"] = String(query.adMinHeight);
+  if (query.adMaxHeight) params["ad-max-height"] = String(query.adMaxHeight);
+  if (query.adPosition !== undefined) params["ad-position"] = String(query.adPosition);
+  if (query.deviceWidth) params["ad-device-w"] = String(query.deviceWidth);
+  if (query.deviceHeight) params["ad-device-h"] = String(query.deviceHeight);
+  if (query.pixelRatio) params["ad-pxratio"] = String(query.pixelRatio);
+
+  const language = extractLanguageTag(req?.headers?.["accept-language"]);
+  if (language) params["ad-language"] = language;
+
+  return params;
+}
+
 export async function klipyRoutes(app: FastifyInstance) {
   app.get(
     "/v1/media/klipy/search",
@@ -336,13 +455,17 @@ export async function klipyRoutes(app: FastifyInstance) {
     async (req: any, rep) => {
       const query = KlipyQuery.parse(req.query || {});
       if (!query.q) return rep.code(400).send({ error: "QUERY_REQUIRED" });
+      const userId = String(req?.auth?.userId || "").trim();
+      const adParams = buildKlipyAdParams(query, req, userId);
+      const requestHeaders = buildKlipyRequestHeaders(req);
 
       try {
         return await fetchKlipyPayload(app, "/v2/search", {
           q: query.q,
           pos: query.pos || "",
           limit: String(query.limit),
-        });
+          ...adParams,
+        }, requestHeaders);
       } catch (error) {
         const statusCode =
           Number((error as any)?.statusCode) > 0 ? Number((error as any).statusCode) : 502;
@@ -358,11 +481,15 @@ export async function klipyRoutes(app: FastifyInstance) {
     { preHandler: [app.authenticate] } as any,
     async (req: any, rep) => {
       const query = KlipyQuery.parse(req.query || {});
+      const userId = String(req?.auth?.userId || "").trim();
+      const adParams = buildKlipyAdParams(query, req, userId);
+      const requestHeaders = buildKlipyRequestHeaders(req);
       try {
         return await fetchKlipyPayload(app, "/v2/featured", {
           pos: query.pos || "",
           limit: String(query.limit),
-        });
+          ...adParams,
+        }, requestHeaders);
       } catch (error) {
         const statusCode =
           Number((error as any)?.statusCode) > 0 ? Number((error as any).statusCode) : 502;

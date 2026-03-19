@@ -16,6 +16,7 @@ import {
 } from "../components/chrome";
 import { useAuth } from "../context/AuthContext";
 import { colors, radii, spacing, typography } from "../theme";
+import { resolveCoreImageUrl } from "../urls";
 
 type ProfileScreenProps = {
   onLogout: () => void;
@@ -73,6 +74,7 @@ export function ProfileScreen({
   const bio = myProfile?.bio ?? "";
   const pfpUrl = myProfile?.pfp_url ?? null;
   const bannerUrl = myProfile?.banner_url ?? null;
+  const resolvedBannerUrl = resolveCoreImageUrl(bannerUrl);
   const statusLabel = STATUS_LABELS[selfStatus] ?? STATUS_LABELS.online;
 
   const profileSubtitle = useMemo(() => {
@@ -90,8 +92,12 @@ export function ProfileScreen({
         showsVerticalScrollIndicator={false}
       >
         <SurfaceCard style={styles.heroCard} padded={false}>
-          {bannerUrl ? (
-            <Image source={{ uri: bannerUrl }} style={styles.banner} resizeMode="cover" />
+          {resolvedBannerUrl ? (
+            <Image
+              source={{ uri: resolvedBannerUrl }}
+              style={styles.banner}
+              resizeMode="cover"
+            />
           ) : (
             <View style={styles.bannerPlaceholder} />
           )}

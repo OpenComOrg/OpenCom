@@ -145,6 +145,22 @@ export function FriendsSurface({
           </div>
         )}
 
+        {(friendView === "online" || friendView === "all") &&
+          visibleFriends.length === 0 && (
+            <div className="friend-empty-state">
+              <strong>
+                {friendView === "online"
+                  ? "No friends are online right now."
+                  : "No friends matched that search."}
+              </strong>
+              <p className="hint">
+                {friendView === "online"
+                  ? "Try switching to All, sending a new request, or checking back a little later."
+                  : "Clear the search or send a new request to start building your network."}
+              </p>
+            </div>
+          )}
+
         {visibleFriends.map((friend) => {
           const primaryLabel = getFriendPrimaryLabel(friend);
           const secondaryLabel = getFriendSecondaryLabel(friend);

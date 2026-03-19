@@ -1,0 +1,43 @@
+CREATE TABLE IF NOT EXISTS support_tickets (
+  id VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_uca1400_ai_ci PRIMARY KEY,
+  reference_code VARCHAR(96) CHARACTER SET utf8mb4 COLLATE utf8mb4_uca1400_ai_ci NOT NULL,
+  access_key_hash CHAR(64) CHARACTER SET ascii COLLATE ascii_general_ci NOT NULL,
+  requester_name VARCHAR(120) CHARACTER SET utf8mb4 COLLATE utf8mb4_uca1400_ai_ci NULL,
+  contact_email VARCHAR(190) CHARACTER SET utf8mb4 COLLATE utf8mb4_uca1400_ai_ci NOT NULL,
+  opencom_user_id VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_uca1400_ai_ci NULL,
+  opencom_username VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_uca1400_ai_ci NULL,
+  subject VARCHAR(180) CHARACTER SET utf8mb4 COLLATE utf8mb4_uca1400_ai_ci NOT NULL,
+  category VARCHAR(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_uca1400_ai_ci NOT NULL,
+  priority VARCHAR(16) CHARACTER SET utf8mb4 COLLATE utf8mb4_uca1400_ai_ci NOT NULL DEFAULT 'normal',
+  status VARCHAR(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_uca1400_ai_ci NOT NULL DEFAULT 'open',
+  assigned_to_user_id VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_uca1400_ai_ci NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  last_activity_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_public_reply_at TIMESTAMP NULL DEFAULT NULL,
+  last_admin_reply_at TIMESTAMP NULL DEFAULT NULL,
+  closed_at TIMESTAMP NULL DEFAULT NULL,
+  UNIQUE KEY uq_support_tickets_reference_code (reference_code),
+  INDEX idx_support_tickets_status_activity (status, last_activity_at),
+  INDEX idx_support_tickets_category_activity (category, last_activity_at),
+  INDEX idx_support_tickets_priority_activity (priority, last_activity_at),
+  INDEX idx_support_tickets_assignee_activity (assigned_to_user_id, last_activity_at),
+  INDEX idx_support_tickets_contact_email (contact_email),
+  INDEX idx_support_tickets_opencom_user_id (opencom_user_id),
+  CONSTRAINT fk_support_tickets_assigned_to_user FOREIGN KEY (assigned_to_user_id) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
+
+CREATE TABLE IF NOT EXISTS support_ticket_messages (
+  id VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_uca1400_ai_ci PRIMARY KEY,
+  ticket_id VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_uca1400_ai_ci NOT NULL,
+  author_type VARCHAR(16) CHARACTER SET utf8mb4 COLLATE utf8mb4_uca1400_ai_ci NOT NULL,
+  author_user_id VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_uca1400_ai_ci NULL,
+  author_name VARCHAR(120) CHARACTER SET utf8mb4 COLLATE utf8mb4_uca1400_ai_ci NULL,
+  body TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_uca1400_ai_ci NOT NULL,
+  is_internal_note TINYINT(1) NOT NULL DEFAULT 0,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_support_ticket_messages_ticket (ticket_id, created_at),
+  INDEX idx_support_ticket_messages_author_user (author_user_id),
+  CONSTRAINT fk_support_ticket_messages_ticket FOREIGN KEY (ticket_id) REFERENCES support_tickets(id) ON DELETE CASCADE,
+  CONSTRAINT fk_support_ticket_messages_author_user FOREIGN KEY (author_user_id) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;

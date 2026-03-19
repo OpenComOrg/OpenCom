@@ -25,7 +25,6 @@ export function ServerSettingsSection({ serverState, forms, actions }) {
     newServerBaseUrl,
     newServerLogoUrl,
     newServerBannerUrl,
-    newWorkspaceName,
     newChannelName,
     newChannelType,
     newChannelParentId,
@@ -43,8 +42,6 @@ export function ServerSettingsSection({ serverState, forms, actions }) {
     setNewServerBannerUrl,
     createServer,
     updateActiveServerVoiceGatewayPref,
-    setNewWorkspaceName,
-    createWorkspace,
     setNewChannelName,
     setNewChannelType,
     setNewChannelParentId,
@@ -224,18 +221,6 @@ export function ServerSettingsSection({ serverState, forms, actions }) {
 
       {activeServer && canManageServer && (
         <section className="card">
-          <h4>Create Workspace</h4>
-          <input
-            placeholder="Workspace name"
-            value={newWorkspaceName ?? ""}
-            onChange={(event) => setNewWorkspaceName(event.target.value)}
-          />
-          <button onClick={createWorkspace}>Create Workspace</button>
-        </section>
-      )}
-
-      {activeServer && canManageServer && (
-        <section className="card">
           <h4>Create Channel</h4>
           <input
             placeholder="New channel/category"
@@ -405,7 +390,7 @@ export function ServerSettingsSection({ serverState, forms, actions }) {
 
       {!activeServer && servers.length > 0 && (
         <p className="hint">
-          Select a server from the sidebar to manage workspaces and channels.
+          Select a server from the sidebar to manage channels, roles, and server settings.
         </p>
       )}
     </>

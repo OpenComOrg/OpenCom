@@ -1055,10 +1055,69 @@ export async function api(path, options = {}) {
     const errorData = await response.json().catch(() => ({}));
     const err = new Error(errorData.error || `HTTP_${response.status}`);
     err.status = response.status;
+    err.payload = errorData;
+    err.issues = Array.isArray(errorData.issues) ? errorData.issues : [];
     throw err;
   }
 
   return response.json();
+}
+
+function formatValidationPath(path = []) {
+  if (!Array.isArray(path) || !path.length) return "";
+  const cleaned = path.filter((part) => part !== "activity");
+  if (!cleaned.length) return "";
+  if (cleaned[0] === "buttons" && Number.isInteger(cleaned[1])) {
+    const buttonLabel = `Button ${Number(cleaned[1]) + 1}`;
+    if (cleaned[2] === "label") return `${buttonLabel} label`;
+    if (cleaned[2] === "url") return `${buttonLabel} URL`;
+    return buttonLabel;
+  }
+  return cleaned
+    .map((part) =>
+      String(part)
+        .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+        .replace(/[_-]+/g, " ")
+        .trim(),
+    )
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function formatValidationIssue(issue, fallback = "Invalid value.") {
+  const label = formatValidationPath(issue?.path || []);
+  const message = String(issue?.message || fallback).trim() || fallback;
+  if (/invalid url/i.test(message)) {
+    if (label === "Large Image Url" || label === "Small Image Url") {
+      return `${label.replace("Url", "URL")} must use an uploaded image path or a valid http(s) URL.`;
+    }
+    if (/URL$/.test(label)) {
+      return `${label} must use a valid http(s) URL.`;
+    }
+  }
+  if (!label) return message;
+  if (
+    label === "Large Image Url" ||
+    label === "Small Image Url"
+  ) {
+    return `${label.replace("Url", "URL")}: ${message}`;
+  }
+  return `${label}: ${message}`;
+}
+
+export function describeValidationIssues(issues = [], fallback = "Invalid value.") {
+  if (!Array.isArray(issues) || !issues.length) return fallback;
+  return issues
+    .slice(0, 2)
+    .map((issue) => formatValidationIssue(issue, fallback))
+    .join(" ");
+}
+
+export function describeApiError(error, fallback = "Request failed.") {
+  if (Array.isArray(error?.issues) && error.issues.length) {
+    return describeValidationIssues(error.issues, fallback);
+  }
+  return String(error?.message || fallback);
 }
 
 export async function nodeApi(baseUrl, path, token, options = {}) {
@@ -1620,9 +1679,9 @@ export function rpcActivityFromForm(form) {
     name: form.name.trim() || undefined,
     details: form.details.trim() || undefined,
     state: form.state.trim() || undefined,
-    largeImageUrl: form.largeImageUrl.trim() || undefined,
+    largeImageUrl: normalizeImageUrlInput(form.largeImageUrl || "") || undefined,
     largeImageText: form.largeImageText.trim() || undefined,
-    smallImageUrl: form.smallImageUrl.trim() || undefined,
+    smallImageUrl: normalizeImageUrlInput(form.smallImageUrl || "") || undefined,
     smallImageText: form.smallImageText.trim() || undefined,
     buttons: buttons.length ? buttons : undefined,
   };
@@ -1647,10 +1706,15 @@ export function formatMessageDate(value) {
   });
 }
 
-export function playNotificationBeep(mute = false) {
-  if (mute) return;
+let activeNotificationSoundAudio = null;
+
+function playSyntheticNotificationBeep() {
   try {
-    const audioCtx = new window.AudioContext();
+    if (typeof window === "undefined") return;
+    const AudioContextCtor =
+      window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextCtor) return;
+    const audioCtx = new AudioContextCtor();
     const osc1 = audioCtx.createOscillator();
     const osc2 = audioCtx.createOscillator();
     const gain = audioCtx.createGain();
@@ -1671,6 +1735,47 @@ export function playNotificationBeep(mute = false) {
     osc1.onended = () => {
       osc2.onended = () => audioCtx.close();
     };
+  } catch {}
+}
+
+export function playNotificationBeep(input = false) {
+  const options =
+    input && typeof input === "object" ? input : { mute: !!input };
+  const mute = options?.mute === true;
+  const soundUrl = String(options?.soundUrl || "").trim();
+  if (mute) return;
+  if (!soundUrl) {
+    playSyntheticNotificationBeep();
+    return;
+  }
+  try {
+    if (typeof window === "undefined" || typeof Audio === "undefined") {
+      return;
+    }
+    if (activeNotificationSoundAudio) {
+      try {
+        activeNotificationSoundAudio.pause();
+        activeNotificationSoundAudio.currentTime = 0;
+      } catch {}
+    }
+    const audio = new Audio(soundUrl);
+    let settled = false;
+    const clearActiveAudio = () => {
+      if (settled) return;
+      settled = true;
+      if (activeNotificationSoundAudio === audio) {
+        activeNotificationSoundAudio = null;
+      }
+    };
+    activeNotificationSoundAudio = audio;
+    audio.preload = "auto";
+    audio.volume = 1;
+    audio.onended = clearActiveAudio;
+    audio.onerror = clearActiveAudio;
+    const playPromise = audio.play();
+    if (playPromise && typeof playPromise.catch === "function") {
+      playPromise.catch(clearActiveAudio);
+    }
   } catch {}
 }
 

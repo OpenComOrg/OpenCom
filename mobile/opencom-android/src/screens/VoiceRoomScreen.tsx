@@ -24,6 +24,7 @@ import type {
   VoiceState,
 } from "../types";
 import { colors, radii, spacing, typography } from "../theme";
+import { normalizeServerBaseUrl } from "../urls";
 
 type VoiceRoomScreenProps = {
   server?: CoreServer;
@@ -71,7 +72,10 @@ export function VoiceRoomScreen({
   const { api, me } = useAuth();
   const isPrivateCall = mode === "private" || !!callId;
   const resolvedBaseUrl = String(
-    nodeBaseUrl || server?.baseUrl || "",
+    normalizeServerBaseUrl(nodeBaseUrl || server?.baseUrl || "") ||
+      nodeBaseUrl ||
+      server?.baseUrl ||
+      "",
   ).trim();
   const resolvedMembershipToken = String(
     membershipToken || server?.membershipToken || "",

@@ -22,6 +22,18 @@ function formatTimestamp(value?: Date | string): string {
   return Number.isNaN(date.getTime()) ? String(value) : date.toUTCString();
 }
 
+function buildSupportPortalUrl(params?: Record<string, string | null | undefined>) {
+  const base = env.SUPPORT_BASE_URL.replace(/\/$/, "");
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(params || {})) {
+    const trimmed = String(value || "").trim();
+    if (!trimmed) continue;
+    search.set(key, trimmed);
+  }
+  const query = search.toString();
+  return query ? `${base}/?${query}` : `${base}/`;
+}
+
 export async function sendVerificationEmail(to: string, verifyToken: string) {
   const base = env.APP_BASE_URL.replace(/\/$/, "");
   const verifyUrl = `${base}/?verifyEmailToken=${encodeURIComponent(verifyToken)}`;
@@ -58,5 +70,142 @@ export async function sendSigninEmail(to: string, input: SendSigninEmailInput) {
     subject: "OpenCom suspicious sign-in alert",
     text: `We noticed a sign-in to your OpenCom account from a new IP address.\n\nTime: ${happenedAt}\nIP address: ${ip}${userAgentText}\n\nIf this was not you, sign in at ${loginUrl} and reset your password immediately.\nIf this was you, you can ignore this email.`,
     html: `<p>We noticed a sign-in to your OpenCom account from a new IP address.</p><p><strong>Time:</strong> ${escapeHtml(happenedAt)}<br /><strong>IP address:</strong> <code>${escapeHtml(ip)}</code></p>${userAgentHtml}<p>If this was not you, sign in at <a href="${loginUrl}">${loginUrl}</a> and reset your password immediately.</p><p>If this was you, you can ignore this email.</p>`
+  });
+}
+
+function buildSupportTicketUrl(ticketReference: string, accessKey?: string) {
+  return buildSupportPortalUrl({
+    reference: ticketReference,
+    accessKey,
+  });
+}
+
+export async function sendSupportTicketCreatedEmail(
+  to: string,
+  input: {
+    ticketReference: string;
+    subject: string;
+    categoryLabel: string;
+    priorityLabel: string;
+    accessKey: string;
+  }
+) {
+  const ticketUrl = buildSupportTicketUrl(input.ticketReference, input.accessKey);
+  await sendSmtpEmail({
+    to,
+    subject: `OpenCom support ticket received: ${input.ticketReference}`,
+    text:
+      `We received your OpenCom support request.\n\n` +
+      `Reference: ${input.ticketReference}\n` +
+      `Subject: ${input.subject}\n` +
+      `Category: ${input.categoryLabel}\n` +
+      `Priority: ${input.priorityLabel}\n\n` +
+      `Use this private access key to track or reply to your ticket:\n${input.accessKey}\n\n` +
+      `Direct ticket link:\n${ticketUrl}\n\n` +
+      `Keep this access key safe. Anyone with the ticket reference and key can view your support thread.`,
+    html:
+      `<p>We received your OpenCom support request.</p>` +
+      `<p><strong>Reference:</strong> <code>${escapeHtml(input.ticketReference)}</code><br />` +
+      `<strong>Subject:</strong> ${escapeHtml(input.subject)}<br />` +
+      `<strong>Category:</strong> ${escapeHtml(input.categoryLabel)}<br />` +
+      `<strong>Priority:</strong> ${escapeHtml(input.priorityLabel)}</p>` +
+      `<p><strong>Private access key:</strong> <code>${escapeHtml(input.accessKey)}</code></p>` +
+      `<p><a href="${ticketUrl}">Open your support ticket</a></p>` +
+      `<p>Keep this access key safe. Anyone with the ticket reference and key can view your support thread.</p>`
+  });
+}
+
+export async function sendSupportTicketReplyEmail(
+  to: string,
+  input: {
+    ticketReference: string;
+    subject: string;
+    currentStatusLabel: string;
+    replyBody: string;
+  }
+) {
+  const ticketUrl = buildSupportTicketUrl(input.ticketReference);
+  await sendSmtpEmail({
+    to,
+    subject: `New OpenCom support reply: ${input.ticketReference}`,
+    text:
+      `There is a new reply on your OpenCom support ticket.\n\n` +
+      `Reference: ${input.ticketReference}\n` +
+      `Subject: ${input.subject}\n` +
+      `Current status: ${input.currentStatusLabel}\n\n` +
+      `${input.replyBody}\n\n` +
+      `Open your ticket:\n${ticketUrl}\n\n` +
+      `Use the private access key from your original ticket confirmation email when reopening the thread.`,
+    html:
+      `<p>There is a new reply on your OpenCom support ticket.</p>` +
+      `<p><strong>Reference:</strong> <code>${escapeHtml(input.ticketReference)}</code><br />` +
+      `<strong>Subject:</strong> ${escapeHtml(input.subject)}<br />` +
+      `<strong>Current status:</strong> ${escapeHtml(input.currentStatusLabel)}</p>` +
+      `<blockquote>${escapeHtml(input.replyBody).replace(/\n/g, "<br />")}</blockquote>` +
+      `<p>Open your ticket: <a href="${ticketUrl}">${ticketUrl}</a></p>` +
+      `<p>Use the private access key from your original ticket confirmation email when reopening the thread.</p>`
+  });
+}
+
+export async function sendSupportTicketStatusEmail(
+  to: string,
+  input: {
+    ticketReference: string;
+    subject: string;
+    nextStatusLabel: string;
+  }
+) {
+  const ticketUrl = buildSupportTicketUrl(input.ticketReference);
+  await sendSmtpEmail({
+    to,
+    subject: `OpenCom support status update: ${input.ticketReference}`,
+    text:
+      `Your OpenCom support ticket status has changed.\n\n` +
+      `Reference: ${input.ticketReference}\n` +
+      `Subject: ${input.subject}\n` +
+      `New status: ${input.nextStatusLabel}\n\n` +
+      `Open your ticket:\n${ticketUrl}\n\n` +
+      `Use the private access key from your original ticket confirmation email when reopening the thread.`,
+    html:
+      `<p>Your OpenCom support ticket status has changed.</p>` +
+      `<p><strong>Reference:</strong> <code>${escapeHtml(input.ticketReference)}</code><br />` +
+      `<strong>Subject:</strong> ${escapeHtml(input.subject)}<br />` +
+      `<strong>New status:</strong> ${escapeHtml(input.nextStatusLabel)}</p>` +
+      `<p>Open your ticket: <a href="${ticketUrl}">${ticketUrl}</a></p>` +
+      `<p>Use the private access key from your original ticket confirmation email when reopening the thread.</p>`
+  });
+}
+
+export async function sendAccountBanEmail(
+  to: string,
+  input: {
+    username: string;
+    reason?: string | null;
+  }
+) {
+  const appealUrl = buildSupportPortalUrl({
+    category: "unban_appeal",
+    opencomUsername: input.username,
+  });
+  const supportUrl = buildSupportPortalUrl();
+  const reason = String(input.reason || "").trim();
+  const reasonText = reason || "No specific reason was attached to the ban action.";
+
+  await sendSmtpEmail({
+    to,
+    subject: "Your OpenCom account has been banned",
+    text:
+      `Your OpenCom account (@${input.username}) has been banned.\n\n` +
+      `Reason:\n${reasonText}\n\n` +
+      `If you believe this was a mistake, you can submit an appeal here:\n${appealUrl}\n\n` +
+      `General support portal:\n${supportUrl}\n\n` +
+      `When appealing, include your username, any relevant dates, and the context you want the support team to review.`,
+    html:
+      `<p>Your OpenCom account (<strong>@${escapeHtml(input.username)}</strong>) has been banned.</p>` +
+      `<p><strong>Reason:</strong><br />${escapeHtml(reasonText).replace(/\n/g, "<br />")}</p>` +
+      `<p>If you believe this was a mistake, you can submit an appeal here:</p>` +
+      `<p><a href="${appealUrl}">${appealUrl}</a></p>` +
+      `<p>General support portal: <a href="${supportUrl}">${supportUrl}</a></p>` +
+      `<p>When appealing, include your username, any relevant dates, and the context you want the support team to review.</p>`
   });
 }

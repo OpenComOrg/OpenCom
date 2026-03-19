@@ -21,7 +21,7 @@ export function SettingsOverlay({
   onOpenBilling,
   canModerateMembers,
   canAccessServerAdminPanel,
-  resolveStaticPageHref,
+  onOpenServerAdmin,
   logout,
   children,
 }) {
@@ -97,14 +97,13 @@ export function SettingsOverlay({
             Voice
           </button>
           {canAccessServerAdminPanel && (
-            <a
-              href={resolveStaticPageHref("server-admin.html")}
-              target="_blank"
-              rel="noopener noreferrer"
+            <button
+              type="button"
               style={SETTINGS_ADMIN_LINK_STYLE}
+              onClick={() => onOpenServerAdmin && onOpenServerAdmin()}
             >
               🔧 Server Admin Panel
-            </a>
+            </button>
           )}
           <button className="danger" onClick={closeSettings}>
             Close

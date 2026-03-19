@@ -3,7 +3,9 @@ export function ProfileSettingsSection({
   setProfileForm,
   onAvatarUpload,
   onBannerUpload,
+  onAudioFieldUpload,
   saveProfile,
+  testNotificationSound,
   isDesktopRuntime,
   openPreferredDesktopDownload,
   preferredDownloadTarget,
@@ -92,6 +94,55 @@ export function ProfileSettingsSection({
         Upload Banner
         <input type="file" accept="image/*" onChange={onBannerUpload} />
       </label>
+      <label>
+        Notification Sound URL
+        <input
+          value={profileForm.notificationSoundUrl}
+          onChange={(event) =>
+            setProfileForm((current) => ({
+              ...current,
+              notificationSoundUrl: event.target.value,
+            }))
+          }
+          placeholder="https://... or /v1/profile-images/users/..."
+        />
+      </label>
+      <label>
+        Upload Notification Sound
+        <input
+          type="file"
+          accept="audio/mpeg,audio/mp3,audio/wav,audio/x-wav,audio/ogg,audio/mp4,audio/x-m4a"
+          onChange={(event) =>
+            onAudioFieldUpload(event, "notification sound", (mediaUrl) =>
+              setProfileForm((current) => ({
+                ...current,
+                notificationSoundUrl: mediaUrl,
+              })),
+            )
+          }
+        />
+      </label>
+      <div className="row-actions" style={{ width: "100%" }}>
+        <button type="button" className="ghost" onClick={testNotificationSound}>
+          Test Sound
+        </button>
+        <button
+          type="button"
+          className="ghost"
+          onClick={() =>
+            setProfileForm((current) => ({
+              ...current,
+              notificationSoundUrl: "",
+            }))
+          }
+        >
+          Use Default Beep
+        </button>
+      </div>
+      <p className="hint">
+        Paste a direct audio URL or upload an MP3, WAV, OGG, or M4A file, then
+        save your profile to apply it.
+      </p>
       <button onClick={saveProfile}>Save Profile</button>
 
       {!isDesktopRuntime && (
@@ -154,7 +205,8 @@ export function ProfileSettingsSection({
       />
       <h4>Rich Presence (RPC-style)</h4>
       <p className="hint">
-        No app ID needed. Set activity text, image URLs, and optional buttons.
+        No app ID needed. Upload images or paste URLs for the artwork, and use
+        full http(s) links for buttons.
       </p>
       <label>
         Activity Name

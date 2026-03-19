@@ -10,6 +10,7 @@ const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, "../../../../../");
 
 const DOWNLOAD_FILE_MAP: Record<string, string> = {
+  "opencom.apk": "OpenCom.apk",
   "opencom.exe": "OpenCom.exe",
   "opencom.deb": "OpenCom.deb",
   "opencom.snap": "OpenCom.snap",
@@ -27,6 +28,7 @@ const DESKTOP_RELEASE_ARTIFACTS = [
 ] as const;
 
 const MIME_BY_EXT: Record<string, string> = {
+  ".apk": "application/vnd.android.package-archive",
   ".deb": "application/vnd.debian.binary-package",
   ".exe": "application/octet-stream",
   ".gz": "application/gzip",

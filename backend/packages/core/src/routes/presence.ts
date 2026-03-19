@@ -1,27 +1,70 @@
 import type { FastifyInstance } from "fastify";
+import type { PresenceUpdate } from "@ods/shared/events.js";
 import { z } from "zod";
-import { presenceGetMany } from "../presence.js";
+import { normalizeRichPresenceInput, RichPresence, presenceGetMany } from "../presence.js";
 import { q } from "../db.js";
 
-const RichPresenceBody = z.object({
-  activity: z.object({
-    name: z.string().min(1).max(128).optional().nullable(),
-    details: z.string().max(128).optional().nullable(),
-    state: z.string().max(128).optional().nullable(),
-    largeImageUrl: z.string().url().max(1024).optional().nullable(),
-    largeImageText: z.string().max(128).optional().nullable(),
-    smallImageUrl: z.string().url().max(1024).optional().nullable(),
-    smallImageText: z.string().max(128).optional().nullable(),
-    buttons: z.array(z.object({
-      label: z.string().min(1).max(32),
-      url: z.string().url().max(1024)
-    })).max(2).optional(),
-    startTimestamp: z.number().int().positive().optional().nullable(),
-    endTimestamp: z.number().int().positive().optional().nullable()
-  }).nullable()
-});
+type PresenceSnapshot = {
+  status: PresenceUpdate["status"];
+  customStatus: string | null;
+  richPresence: any | null;
+};
 
-export async function presenceRoutes(app: FastifyInstance) {
+type BroadcastPresence = (
+  userId: string,
+  presence: PresenceSnapshot,
+) => Promise<void>;
+
+function parseJsonIfString(value: unknown) {
+  if (typeof value !== "string") return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
+}
+
+const RichPresenceActivity = z.preprocess(
+  parseJsonIfString,
+  RichPresence.nullable(),
+);
+
+const RichPresenceBody = z.preprocess((value) => {
+  const parsed = parseJsonIfString(value);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return parsed;
+  }
+  if (Object.prototype.hasOwnProperty.call(parsed, "activity")) {
+    return {
+      ...parsed,
+      activity: parseJsonIfString((parsed as Record<string, unknown>).activity),
+    };
+  }
+  return { activity: parsed };
+}, z.object({
+  activity: RichPresenceActivity,
+}));
+
+async function loadPresenceSnapshot(userId: string): Promise<PresenceSnapshot> {
+  const latest = (await presenceGetMany([userId]))[userId];
+  if (latest) {
+    return {
+      status: latest.status as PresenceUpdate["status"],
+      customStatus: latest.customStatus,
+      richPresence: latest.richPresence,
+    };
+  }
+  return {
+    status: "online",
+    customStatus: null,
+    richPresence: null,
+  };
+}
+
+export async function presenceRoutes(
+  app: FastifyInstance,
+  broadcastPresence?: BroadcastPresence,
+) {
   app.get("/v1/presence", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
     const raw = (req.query as { userIds?: string }).userIds;
     const userIds = typeof raw === "string" ? raw.split(",").map((s) => s.trim()).filter(Boolean) : [];
@@ -31,8 +74,9 @@ export async function presenceRoutes(app: FastifyInstance) {
 
   app.post("/v1/presence/rpc", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
     const userId = req.user.sub as string;
-    const body = RichPresenceBody.parse(req.body || {});
-    const activityJson = body.activity ? JSON.stringify(body.activity) : null;
+    const body = RichPresenceBody.parse(req.body);
+    const activity = normalizeRichPresenceInput(body.activity);
+    const activityJson = activity ? JSON.stringify(activity) : null;
 
     await q(
       `INSERT INTO presence (user_id, status, custom_status, rich_presence_json, updated_at)
@@ -41,12 +85,21 @@ export async function presenceRoutes(app: FastifyInstance) {
       { userId, activityJson }
     );
 
-    return rep.send({ ok: true, activity: body.activity });
+    if (broadcastPresence) {
+      await broadcastPresence(userId, await loadPresenceSnapshot(userId));
+    }
+
+    return rep.send({ ok: true, activity });
   });
 
   app.delete("/v1/presence/rpc", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
     const userId = req.user.sub as string;
     await q(`UPDATE presence SET rich_presence_json=NULL, updated_at=NOW() WHERE user_id=:userId`, { userId });
+
+    if (broadcastPresence) {
+      await broadcastPresence(userId, await loadPresenceSnapshot(userId));
+    }
+
     return rep.send({ ok: true });
   });
 }

@@ -31,6 +31,13 @@ function formatPercent(value) {
   return `${numeric.toFixed(numeric >= 10 ? 0 : 1)}%`;
 }
 
+function formatRatio(part, whole) {
+  const partValue = Number(part || 0);
+  const wholeValue = Number(whole || 0);
+  if (!wholeValue || wholeValue <= 0) return "0%";
+  return formatPercent((partValue / wholeValue) * 100);
+}
+
 function formatDateTime(value) {
   if (!value) return "Never";
   const date = new Date(value);
@@ -144,7 +151,12 @@ function DatabaseStatList({ stats }) {
     ["Staff assignments", stats.staffAssignments],
     ["Published blogs", stats.publishedBlogs],
     ["Draft blogs", stats.draftBlogs],
+    ["Badge definitions", stats.badgeDefinitions],
     ["Active boost grants", stats.boostGrantsActive],
+    ["Boost badge members", stats.boostBadgeMembers],
+    ["Boost Stripe members", stats.boostStripeMembers],
+    ["Support tickets (open)", stats.supportTicketsOpen],
+    ["Support tickets (total)", stats.supportTicketsTotal],
   ];
 
   return (
@@ -171,6 +183,12 @@ export function AdminOverviewDashboard({
   const service = stats?.service || null;
   const memory = service?.memory || null;
   const topStorageRoot = storageRoots[0] || null;
+  const boostBadgeMembers =
+    Number(stats?.database?.boostBadgeMembers || adminOverview?.boostBadgeMembers || 0);
+  const boostStripeMembers =
+    Number(stats?.database?.boostStripeMembers || adminOverview?.boostStripeMembers || 0);
+  const boostGrantMembers =
+    Number(stats?.database?.boostGrantsActive || adminOverview?.activeBoostGrants || 0);
 
   return (
     <section className="admin-section admin-dashboard">
@@ -222,6 +240,12 @@ export function AdminOverviewDashboard({
           detail={`${formatNumber(stats?.database?.activeRefreshSessions)} active sessions`}
         />
         <MetricCard
+          label="Boost members"
+          value={formatNumber(boostBadgeMembers)}
+          detail={`${formatRatio(boostBadgeMembers, stats?.database?.users)} of users · Stripe ${formatNumber(boostStripeMembers)} · Manual ${formatNumber(boostGrantMembers)}`}
+          accent
+        />
+        <MetricCard
           label="Service uptime"
           value={formatUptime(service?.uptimeSec)}
           detail={service ? `${service.nodeVersion} on ${service.hostname}` : "Waiting for stats"}
@@ -268,6 +292,9 @@ export function AdminOverviewDashboard({
                 <strong>{formatNumber(adminOverview?.activeBoostGrants)}</strong>{" "}
                 active grant(s)
               </p>
+              <p className="text-dim">
+                {formatNumber(boostBadgeMembers)} users currently carry boost.
+              </p>
             </div>
             <div className="admin-card admin-card-plain">
               <h3>Panel staff</h3>
@@ -281,6 +308,16 @@ export function AdminOverviewDashboard({
               <p>
                 <strong>{formatNumber(adminOverview?.publishedBlogsCount)}</strong>{" "}
                 live post(s)
+              </p>
+            </div>
+            <div className="admin-card admin-card-plain">
+              <h3>Support queue</h3>
+              <p>
+                <strong>{formatNumber(stats?.database?.supportTicketsOpen || adminOverview?.supportTicketsOpen)}</strong>{" "}
+                open ticket(s)
+              </p>
+              <p className="text-dim">
+                Total tickets: {formatNumber(stats?.database?.supportTicketsTotal || adminOverview?.supportTicketsTotal)}
               </p>
             </div>
           </div>

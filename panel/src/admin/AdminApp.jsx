@@ -1,9 +1,13 @@
 import { useEffect, useState } from "react";
-import { resolveStaticPageHref } from "../lib/routing";
 import { BlogMarkdown } from "../lib/blogMarkdown";
 import { AdminOverviewDashboard } from "./AdminOverviewDashboard.jsx";
 
 const CORE_API = import.meta.env.VITE_CORE_API_URL || "https://api.opencom.online";
+const SERVER_ADMIN_URL =
+  import.meta.env.VITE_SERVER_ADMIN_URL ||
+  "http://localhost:5173/server-admin.html";
+const PANEL_ACCESS_TOKEN_KEY = "opencom_panel_access_token";
+const PANEL_REFRESH_TOKEN_KEY = "opencom_panel_refresh_token";
 
 const BUILTIN_BADGE_DEFINITIONS = [
   {
@@ -218,15 +222,28 @@ function formatAdminDateTime(value = "") {
   return date.toLocaleString();
 }
 
+function formatAdminDurationMs(value = 0) {
+  const numeric = Number(value || 0);
+  if (!Number.isFinite(numeric) || numeric <= 0) return "0s";
+  if (numeric < 1_000) return `${Math.round(numeric)}ms`;
+  if (numeric < 60_000) return `${(numeric / 1_000).toFixed(numeric >= 10_000 ? 0 : 1)}s`;
+  const totalSeconds = Math.round(numeric / 1_000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes < 60) return `${minutes}m ${seconds}s`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ${minutes % 60}m`;
+}
+
 async function api(path, token, panelPassword, options = {}) {
   const hasBody = options.body !== undefined && options.body !== null;
   const hasFormData = typeof FormData !== "undefined" && options.body instanceof FormData;
-  const trimmedPanelPassword = typeof panelPassword === "string" ? panelPassword.trim() : "";
+  const authToken = String(token || "").trim();
+  if (!authToken) throw new Error("UNAUTHORIZED");
   const response = await fetch(`${CORE_API}${path}`, {
     headers: {
       ...(hasBody && !hasFormData ? { "Content-Type": "application/json" } : {}),
-      Authorization: `Bearer ${token}`,
-      ...(trimmedPanelPassword ? { "x-admin-panel-password": trimmedPanelPassword } : {}),
+      Authorization: `Bearer ${authToken}`,
       ...(options.headers || {})
     },
     ...options
@@ -240,12 +257,36 @@ async function api(path, token, panelPassword, options = {}) {
   return response.json();
 }
 
+async function panelAuthApi(path, options = {}) {
+  const hasBody = options.body !== undefined && options.body !== null;
+  const hasFormData = typeof FormData !== "undefined" && options.body instanceof FormData;
+  const response = await fetch(`${CORE_API}${path}`, {
+    headers: {
+      ...(hasBody && !hasFormData ? { "Content-Type": "application/json" } : {}),
+      ...(options.headers || {}),
+    },
+    ...options,
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(describeApiError(payload, `HTTP_${response.status}`));
+  }
+  return payload;
+}
+
 export function AdminApp() {
-  const [token, setToken] = useState(localStorage.getItem("opencom_access_token") || "");
-  const [panelPassword, setPanelPassword] = useState(sessionStorage.getItem("opencom_admin_panel_password") || "");
-  const [autoPlatformUnlock, setAutoPlatformUnlock] = useState(false);
-  const [autoUnlockDisabled, setAutoUnlockDisabled] = useState(false);
-  const [autoUnlockChecking, setAutoUnlockChecking] = useState(false);
+  const [token, setToken] = useState(localStorage.getItem(PANEL_ACCESS_TOKEN_KEY) || "");
+  const [refreshToken, setRefreshToken] = useState(localStorage.getItem(PANEL_REFRESH_TOKEN_KEY) || "");
+  const [loginEmail, setLoginEmail] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
+  const [loginTotpToken, setLoginTotpToken] = useState("");
+  const [loginRecoveryCode, setLoginRecoveryCode] = useState("");
+  const [loginBusy, setLoginBusy] = useState(false);
+  const [setupState, setSetupState] = useState(null);
+  const [setupTotpToken, setSetupTotpToken] = useState("");
+  const [setupBusy, setSetupBusy] = useState(false);
+  const [freshRecoveryCodes, setFreshRecoveryCodes] = useState([]);
   const [status, setStatus] = useState("");
   const [statusType, setStatusType] = useState("info"); // info | success | error
   const [adminOverview, setAdminOverview] = useState({
@@ -254,9 +295,21 @@ export function AdminApp() {
     activeBoostGrants: 0,
     staffAssignmentsCount: 0,
     publishedBlogsCount: 0,
+    boostBadgeMembers: 0,
+    boostStripeMembers: 0,
+    badgeDefinitionsCount: 0,
+    supportTicketsTotal: 0,
+    supportTicketsOpen: 0,
   });
   const [dashboardStats, setDashboardStats] = useState(null);
   const [dashboardLoading, setDashboardLoading] = useState(false);
+  const [operationsState, setOperationsState] = useState({
+    runtime: null,
+    activeOperation: null,
+    history: [],
+  });
+  const [operationsLoading, setOperationsLoading] = useState(false);
+  const [operationBusy, setOperationBusy] = useState("");
   const [tab, setTab] = useState("overview");
   const [query, setQuery] = useState("");
   const [users, setUsers] = useState([]);
@@ -282,7 +335,6 @@ export function AdminApp() {
   const [boostTrialLoading, setBoostTrialLoading] = useState(false);
   const [boostTrialSaving, setBoostTrialSaving] = useState(false);
   const [adminStatus, setAdminStatus] = useState(null); // { platformRole, isPlatformAdmin, isPlatformOwner }
-  const [unlockInput, setUnlockInput] = useState("");
   const [officialStatus, setOfficialStatus] = useState(null);
   const [officialMessage, setOfficialMessage] = useState("");
   const [officialRecipientMode, setOfficialRecipientMode] = useState("selected");
@@ -304,6 +356,7 @@ export function AdminApp() {
   const [blogLoading, setBlogLoading] = useState(false);
   const [blogBusy, setBlogBusy] = useState(false);
   const [blogForm, setBlogForm] = useState(EMPTY_BLOG_DRAFT);
+  const panelPassword = "";
 
   function showStatus(message, type = "info") {
     setStatus(message);
@@ -311,9 +364,14 @@ export function AdminApp() {
   }
 
   useEffect(() => {
-    if (panelPassword) sessionStorage.setItem("opencom_admin_panel_password", panelPassword);
-    else sessionStorage.removeItem("opencom_admin_panel_password");
-  }, [panelPassword]);
+    if (token) localStorage.setItem(PANEL_ACCESS_TOKEN_KEY, token);
+    else localStorage.removeItem(PANEL_ACCESS_TOKEN_KEY);
+  }, [token]);
+
+  useEffect(() => {
+    if (refreshToken) localStorage.setItem(PANEL_REFRESH_TOKEN_KEY, refreshToken);
+    else localStorage.removeItem(PANEL_REFRESH_TOKEN_KEY);
+  }, [refreshToken]);
 
   useEffect(() => {
     if (typeof document === "undefined") return undefined;
@@ -324,76 +382,51 @@ export function AdminApp() {
   }, []);
 
   useEffect(() => {
-    if (!token) return;
+    if (!token) {
+      setAdminStatus(null);
+      return;
+    }
     loadAdminStatus();
-  }, [token, panelPassword]);
+  }, [token]);
 
-  useEffect(() => {
-    if (!token || panelPassword || autoUnlockDisabled) return;
-    let cancelled = false;
-    setAutoUnlockChecking(true);
-    (async () => {
-      try {
-        const data = await api("/v1/me/admin-status", token, "");
-        if (cancelled) return;
-        setAdminStatus(data);
-        const canAutoUnlock = data?.canAccessPanel === true;
-        setAutoPlatformUnlock(canAutoUnlock);
-        if (canAutoUnlock) showStatus("Auto-unlocked from your panel permissions.", "success");
-      } catch {
-        if (cancelled) return;
-        setAutoPlatformUnlock(false);
-      } finally {
-        if (!cancelled) setAutoUnlockChecking(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [token, panelPassword, autoUnlockDisabled]);
-
-  const isPanelUnlocked = !!panelPassword || autoPlatformUnlock;
+  const isPanelUnlocked = !!token;
   const panelPermissions = adminStatus?.permissions || [];
-  const hasPasswordAccess = !!panelPassword.trim();
   const canManageStaff =
-    hasPasswordAccess ||
     adminStatus?.isPlatformAdmin === true ||
     adminStatus?.isPlatformOwner === true;
   const canModerateUsers =
-    hasPasswordAccess ||
     adminStatus?.isPlatformAdmin === true ||
     adminStatus?.isPlatformOwner === true ||
     panelPermissions.includes("moderate_users");
   const canManageBadges =
-    hasPasswordAccess ||
     adminStatus?.isPlatformAdmin === true ||
     adminStatus?.isPlatformOwner === true ||
     panelPermissions.includes("manage_badges");
   const canManageBoosts =
-    hasPasswordAccess ||
     adminStatus?.isPlatformAdmin === true ||
     adminStatus?.isPlatformOwner === true ||
     panelPermissions.includes("manage_boosts");
   const canSendOfficialMessages =
-    hasPasswordAccess ||
     adminStatus?.isPlatformAdmin === true ||
     adminStatus?.isPlatformOwner === true ||
     panelPermissions.includes("send_official_messages");
   const canManageBlogs =
-    hasPasswordAccess ||
     adminStatus?.isPlatformAdmin === true ||
     adminStatus?.isPlatformOwner === true ||
     panelPermissions.includes("manage_blogs");
+  const canManageOperations =
+    adminStatus?.isPlatformAdmin === true ||
+    adminStatus?.isPlatformOwner === true;
 
   useEffect(() => {
     if (!isPanelUnlocked || !token) return;
     loadOverview();
-  }, [isPanelUnlocked, token, panelPassword]);
+  }, [isPanelUnlocked, token]);
 
   useEffect(() => {
     if (!isPanelUnlocked || !token || tab !== "overview") return;
     loadDashboardStats();
-  }, [isPanelUnlocked, token, panelPassword, tab]);
+  }, [isPanelUnlocked, token, tab]);
 
   useEffect(() => {
     if (!isPanelUnlocked || !token) return;
@@ -412,29 +445,206 @@ export function AdminApp() {
     if (tab === "blogs" && canManageBlogs) {
       loadBlogs();
     }
+    if (tab === "operations" && canManageOperations) {
+      loadOperationsState();
+    }
   }, [
     tab,
     token,
-    panelPassword,
     isPanelUnlocked,
     canManageStaff,
     canManageBadges,
     canManageBoosts,
     canSendOfficialMessages,
     canManageBlogs,
+    canManageOperations,
   ]);
+
+  useEffect(() => {
+    if (!isPanelUnlocked || !token || tab !== "operations" || !canManageOperations) {
+      return undefined;
+    }
+    const pollTimer = window.setInterval(() => {
+      loadOperationsState({ silent: true });
+    }, 5000);
+    return () => window.clearInterval(pollTimer);
+  }, [isPanelUnlocked, token, tab, canManageOperations]);
+
+  function clearPanelSession() {
+    setToken("");
+    setRefreshToken("");
+    setAdminStatus(null);
+    setSetupState(null);
+    setSetupTotpToken("");
+    setLoginPassword("");
+    setLoginTotpToken("");
+    setLoginRecoveryCode("");
+    setFreshRecoveryCodes([]);
+    setOperationsState({
+      runtime: null,
+      activeOperation: null,
+      history: [],
+    });
+    setOperationBusy("");
+  }
+
+  async function refreshPanelSession() {
+    if (!refreshToken) return null;
+    try {
+      const data = await panelAuthApi("/v1/panel/auth/refresh", {
+        method: "POST",
+        body: JSON.stringify({ refreshToken }),
+      });
+      if (data?.accessToken) setToken(data.accessToken);
+      if (data?.refreshToken) setRefreshToken(data.refreshToken);
+      if (data?.admin) setAdminStatus(data.admin);
+      return data;
+    } catch {
+      return null;
+    }
+  }
 
   async function loadAdminStatus() {
     try {
-      const data = await api("/v1/me/admin-status", token, panelPassword);
+      const data = await api("/v1/panel/me", token, panelPassword);
+      if (data?.canAccessPanel === false) {
+        clearPanelSession();
+        showStatus("Your admin account does not have panel permissions.", "error");
+        return;
+      }
       setAdminStatus(data);
-      if (!panelPassword) {
-        setAutoPlatformUnlock(data?.canAccessPanel === true);
+      return;
+    } catch {
+      const refreshed = await refreshPanelSession();
+      if (!refreshed?.accessToken) {
+        clearPanelSession();
+        showStatus("Sign in to access the admin panel.", "info");
+        return;
+      }
+
+      try {
+        const data =
+          refreshed.admin ||
+          (await api("/v1/panel/me", refreshed.accessToken, panelPassword));
+        if (data?.canAccessPanel === false) {
+          clearPanelSession();
+          showStatus("Your admin account does not have panel permissions.", "error");
+          return;
+        }
+        setAdminStatus(data);
+      } catch {
+        clearPanelSession();
+        showStatus("Your admin session expired. Sign in again.", "error");
+      }
+    }
+  }
+
+  async function submitPanelLogin() {
+    if (!loginEmail.trim() || !loginPassword.trim()) {
+      showStatus("Enter your admin email and password.", "info");
+      return;
+    }
+
+    setLoginBusy(true);
+    try {
+      const data = await panelAuthApi("/v1/panel/auth/login", {
+        method: "POST",
+        body: JSON.stringify({
+          email: loginEmail.trim(),
+          password: loginPassword,
+          totpToken: loginTotpToken.trim() || undefined,
+          recoveryCode: loginRecoveryCode.trim() || undefined,
+        }),
+      });
+
+      if (data?.next === "setup_2fa") {
+        setSetupState(data);
+        setSetupTotpToken("");
+        setFreshRecoveryCodes([]);
+        setLoginTotpToken("");
+        setLoginRecoveryCode("");
+        showStatus("First login detected. Configure 2FA to continue.", "info");
+        return;
+      }
+
+      if (data?.next === "complete" && data?.accessToken) {
+        setToken(data.accessToken);
+        setRefreshToken(data.refreshToken || "");
+        setAdminStatus(data.admin || null);
+        setSetupState(null);
+        setFreshRecoveryCodes([]);
+        setLoginPassword("");
+        setLoginTotpToken("");
+        setLoginRecoveryCode("");
+        showStatus("Admin login successful.", "success");
+        return;
+      }
+
+      throw new Error("Unexpected login response.");
+    } catch (error) {
+      showStatus(error.message || "Admin login failed.", "error");
+    } finally {
+      setLoginBusy(false);
+    }
+  }
+
+  async function completePanel2faSetup() {
+    if (!setupState?.setupToken) {
+      showStatus("Missing setup token. Sign in again.", "error");
+      return;
+    }
+    if (!/^\d{6}$/.test(setupTotpToken.trim())) {
+      showStatus("Enter the 6-digit code from your authenticator app.", "info");
+      return;
+    }
+
+    setSetupBusy(true);
+    try {
+      const data = await panelAuthApi("/v1/panel/auth/setup/complete", {
+        method: "POST",
+        body: JSON.stringify({
+          setupToken: setupState.setupToken,
+          totpToken: setupTotpToken.trim(),
+        }),
+      });
+
+      if (data?.next === "complete" && data?.accessToken) {
+        setToken(data.accessToken);
+        setRefreshToken(data.refreshToken || "");
+        setAdminStatus(data.admin || null);
+        setFreshRecoveryCodes(Array.isArray(data.recoveryCodes) ? data.recoveryCodes : []);
+        setSetupState(null);
+        setSetupTotpToken("");
+        setLoginPassword("");
+        setLoginTotpToken("");
+        setLoginRecoveryCode("");
+        showStatus("2FA setup complete. Save your recovery codes now.", "success");
+        return;
+      }
+
+      throw new Error("Unexpected 2FA setup response.");
+    } catch (error) {
+      showStatus(error.message || "2FA setup failed.", "error");
+    } finally {
+      setSetupBusy(false);
+    }
+  }
+
+  async function logoutPanel() {
+    const currentAccessToken = token;
+    const tokenToRevoke = refreshToken;
+    try {
+      if (currentAccessToken) {
+        await api("/v1/panel/auth/logout", currentAccessToken, panelPassword, {
+          method: "POST",
+          body: JSON.stringify({ refreshToken: tokenToRevoke || undefined }),
+        });
       }
     } catch {
-      setAdminStatus(null);
-      if (!panelPassword) setAutoPlatformUnlock(false);
+      // best effort logout
     }
+    clearPanelSession();
+    showStatus("Signed out from admin panel.", "info");
   }
 
   async function loadOverview({ showSuccess = false } = {}) {
@@ -474,6 +684,67 @@ export function AdminApp() {
       showStatus(`Dashboard refresh failed: ${e.message}`, "error");
     } finally {
       setDashboardLoading(false);
+    }
+  }
+
+  async function loadOperationsState({ silent = false } = {}) {
+    setOperationsLoading(true);
+    try {
+      const data = await api("/v1/admin/operations", token, panelPassword);
+      setOperationsState({
+        runtime: data?.runtime || null,
+        activeOperation: data?.activeOperation || null,
+        history: Array.isArray(data?.history) ? data.history : [],
+      });
+      if (!silent) {
+        showStatus("Operations status refreshed.", "success");
+      }
+    } catch (e) {
+      if (!silent) {
+        showStatus(e.message || "Failed to load operations status.", "error");
+      }
+    } finally {
+      setOperationsLoading(false);
+    }
+  }
+
+  async function triggerPanelOperation(action) {
+    const operationLabel = action === "update" ? "Update + restart" : "Restart";
+    const confirmed = window.confirm(
+      action === "update"
+        ? "Run backend migrations, then restart the tmux OpenCom session?"
+        : "Restart the tmux OpenCom session now?",
+    );
+    if (!confirmed) return;
+
+    setOperationBusy(action);
+    try {
+      const data = await api(`/v1/admin/operations/${action}`, token, panelPassword, {
+        method: "POST",
+      });
+      const operation = data?.operation || null;
+      setOperationsState((current) => ({
+        ...current,
+        runtime: data?.runtime || current.runtime,
+      }));
+      await loadOperationsState({ silent: true });
+      if (operation?.status === "success") {
+        showStatus(`${operationLabel} completed successfully.`, "success");
+      } else {
+        showStatus(
+          `${operationLabel} finished with errors (exit ${operation?.exitCode ?? "unknown"}).`,
+          "error",
+        );
+      }
+    } catch (e) {
+      if (e.message === "OPERATION_IN_PROGRESS") {
+        showStatus("Another operation is already running. Refresh in a few seconds.", "info");
+      } else {
+        showStatus(e.message || `${operationLabel} failed.`, "error");
+      }
+      await loadOperationsState({ silent: true });
+    } finally {
+      setOperationBusy("");
     }
   }
 
@@ -1190,6 +1461,7 @@ export function AdminApp() {
     canSendOfficialMessages ? { id: "official", label: "Official Messages" } : null,
     canManageBadges ? { id: "badges", label: "Badges" } : null,
     canManageBoosts ? { id: "boost", label: "Boost Grants" } : null,
+    canManageOperations ? { id: "operations", label: "Operations" } : null,
     canManageBlogs ? { id: "blogs", label: "Blogs" } : null,
   ].filter(Boolean);
 
@@ -1198,6 +1470,12 @@ export function AdminApp() {
       setTab("overview");
     }
   }, [tab, tabs]);
+
+  const operationsRuntime = operationsState?.runtime || null;
+  const activeOperation = operationsState?.activeOperation || null;
+  const operationHistory = Array.isArray(operationsState?.history)
+    ? operationsState.history
+    : [];
 
   const badgeLibrary = [
     ...BUILTIN_BADGE_DEFINITIONS,
@@ -1227,30 +1505,102 @@ export function AdminApp() {
         <div className="admin-unlock-card">
           <h1>OpenCom Control Panel</h1>
           <p className="admin-unlock-desc">
-            {autoUnlockChecking
-              ? "Checking your account for panel access..."
-              : "Enter the server-configured panel password or use an account with panel permissions."}
+            Sign in with your dedicated admin account.
           </p>
-          <input
-            type="password"
-            placeholder="Admin panel password"
-            value={unlockInput}
-            onChange={(e) => setUnlockInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key !== "Enter" || !unlockInput.trim()) return;
-              setAutoUnlockDisabled(false);
-              setPanelPassword(unlockInput.trim());
-            }}
-          />
-          <button
-            onClick={() => {
-              if (!unlockInput.trim()) return;
-              setAutoUnlockDisabled(false);
-              setPanelPassword(unlockInput.trim());
-            }}
-          >
-            Unlock
-          </button>
+
+          {!setupState ? (
+            <>
+              <label>
+                Admin email
+                <input
+                  type="email"
+                  placeholder="admin@example.com"
+                  value={loginEmail}
+                  onChange={(event) => setLoginEmail(event.target.value)}
+                  autoComplete="username"
+                />
+              </label>
+              <label>
+                Password
+                <input
+                  type="password"
+                  placeholder="Your admin password"
+                  value={loginPassword}
+                  onChange={(event) => setLoginPassword(event.target.value)}
+                  autoComplete="current-password"
+                />
+              </label>
+              <label>
+                Authenticator code
+                <input
+                  type="text"
+                  placeholder="123456"
+                  value={loginTotpToken}
+                  onChange={(event) =>
+                    setLoginTotpToken(event.target.value.replace(/\D/g, "").slice(0, 6))
+                  }
+                />
+              </label>
+              <label>
+                Recovery code (optional)
+                <input
+                  type="text"
+                  placeholder="ABCD-1234"
+                  value={loginRecoveryCode}
+                  onChange={(event) => setLoginRecoveryCode(event.target.value.toUpperCase())}
+                />
+              </label>
+              <button type="button" disabled={loginBusy} onClick={submitPanelLogin}>
+                {loginBusy ? "Signing in..." : "Sign in"}
+              </button>
+            </>
+          ) : (
+            <>
+              <p className="admin-unlock-desc">
+                First login detected. Add this account to your authenticator app,
+                then verify with a 6-digit code.
+              </p>
+              <label>
+                Manual setup key
+                <input type="text" readOnly value={setupState.totpSecret || ""} />
+              </label>
+              <label>
+                Authenticator URI
+                <textarea
+                  readOnly
+                  value={setupState.otpauthUri || ""}
+                  rows={3}
+                  className="admin-official-textarea"
+                />
+              </label>
+              <label>
+                6-digit authenticator code
+                <input
+                  type="text"
+                  placeholder="123456"
+                  value={setupTotpToken}
+                  onChange={(event) =>
+                    setSetupTotpToken(event.target.value.replace(/\D/g, "").slice(0, 6))
+                  }
+                />
+              </label>
+              <div className="admin-badge-actions">
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={() => {
+                    setSetupState(null);
+                    setSetupTotpToken("");
+                  }}
+                >
+                  Cancel
+                </button>
+                <button type="button" disabled={setupBusy} onClick={completePanel2faSetup}>
+                  {setupBusy ? "Verifying..." : "Verify and continue"}
+                </button>
+              </div>
+            </>
+          )}
           <p className="admin-status-msg">{status}</p>
         </div>
       </div>
@@ -1271,27 +1621,16 @@ export function AdminApp() {
                 {roleLabel}
               </span>
             )}
-            <a href={resolveStaticPageHref("server-admin.html")} target="_blank" rel="noopener noreferrer" className="admin-link-out">Server Admin →</a>
+            <a href={SERVER_ADMIN_URL} target="_blank" rel="noopener noreferrer" className="admin-link-out">Server Admin →</a>
             <button
               type="button"
               className="admin-lock-btn"
-              onClick={() => {
-                setPanelPassword("");
-                setAutoPlatformUnlock(false);
-                setAutoUnlockDisabled(true);
-                sessionStorage.removeItem("opencom_admin_panel_password");
-                showStatus("");
-              }}
+              onClick={logoutPanel}
             >
-              Lock panel
+              Sign out
             </button>
           </div>
         </header>
-
-        <div className="admin-token-row">
-          <label>Access token (used for API calls)</label>
-          <input type="password" placeholder="Core access token" value={token} onChange={(e) => setToken(e.target.value)} />
-        </div>
 
         <nav className="admin-tabs">
           {tabs.map((t) => (
@@ -1301,6 +1640,29 @@ export function AdminApp() {
       </div>
 
       <div className="admin-content">
+        {freshRecoveryCodes.length > 0 && (
+          <section className="admin-section">
+            <div className="admin-card admin-card-accent">
+              <h3>Save Your Recovery Codes</h3>
+              <p className="admin-hint">
+                These are shown once. Store them safely before closing this panel.
+              </p>
+              <code
+                style={{
+                  display: "block",
+                  whiteSpace: "pre-wrap",
+                  marginBottom: "var(--space-sm)",
+                }}
+              >
+                {freshRecoveryCodes.map((code) => `${code}\n`).join("")}
+              </code>
+              <button type="button" onClick={() => setFreshRecoveryCodes([])}>
+                I saved these codes
+              </button>
+            </div>
+          </section>
+        )}
+
         {tab === "overview" && (
           <AdminOverviewDashboard
             adminOverview={adminOverview}
@@ -2130,6 +2492,164 @@ export function AdminApp() {
                           <td>{grant.expires_at || "Never"}</td>
                           <td>{grant.revoked_at || "Active"}</td>
                           <td>{grant.reason || "—"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </section>
+        )}
+
+        {tab === "operations" && (
+          <section className="admin-section">
+            <div className="admin-section-topline">
+              <div>
+                <h2>Runtime operations</h2>
+                <p className="admin-hint">
+                  Control the OpenCom tmux runtime from here. Restart sends Ctrl+C to
+                  the `OpenCom` session, then runs <code>./start.sh all</code>. Update
+                  runs backend migrations first, then restarts.
+                </p>
+              </div>
+              <div className="admin-badge-actions">
+                <button type="button" className="btn-sm" onClick={() => loadOperationsState()} disabled={operationsLoading}>
+                  {operationsLoading ? "Refreshing…" : "Refresh status"}
+                </button>
+              </div>
+            </div>
+
+            <div className="admin-cards admin-cards-compact">
+              <div className="admin-card">
+                <h3>tmux runtime</h3>
+                <p>
+                  Session <strong>{operationsRuntime?.sessionName || "OpenCom"}</strong>
+                  {operationsRuntime?.windowName ? (
+                    <> (active window <strong>{operationsRuntime.windowName}</strong>)</>
+                  ) : null}
+                </p>
+                <div className="admin-op-chip-row">
+                  <span className={`admin-op-chip ${operationsRuntime?.tmuxInstalled ? "success" : "danger"}`}>
+                    tmux {operationsRuntime?.tmuxInstalled ? "installed" : "missing"}
+                  </span>
+                  <span className={`admin-op-chip ${operationsRuntime?.sessionExists ? "success" : "danger"}`}>
+                    session {operationsRuntime?.sessionExists ? "found" : "missing"}
+                  </span>
+                  <span className={`admin-op-chip ${operationsRuntime?.windowExists ? "success" : "danger"}`}>
+                    window {operationsRuntime?.windowExists ? "found" : "missing"}
+                  </span>
+                </div>
+                {operationsRuntime?.statusError && (
+                  <p className="text-dim">Status error: {operationsRuntime.statusError}</p>
+                )}
+              </div>
+
+              <div className="admin-card">
+                <h3>Current operation</h3>
+                {activeOperation ? (
+                  <>
+                    <p>
+                      <strong>{activeOperation.action === "update" ? "Update + restart" : "Restart"}</strong>
+                    </p>
+                    <p className="text-dim">Started {formatAdminDateTime(activeOperation.startedAt)}</p>
+                    <p className="text-dim">Triggered by {activeOperation.actorUsername}</p>
+                  </>
+                ) : (
+                  <p className="text-dim">No active operation.</p>
+                )}
+              </div>
+
+              <div className="admin-card">
+                <h3>Boost snapshot</h3>
+                <p>
+                  <strong>{dashboardStats?.database?.boostBadgeMembers ?? adminOverview?.boostBadgeMembers ?? 0}</strong>{" "}
+                  users with boost badge
+                </p>
+                <p className="text-dim">
+                  Stripe active: {dashboardStats?.database?.boostStripeMembers ?? adminOverview?.boostStripeMembers ?? 0}
+                  {" "}· Manual grants: {dashboardStats?.database?.boostGrantsActive ?? adminOverview?.activeBoostGrants ?? 0}
+                </p>
+              </div>
+            </div>
+
+            <div className="admin-operations-grid">
+              <div className="admin-card">
+                <h3>Actions</h3>
+                <p className="text-dim">
+                  Use these controls for safe operational flows from the panel.
+                </p>
+                <div className="admin-badge-actions admin-operations-actions">
+                  <button
+                    type="button"
+                    onClick={() => triggerPanelOperation("restart")}
+                    disabled={!!operationBusy || !!activeOperation}
+                  >
+                    {operationBusy === "restart" ? "Restarting…" : "Restart OpenCom stack"}
+                  </button>
+                  <button
+                    type="button"
+                    className="danger"
+                    onClick={() => triggerPanelOperation("update")}
+                    disabled={!!operationBusy || !!activeOperation}
+                  >
+                    {operationBusy === "update" ? "Updating…" : "Run migrations + restart"}
+                  </button>
+                </div>
+                <p className="admin-note">
+                  Restart action: <code>tmux send-keys C-c</code> (3x) then <code>./start.sh all</code>.
+                </p>
+                <p className="admin-note">
+                  Update action: <code>npm run migrate:core</code>, <code>npm run migrate:node</code>, then restart.
+                </p>
+              </div>
+
+              <div className="admin-card">
+                <h3>Latest operation log</h3>
+                {operationHistory.length === 0 ? (
+                  <p className="text-dim">No operations have run in this panel session yet.</p>
+                ) : (
+                  <>
+                    <p className="text-dim">
+                      {operationHistory[0].action === "update" ? "Update + restart" : "Restart"} ·{" "}
+                      {operationHistory[0].status} · {formatAdminDurationMs(operationHistory[0].durationMs)}
+                    </p>
+                    <pre className="admin-op-log">
+                      {(operationHistory[0].output || []).join("\n")}
+                    </pre>
+                  </>
+                )}
+              </div>
+            </div>
+
+            <div className="admin-card">
+              <h3>Recent operations</h3>
+              {operationHistory.length === 0 ? (
+                <p className="text-dim">No operation history yet.</p>
+              ) : (
+                <div className="admin-users-table-wrap">
+                  <table className="admin-table">
+                    <thead>
+                      <tr>
+                        <th>Action</th>
+                        <th>Status</th>
+                        <th>Duration</th>
+                        <th>Started</th>
+                        <th>Finished</th>
+                        <th>Actor</th>
+                        <th>Exit</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {operationHistory.map((operation) => (
+                        <tr key={operation.id}>
+                          <td>{operation.action === "update" ? "Update + restart" : "Restart"}</td>
+                          <td>{operation.status}</td>
+                          <td>{formatAdminDurationMs(operation.durationMs)}</td>
+                          <td>{formatAdminDateTime(operation.startedAt)}</td>
+                          <td>{formatAdminDateTime(operation.finishedAt)}</td>
+                          <td>{operation.actorUsername || operation.actorId}</td>
+                          <td>{operation.exitCode}</td>
                         </tr>
                       ))}
                     </tbody>

@@ -26,6 +26,12 @@ export const DOWNLOAD_TARGETS = [
     family: "desktop",
   },
   {
+    href: `${DOWNLOAD_BASE_PATH}/OpenCom.rpm`,
+    label: "Linux (.rpm)",
+    platform: "linux",
+    family: "desktop",
+  },
+  {
     href: `${DOWNLOAD_BASE_PATH}/OpenCom.snap`,
     label: "Linux (.snap)",
     platform: "linux",
@@ -76,6 +82,7 @@ export function getPreferredDownloadTarget(targets = DOWNLOAD_TARGETS) {
   }
   return (
     targets.find((target) => target.platform === "linux" && target.label.toLowerCase().includes(".deb")) ||
+    targets.find((target) => target.platform === "linux" && target.label.toLowerCase().includes(".rpm")) ||
     targets.find((target) => target.platform === "linux") ||
     targets[0] ||
     null

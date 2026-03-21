@@ -6,7 +6,8 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc -p tsconfig.json",
     "migrate": "tsx src/migrate.ts",
-    "email:test": "tsx src/scripts/testEmail.ts"
+    "email:test": "tsx src/scripts/testEmail.ts",
+    "admin:create": "tsx src/scripts/createPanelAdmin.ts"
   },
   "dependencies": {
     "@fastify/cors": "^10.0.0",

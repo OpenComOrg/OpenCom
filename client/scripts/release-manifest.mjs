@@ -17,6 +17,7 @@ export const linuxReleaseChecksumsPath = path.join(distDir, "linux-release.sha25
 const LINUX_ARTIFACTS = [
   { kind: "tarball", fileName: "OpenCom.tar.gz", required: true },
   { kind: "deb", fileName: "OpenCom.deb", required: false },
+  { kind: "rpm", fileName: "OpenCom.rpm", required: false },
   { kind: "snap", fileName: "OpenCom.snap", required: false }
 ];
 

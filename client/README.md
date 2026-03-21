@@ -100,6 +100,7 @@ npm run build:stage:win
 These commands build and then copy installer artifacts into `frontend/`:
 
 - `frontend/OpenCom.deb`
+- `frontend/OpenCom.rpm`
 - `frontend/OpenCom.tar.gz`
 - `frontend/OpenCom.exe` (Windows NSIS installer)
 

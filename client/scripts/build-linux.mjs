@@ -43,6 +43,7 @@ async function fileExists(target) {
 
 async function main() {
   const requireDeb = process.env.OPENCOM_REQUIRE_DEB === "1";
+  const requireRpm = process.env.OPENCOM_REQUIRE_RPM === "1";
   const requireSnap = process.env.OPENCOM_REQUIRE_SNAP === "1";
   const tarballPath = path.join(clientDir, "dist", "OpenCom.tar.gz");
   const builderCacheDir = process.env.ELECTRON_BUILDER_CACHE || path.join(clientDir, ".cache", "electron-builder");
@@ -60,6 +61,13 @@ async function main() {
   } catch (error) {
     if (requireDeb) throw error;
     console.warn(`Deb packaging failed (optional): ${error?.message || error}`);
+  }
+
+  try {
+    await run(electronBuilderCmd, ["--linux", "rpm"]);
+  } catch (error) {
+    if (requireRpm) throw error;
+    console.warn(`RPM packaging failed (optional): ${error?.message || error}`);
   }
 
   try {

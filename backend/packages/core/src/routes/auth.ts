@@ -224,16 +224,6 @@ export async function authRoutes(app: FastifyInstance) {
       }
     }
 
-    // Bootstrap platform founder on first registration if unset
-    await q(`INSERT INTO platform_config (id, founder_user_id) VALUES (1, NULL) ON DUPLICATE KEY UPDATE id=id`);
-    const founder = await q<{ founder_user_id: string | null }>(`SELECT founder_user_id FROM platform_config WHERE id=1`);
-    if (!founder.length || !founder[0].founder_user_id) {
-      await q(`UPDATE platform_config SET founder_user_id=:id WHERE id=1`, { id });
-      await q(`INSERT INTO platform_admins (user_id,added_by) VALUES (:id,:id) ON DUPLICATE KEY UPDATE user_id=user_id`, { id });
-      await q(`INSERT INTO user_badges (user_id,badge) VALUES (:id,'PLATFORM_FOUNDER') ON DUPLICATE KEY UPDATE user_id=user_id`, { id });
-      await q(`INSERT INTO user_badges (user_id,badge) VALUES (:id,'PLATFORM_ADMIN') ON DUPLICATE KEY UPDATE user_id=user_id`, { id });
-    }
-
     try {
       const newUserWelcomeMessage = await getNewUserOfficialMessageConfig();
       if (newUserWelcomeMessage.enabled && newUserWelcomeMessage.content.trim()) {

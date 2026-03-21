@@ -13,19 +13,23 @@ import {
 } from "../officialMessages.js";
 import {
   PLATFORM_PANEL_PERMISSIONS,
-  getLegacyPlatformRole,
-  getPlatformAccess,
-  getPlatformStaffAssignment,
-  listPlatformStaffAssignments,
-  requestHasPanelPassword,
+  getPanelStaffAssignment,
+  listPanelStaffAssignments,
   requirePanelAccess,
   requirePanelPermission,
   serializePlatformPermissions,
+} from "../panelAccess.js";
+import {
+  getPlatformAccess as getLegacyPlatformAccess,
+  requestHasPanelPassword,
 } from "../platformStaff.js";
 import { getAdminStatsSnapshot } from "../adminStats.js";
 import { saveProfileImageFromBuffer } from "../storage.js";
 import { sendAccountBanEmail } from "../mail.js";
+import { spawn } from "node:child_process";
 import path from "node:path";
+import { createInterface } from "node:readline";
+import { fileURLToPath } from "node:url";
 
 const PLATFORM_ADMIN_BADGE = "PLATFORM_ADMIN";
 const PLATFORM_FOUNDER_BADGE = "PLATFORM_FOUNDER";
@@ -198,6 +202,16 @@ function uniqueTrimmedStrings(values: string[] | undefined) {
   );
 }
 
+function getActorAdminId(req: any) {
+  return String(req.panelAdmin?.id || req.user?.sub || "").trim();
+}
+
+async function requirePanelOwner(req: any) {
+  const access = await requirePanelAccess(req);
+  if (!access.isPlatformOwner) throw new Error("ONLY_OWNER");
+  return access;
+}
+
 const PANEL_PERMISSION_ENUM = z.enum(PLATFORM_PANEL_PERMISSIONS);
 
 const staffAssignmentBodySchema = z.object({
@@ -227,8 +241,216 @@ const badgeDefinitionBodySchema = z.object({
   fgColor: nullableTrimmedString(40).optional(),
 });
 
+type PanelOperationAction = "restart" | "update";
+type PanelOperationStatus = "success" | "failed";
+type PanelOperationRecord = {
+  id: string;
+  action: PanelOperationAction;
+  status: PanelOperationStatus;
+  startedAt: string;
+  finishedAt: string;
+  durationMs: number;
+  actorId: string;
+  actorUsername: string;
+  exitCode: number;
+  output: string[];
+};
+type ActivePanelOperation = {
+  id: string;
+  action: PanelOperationAction;
+  startedAt: string;
+  actorId: string;
+  actorUsername: string;
+};
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const REPO_ROOT = path.resolve(__dirname, "../../../../../");
+const PANEL_RUNTIME_CONTROL_SCRIPT = path.resolve(
+  REPO_ROOT,
+  "scripts/ops/panel-runtime-control.sh",
+);
+const PANEL_TMUX_SESSION = "OpenCom";
+const PANEL_START_COMMAND = "./start.sh all";
+const PANEL_OPERATION_LOG_LINE_LIMIT = 360;
+const PANEL_OPERATION_HISTORY_LIMIT = 20;
+
+let activePanelOperation: ActivePanelOperation | null = null;
+const panelOperationHistory: PanelOperationRecord[] = [];
+
+async function requirePanelOperationsAccess(req: any) {
+  const access = await requirePanelAccess(req);
+  if (!access.isPlatformAdmin && !access.isPlatformOwner) {
+    throw new Error("FORBIDDEN");
+  }
+  return access;
+}
+
+async function countRowsSafe(
+  sql: string,
+  params: Record<string, any> = {},
+  options: { fallbackOnMissingTable?: boolean } = {},
+) {
+  try {
+    const rows = await q<{ count: number }>(sql, params);
+    return Number(rows[0]?.count || 0);
+  } catch (error: any) {
+    if (
+      options.fallbackOnMissingTable &&
+      (error?.code === "ER_NO_SUCH_TABLE" || error?.errno === 1146)
+    ) {
+      return 0;
+    }
+    throw error;
+  }
+}
+
+function pushPanelOperationLog(logLines: string[], line: string) {
+  const trimmed = String(line || "").trimEnd();
+  if (!trimmed) return;
+  logLines.push(trimmed);
+  if (logLines.length > PANEL_OPERATION_LOG_LINE_LIMIT) {
+    logLines.shift();
+  }
+}
+
+function addPanelOperationHistory(record: PanelOperationRecord) {
+  panelOperationHistory.unshift(record);
+  if (panelOperationHistory.length > PANEL_OPERATION_HISTORY_LIMIT) {
+    panelOperationHistory.length = PANEL_OPERATION_HISTORY_LIMIT;
+  }
+}
+
+async function runCommandCapture(command: string, args: string[]) {
+  return new Promise<{ exitCode: number; stdout: string; stderr: string }>(
+    (resolve) => {
+      const child = spawn(command, args, {
+        cwd: REPO_ROOT,
+        env: process.env,
+      });
+
+      let stdout = "";
+      let stderr = "";
+      child.stdout?.on("data", (chunk) => {
+        stdout += String(chunk || "");
+      });
+      child.stderr?.on("data", (chunk) => {
+        stderr += String(chunk || "");
+      });
+      child.on("error", (error) => {
+        stderr += error.message;
+      });
+      child.on("close", (code) => {
+        resolve({
+          exitCode: typeof code === "number" ? code : -1,
+          stdout,
+          stderr,
+        });
+      });
+    },
+  );
+}
+
+async function getPanelRuntimeStatus() {
+  const result = await runCommandCapture("bash", [
+    PANEL_RUNTIME_CONTROL_SCRIPT,
+    "status",
+  ]);
+
+  const fallback = {
+    tmuxInstalled: false,
+    sessionName: PANEL_TMUX_SESSION,
+    windowName: "",
+    sessionExists: false,
+    windowExists: false,
+    paneTarget: PANEL_TMUX_SESSION,
+    startCommand: PANEL_START_COMMAND,
+    statusError:
+      result.exitCode === 0 ? null : `STATUS_EXIT_${result.exitCode}`,
+  };
+
+  if (result.exitCode !== 0) return fallback;
+
+  try {
+    const parsed = JSON.parse(result.stdout);
+    return {
+      ...fallback,
+      ...parsed,
+      statusError: null,
+    };
+  } catch {
+    return {
+      ...fallback,
+      statusError: "STATUS_PARSE_FAILED",
+    };
+  }
+}
+
+async function runPanelOperation(action: PanelOperationAction) {
+  const logLines: string[] = [];
+  const scriptAction = action === "update" ? "update-and-restart" : "restart";
+
+  const start = Date.now();
+  const startedAt = new Date(start).toISOString();
+  pushPanelOperationLog(
+    logLines,
+    `[info] Starting ${action === "update" ? "update + restart" : "restart"} flow`,
+  );
+
+  const exitCode = await new Promise<number>((resolve) => {
+    const child = spawn("bash", [PANEL_RUNTIME_CONTROL_SCRIPT, scriptAction], {
+      cwd: REPO_ROOT,
+      env: {
+        ...process.env,
+        OPENCOM_TMUX_SESSION: PANEL_TMUX_SESSION,
+        OPENCOM_START_COMMAND: PANEL_START_COMMAND,
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    const attachReader = (
+      stream: NodeJS.ReadableStream | null,
+      prefix: string,
+    ) => {
+      if (!stream) return;
+      const reader = createInterface({ input: stream });
+      reader.on("line", (line) => {
+        pushPanelOperationLog(logLines, `${prefix} ${line}`);
+      });
+    };
+
+    attachReader(child.stdout, "[out]");
+    attachReader(child.stderr, "[err]");
+
+    child.on("error", (error) => {
+      pushPanelOperationLog(logLines, `[err] ${error.message}`);
+      resolve(-1);
+    });
+    child.on("close", (code) => {
+      resolve(typeof code === "number" ? code : -1);
+    });
+  });
+
+  const finishedAt = new Date().toISOString();
+  const durationMs = Math.max(0, Date.now() - start);
+  pushPanelOperationLog(
+    logLines,
+    exitCode === 0
+      ? "[info] Operation completed successfully."
+      : `[err] Operation failed with exit code ${exitCode}.`,
+  );
+
+  return {
+    startedAt,
+    finishedAt,
+    durationMs,
+    exitCode,
+    output: logLines,
+  };
+}
+
 export async function adminRoutes(app: FastifyInstance, broadcastToUser?: BroadcastToUser) {
-  app.get("/v1/admin/overview", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
+  app.get("/v1/admin/overview", { preHandler: [app.authenticatePanelAdmin] } as any, async (req: any, rep) => {
     try {
       await requirePanelAccess(req);
     } catch {
@@ -236,47 +458,103 @@ export async function adminRoutes(app: FastifyInstance, broadcastToUser?: Broadc
     }
 
     const founder = await q<any>(
-      `SELECT u.id,u.username,u.email
-       FROM platform_config pc
-       LEFT JOIN users u ON u.id=pc.founder_user_id
-       WHERE pc.id=1`
+      `SELECT id,username,email,created_at
+       FROM panel_admin_users
+       WHERE role='owner'
+         AND disabled_at IS NULL
+       ORDER BY created_at ASC
+       LIMIT 1`
     );
 
     const admins = await q<any>(
-      `SELECT u.id,u.username,u.email,pa.created_at
-       FROM platform_admins pa
-       JOIN users u ON u.id=pa.user_id
-       ORDER BY pa.created_at DESC`
+      `SELECT id,username,email,role,created_at
+       FROM panel_admin_users
+       WHERE disabled_at IS NULL
+       ORDER BY
+         CASE role
+           WHEN 'owner' THEN 0
+           WHEN 'admin' THEN 1
+           ELSE 2
+         END,
+         created_at ASC`
     );
 
-    const activeBoostGrants = await q<{ count: number }>(
-      `SELECT COUNT(*) AS count
-       FROM admin_boost_grants
-       WHERE revoked_at IS NULL
-         AND (expires_at IS NULL OR expires_at > NOW())`
-    );
-
-    const staffAssignments = await q<{ count: number }>(
-      `SELECT COUNT(*) AS count FROM platform_staff_assignments`
-    );
-
-    const publishedBlogs = await q<{ count: number }>(
-      `SELECT COUNT(*) AS count
-       FROM blog_posts
-       WHERE status='published'
-         AND published_at IS NOT NULL`
-    );
+    const [
+      activeBoostGrants,
+      staffAssignments,
+      publishedBlogs,
+      boostBadgeMembers,
+      boostStripeMembers,
+      badgeDefinitions,
+      supportTicketsTotal,
+      supportTicketsOpen,
+    ] = await Promise.all([
+      countRowsSafe(
+        `SELECT COUNT(*) AS count
+         FROM admin_boost_grants
+         WHERE revoked_at IS NULL
+           AND (expires_at IS NULL OR expires_at > NOW())`,
+        {},
+        { fallbackOnMissingTable: true },
+      ),
+      countRowsSafe(
+        `SELECT COUNT(*) AS count
+         FROM panel_admin_users
+         WHERE role='staff'
+           AND disabled_at IS NULL`,
+      ),
+      countRowsSafe(
+        `SELECT COUNT(*) AS count
+         FROM blog_posts
+         WHERE status='published'
+           AND published_at IS NOT NULL`,
+        {},
+        { fallbackOnMissingTable: true },
+      ),
+      countRowsSafe(
+        `SELECT COUNT(*) AS count
+         FROM user_badges
+         WHERE badge='boost'`,
+        {},
+        { fallbackOnMissingTable: true },
+      ),
+      countRowsSafe(
+        `SELECT COUNT(DISTINCT user_id) AS count
+         FROM user_subscriptions
+         WHERE status IN ('active','trialing','past_due')`,
+        {},
+        { fallbackOnMissingTable: true },
+      ),
+      countRowsSafe(`SELECT COUNT(*) AS count FROM badge_definitions`, {}, {
+        fallbackOnMissingTable: true,
+      }),
+      countRowsSafe(`SELECT COUNT(*) AS count FROM support_tickets`, {}, {
+        fallbackOnMissingTable: true,
+      }),
+      countRowsSafe(
+        `SELECT COUNT(*) AS count
+         FROM support_tickets
+         WHERE status IN ('open','waiting_on_staff','waiting_on_user')`,
+        {},
+        { fallbackOnMissingTable: true },
+      ),
+    ]);
 
     return {
       founder: founder[0]?.id ? founder[0] : null,
       admins,
-      activeBoostGrants: Number(activeBoostGrants[0]?.count || 0),
-      staffAssignmentsCount: Number(staffAssignments[0]?.count || 0),
-      publishedBlogsCount: Number(publishedBlogs[0]?.count || 0)
+      activeBoostGrants,
+      staffAssignmentsCount: staffAssignments,
+      publishedBlogsCount: publishedBlogs,
+      boostBadgeMembers,
+      boostStripeMembers,
+      badgeDefinitionsCount: badgeDefinitions,
+      supportTicketsTotal,
+      supportTicketsOpen,
     };
   });
 
-  app.get("/v1/admin/stats", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
+  app.get("/v1/admin/stats", { preHandler: [app.authenticatePanelAdmin] } as any, async (req: any, rep) => {
     try {
       await requirePanelAccess(req);
     } catch {
@@ -286,7 +564,124 @@ export async function adminRoutes(app: FastifyInstance, broadcastToUser?: Broadc
     return getAdminStatsSnapshot();
   });
 
-  app.get("/v1/admin/users", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
+  app.get("/v1/admin/operations", { preHandler: [app.authenticatePanelAdmin] } as any, async (req: any, rep) => {
+    try {
+      await requirePanelOperationsAccess(req);
+    } catch {
+      return rep.code(403).send({ error: "FORBIDDEN" });
+    }
+
+    const runtime = await getPanelRuntimeStatus();
+    return {
+      runtime,
+      activeOperation: activePanelOperation,
+      history: panelOperationHistory,
+    };
+  });
+
+  app.post("/v1/admin/operations/restart", { preHandler: [app.authenticatePanelAdmin] } as any, async (req: any, rep) => {
+    try {
+      await requirePanelOperationsAccess(req);
+    } catch {
+      return rep.code(403).send({ error: "FORBIDDEN" });
+    }
+
+    if (activePanelOperation) {
+      return rep.code(409).send({
+        error: "OPERATION_IN_PROGRESS",
+        activeOperation: activePanelOperation,
+      });
+    }
+
+    const actorId = getActorAdminId(req);
+    const actorUsername = String(req.panelAdmin?.username || "unknown");
+    const operationId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    activePanelOperation = {
+      id: operationId,
+      action: "restart",
+      startedAt: new Date().toISOString(),
+      actorId,
+      actorUsername,
+    };
+
+    try {
+      const result = await runPanelOperation("restart");
+      const record: PanelOperationRecord = {
+        id: operationId,
+        action: "restart",
+        status: result.exitCode === 0 ? "success" : "failed",
+        startedAt: result.startedAt,
+        finishedAt: result.finishedAt,
+        durationMs: result.durationMs,
+        actorId,
+        actorUsername,
+        exitCode: result.exitCode,
+        output: result.output,
+      };
+      addPanelOperationHistory(record);
+      const runtime = await getPanelRuntimeStatus();
+      return rep.code(result.exitCode === 0 ? 200 : 500).send({
+        operation: record,
+        runtime,
+      });
+    } finally {
+      activePanelOperation = null;
+    }
+  });
+
+  app.post("/v1/admin/operations/update", { preHandler: [app.authenticatePanelAdmin] } as any, async (req: any, rep) => {
+    try {
+      await requirePanelOperationsAccess(req);
+    } catch {
+      return rep.code(403).send({ error: "FORBIDDEN" });
+    }
+
+    if (activePanelOperation) {
+      return rep.code(409).send({
+        error: "OPERATION_IN_PROGRESS",
+        activeOperation: activePanelOperation,
+      });
+    }
+
+    const actorId = getActorAdminId(req);
+    const actorUsername = String(req.panelAdmin?.username || "unknown");
+    const operationId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    activePanelOperation = {
+      id: operationId,
+      action: "update",
+      startedAt: new Date().toISOString(),
+      actorId,
+      actorUsername,
+    };
+
+    try {
+      const result = await runPanelOperation("update");
+      const record: PanelOperationRecord = {
+        id: operationId,
+        action: "update",
+        status: result.exitCode === 0 ? "success" : "failed",
+        startedAt: result.startedAt,
+        finishedAt: result.finishedAt,
+        durationMs: result.durationMs,
+        actorId,
+        actorUsername,
+        exitCode: result.exitCode,
+        output: result.output,
+      };
+      addPanelOperationHistory(record);
+      const runtime = await getPanelRuntimeStatus();
+      return rep.code(result.exitCode === 0 ? 200 : 500).send({
+        operation: record,
+        runtime,
+      });
+    } finally {
+      activePanelOperation = null;
+    }
+  });
+
+  app.get("/v1/admin/users", { preHandler: [app.authenticatePanelAdmin] } as any, async (req: any, rep) => {
     try {
       await requirePanelAccess(req);
     } catch {
@@ -308,7 +703,7 @@ export async function adminRoutes(app: FastifyInstance, broadcastToUser?: Broadc
     return { users };
   });
 
-  app.get("/v1/admin/badge-definitions", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
+  app.get("/v1/admin/badge-definitions", { preHandler: [app.authenticatePanelAdmin] } as any, async (req: any, rep) => {
     try {
       await requirePanelPermission(req, "manage_badges");
     } catch {
@@ -327,14 +722,14 @@ export async function adminRoutes(app: FastifyInstance, broadcastToUser?: Broadc
     };
   });
 
-  app.post("/v1/admin/badge-definitions/upload", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
+  app.post("/v1/admin/badge-definitions/upload", { preHandler: [app.authenticatePanelAdmin] } as any, async (req: any, rep) => {
     try {
       await requirePanelPermission(req, "manage_badges");
     } catch {
       return rep.code(403).send({ error: "FORBIDDEN" });
     }
 
-    const actorId = req.user.sub as string;
+    const actorId = getActorAdminId(req);
     const data = await req.file();
     if (!data) return rep.code(400).send({ error: "MISSING_FILE" });
 
@@ -352,14 +747,14 @@ export async function adminRoutes(app: FastifyInstance, broadcastToUser?: Broadc
     };
   });
 
-  app.put("/v1/admin/badge-definitions/:badgeId", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
+  app.put("/v1/admin/badge-definitions/:badgeId", { preHandler: [app.authenticatePanelAdmin] } as any, async (req: any, rep) => {
     try {
       await requirePanelPermission(req, "manage_badges");
     } catch {
       return rep.code(403).send({ error: "FORBIDDEN" });
     }
 
-    const actorId = req.user.sub as string;
+    const actorId = getActorAdminId(req);
     const { badgeId } = z.object({ badgeId: badgeIdSchema }).parse(req.params);
     if (RESERVED_BADGE_IDS.has(badgeId)) {
       return rep.code(400).send({ error: "BADGE_ID_RESERVED" });
@@ -411,7 +806,7 @@ export async function adminRoutes(app: FastifyInstance, broadcastToUser?: Broadc
     };
   });
 
-  app.delete("/v1/admin/badge-definitions/:badgeId", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
+  app.delete("/v1/admin/badge-definitions/:badgeId", { preHandler: [app.authenticatePanelAdmin] } as any, async (req: any, rep) => {
     try {
       await requirePanelPermission(req, "manage_badges");
     } catch {
@@ -427,7 +822,7 @@ export async function adminRoutes(app: FastifyInstance, broadcastToUser?: Broadc
     return { ok: true };
   });
 
-  app.get("/v1/admin/users/:userId/detail", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
+  app.get("/v1/admin/users/:userId/detail", { preHandler: [app.authenticatePanelAdmin] } as any, async (req: any, rep) => {
     try {
       await requirePanelAccess(req);
     } catch {
@@ -483,10 +878,12 @@ export async function adminRoutes(app: FastifyInstance, broadcastToUser?: Broadc
     };
   });
 
-  app.post("/v1/admin/users/:userId/platform-admin", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
-    const actorId = req.user.sub as string;
-    const actorRole = await getLegacyPlatformRole(actorId);
-    if (actorRole !== "owner") return rep.code(403).send({ error: "ONLY_OWNER" });
+  app.post("/v1/admin/users/:userId/platform-admin", { preHandler: [app.authenticatePanelAdmin] } as any, async (req: any, rep) => {
+    try {
+      await requirePanelOwner(req);
+    } catch {
+      return rep.code(403).send({ error: "ONLY_OWNER" });
+    }
 
     const { userId } = z.object({ userId: z.string().min(3) }).parse(req.params);
     const { enabled } = parseBody(z.object({ enabled: z.boolean() }), req.body);
@@ -502,7 +899,7 @@ export async function adminRoutes(app: FastifyInstance, broadcastToUser?: Broadc
         `INSERT INTO platform_admins (user_id,added_by)
          VALUES (:userId,:actorId)
          ON DUPLICATE KEY UPDATE user_id=user_id`,
-        { userId, actorId }
+        { userId, actorId: userId }
       );
       await setBadge(userId, PLATFORM_ADMIN_BADGE, true);
     } else {
@@ -513,10 +910,12 @@ export async function adminRoutes(app: FastifyInstance, broadcastToUser?: Broadc
     return { ok: true };
   });
 
-  app.post("/v1/admin/founder", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
-    const actorId = req.user.sub as string;
-    const actorRole = await getLegacyPlatformRole(actorId);
-    if (actorRole !== "owner") return rep.code(403).send({ error: "ONLY_OWNER" });
+  app.post("/v1/admin/founder", { preHandler: [app.authenticatePanelAdmin] } as any, async (req: any, rep) => {
+    try {
+      await requirePanelOwner(req);
+    } catch {
+      return rep.code(403).send({ error: "ONLY_OWNER" });
+    }
 
     const { userId } = parseBody(z.object({ userId: z.string().min(3) }), req.body);
 
@@ -546,34 +945,37 @@ export async function adminRoutes(app: FastifyInstance, broadcastToUser?: Broadc
       `INSERT INTO platform_admins (user_id,added_by)
        VALUES (:userId,:actorId)
        ON DUPLICATE KEY UPDATE user_id=user_id`,
-      { userId, actorId }
+      { userId, actorId: userId }
     );
 
     return { ok: true };
   });
 
-  app.post("/v1/admin/users/:userId/badges", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
+  app.post("/v1/admin/users/:userId/badges", { preHandler: [app.authenticatePanelAdmin] } as any, async (req: any, rep) => {
     try {
       await requirePanelPermission(req, "manage_badges");
     } catch {
       return rep.code(403).send({ error: "FORBIDDEN" });
     }
 
-    const actorId = req.user.sub as string;
+    const actorId = getActorAdminId(req);
     const { userId } = z.object({ userId: z.string().min(3) }).parse(req.params);
     const body = parseBody(z.object({ badge: z.string().min(2).max(64), enabled: z.boolean() }), req.body);
 
     if (body.badge === PLATFORM_FOUNDER_BADGE) {
-      const role = await getLegacyPlatformRole(actorId);
-      if (role !== "owner") return rep.code(403).send({ error: "ONLY_OWNER" });
+      try {
+        await requirePanelOwner(req);
+      } catch {
+        return rep.code(403).send({ error: "ONLY_OWNER" });
+      }
     }
 
     await setBadge(userId, body.badge, body.enabled);
     return { ok: true };
   });
 
-  app.post("/v1/admin/users/:userId/account-ban", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
-    const actorId = req.user.sub as string;
+  app.post("/v1/admin/users/:userId/account-ban", { preHandler: [app.authenticatePanelAdmin] } as any, async (req: any, rep) => {
+    const actorId = getActorAdminId(req);
     try {
       await requirePanelPermission(req, "moderate_users");
     } catch {
@@ -587,8 +989,6 @@ export async function adminRoutes(app: FastifyInstance, broadcastToUser?: Broadc
       }),
       req.body
     );
-
-    if (userId === actorId) return rep.code(400).send({ error: "CANNOT_BAN_SELF" });
 
     const target = await q<{ id: string; email: string; username: string }>(
       `SELECT id,email,username FROM users WHERE id=:userId`,
@@ -635,7 +1035,7 @@ export async function adminRoutes(app: FastifyInstance, broadcastToUser?: Broadc
     return { ok: true, userId, banned: true, emailDelivery };
   });
 
-  app.delete("/v1/admin/users/:userId/account-ban", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
+  app.delete("/v1/admin/users/:userId/account-ban", { preHandler: [app.authenticatePanelAdmin] } as any, async (req: any, rep) => {
     try {
       await requirePanelPermission(req, "moderate_users");
     } catch {
@@ -647,13 +1047,14 @@ export async function adminRoutes(app: FastifyInstance, broadcastToUser?: Broadc
     return { ok: true, userId, banned: false };
   });
 
-  app.delete("/v1/admin/users/:userId/account", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
-    const actorId = req.user.sub as string;
-    const actorRole = await getLegacyPlatformRole(actorId);
-    if (actorRole !== "owner") return rep.code(403).send({ error: "ONLY_OWNER" });
+  app.delete("/v1/admin/users/:userId/account", { preHandler: [app.authenticatePanelAdmin] } as any, async (req: any, rep) => {
+    try {
+      await requirePanelOwner(req);
+    } catch {
+      return rep.code(403).send({ error: "ONLY_OWNER" });
+    }
 
     const { userId } = z.object({ userId: z.string().min(3) }).parse(req.params);
-    if (userId === actorId) return rep.code(400).send({ error: "CANNOT_DELETE_SELF" });
 
     const target = await q<{ id: string }>(`SELECT id FROM users WHERE id=:userId`, { userId });
     if (!target.length) return rep.code(404).send({ error: "USER_NOT_FOUND" });
@@ -667,7 +1068,7 @@ export async function adminRoutes(app: FastifyInstance, broadcastToUser?: Broadc
     return { ok: true, deletedUserId: userId };
   });
 
-  app.get("/v1/admin/users/:userId/boost", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
+  app.get("/v1/admin/users/:userId/boost", { preHandler: [app.authenticatePanelAdmin] } as any, async (req: any, rep) => {
     try {
       await requirePanelPermission(req, "manage_boosts");
     } catch {
@@ -708,7 +1109,7 @@ export async function adminRoutes(app: FastifyInstance, broadcastToUser?: Broadc
     };
   });
 
-  app.get("/v1/admin/boost/trial", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
+  app.get("/v1/admin/boost/trial", { preHandler: [app.authenticatePanelAdmin] } as any, async (req: any, rep) => {
     try {
       await requirePanelPermission(req, "manage_boosts");
     } catch {
@@ -724,7 +1125,7 @@ export async function adminRoutes(app: FastifyInstance, broadcastToUser?: Broadc
     };
   });
 
-  app.put("/v1/admin/boost/trial", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
+  app.put("/v1/admin/boost/trial", { preHandler: [app.authenticatePanelAdmin] } as any, async (req: any, rep) => {
     try {
       await requirePanelPermission(req, "manage_boosts");
     } catch {
@@ -764,8 +1165,8 @@ export async function adminRoutes(app: FastifyInstance, broadcastToUser?: Broadc
     };
   });
 
-  app.post("/v1/admin/users/:userId/boost/grant", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
-    const actorId = req.user.sub as string;
+  app.post("/v1/admin/users/:userId/boost/grant", { preHandler: [app.authenticatePanelAdmin] } as any, async (req: any, rep) => {
+    const actorId = getActorAdminId(req);
     try {
       await requirePanelPermission(req, "manage_boosts");
     } catch {
@@ -825,8 +1226,8 @@ export async function adminRoutes(app: FastifyInstance, broadcastToUser?: Broadc
     };
   });
 
-  app.post("/v1/admin/users/:userId/boost/revoke", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
-    const actorId = req.user.sub as string;
+  app.post("/v1/admin/users/:userId/boost/revoke", { preHandler: [app.authenticatePanelAdmin] } as any, async (req: any, rep) => {
+    const actorId = getActorAdminId(req);
     try {
       await requirePanelPermission(req, "manage_boosts");
     } catch {
@@ -850,7 +1251,7 @@ export async function adminRoutes(app: FastifyInstance, broadcastToUser?: Broadc
     };
   });
 
-  app.get("/v1/admin/official-messages/status", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
+  app.get("/v1/admin/official-messages/status", { preHandler: [app.authenticatePanelAdmin] } as any, async (req: any, rep) => {
     try {
       await requirePanelPermission(req, "send_official_messages");
     } catch {
@@ -892,7 +1293,7 @@ export async function adminRoutes(app: FastifyInstance, broadcastToUser?: Broadc
     };
   });
 
-  app.put("/v1/admin/official-messages/welcome", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
+  app.put("/v1/admin/official-messages/welcome", { preHandler: [app.authenticatePanelAdmin] } as any, async (req: any, rep) => {
     try {
       await requirePanelPermission(req, "send_official_messages");
     } catch {
@@ -915,14 +1316,14 @@ export async function adminRoutes(app: FastifyInstance, broadcastToUser?: Broadc
     };
   });
 
-  app.post("/v1/admin/official-messages/send", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
+  app.post("/v1/admin/official-messages/send", { preHandler: [app.authenticatePanelAdmin] } as any, async (req: any, rep) => {
     try {
       await requirePanelPermission(req, "send_official_messages");
     } catch {
       return rep.code(403).send({ error: "FORBIDDEN" });
     }
 
-    const actorId = req.user.sub as string;
+    const actorId = getActorAdminId(req);
     const body = parseBody(
       z.object({
         recipientMode: z.enum(["all", "selected"]),
@@ -1005,46 +1406,48 @@ export async function adminRoutes(app: FastifyInstance, broadcastToUser?: Broadc
     };
   });
 
-  app.get("/v1/admin/staff", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
-    const actorId = req.user.sub as string;
-    const access = await getPlatformAccess(actorId);
-    if (!access.isPlatformOwner && !access.isPlatformAdmin && !requestHasPanelPassword(req)) {
-      return rep.code(403).send({ error: "FORBIDDEN" });
+  app.get("/v1/admin/staff", { preHandler: [app.authenticatePanelAdmin] } as any, async (req: any, rep) => {
+    const access = await requirePanelAccess(req);
+    if (!access.isPlatformOwner && !access.isPlatformAdmin) {
+      return rep.code(403).send({ error: "INSUFFICIENT_ROLE" });
     }
 
-    const staff = await listPlatformStaffAssignments();
+    const staff = await listPanelStaffAssignments();
     return { staff };
   });
 
-  app.put("/v1/admin/staff/:userId", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
-    const actorId = req.user.sub as string;
-    const access = await getPlatformAccess(actorId);
-    if (!access.isPlatformOwner && !access.isPlatformAdmin && !requestHasPanelPassword(req)) {
-      return rep.code(403).send({ error: "FORBIDDEN" });
+  app.put("/v1/admin/staff/:userId", { preHandler: [app.authenticatePanelAdmin] } as any, async (req: any, rep) => {
+    const actorId = getActorAdminId(req);
+    const access = await requirePanelAccess(req);
+    if (!access.isPlatformOwner && !access.isPlatformAdmin) {
+      return rep.code(403).send({ error: "INSUFFICIENT_ROLE" });
     }
 
     const { userId } = z.object({ userId: z.string().min(3) }).parse(req.params);
     const body = parseBody(staffAssignmentBodySchema, req.body);
-    const legacyRole = await getLegacyPlatformRole(userId);
-    if (legacyRole === "owner" || legacyRole === "admin") {
-      return rep.code(400).send({ error: "LEGACY_PLATFORM_ROLE_ALREADY_HAS_FULL_ACCESS" });
+    const target = await q<{ id: string; role: string }>(
+      `SELECT id,role
+       FROM panel_admin_users
+       WHERE id=:userId
+         AND disabled_at IS NULL
+       LIMIT 1`,
+      { userId },
+    );
+    if (!target.length) return rep.code(404).send({ error: "ADMIN_ACCOUNT_NOT_FOUND" });
+    if (target[0].role === "owner" || target[0].role === "admin") {
+      return rep.code(400).send({ error: "ROLE_ALREADY_HAS_FULL_ACCESS" });
     }
 
-    const target = await q<{ id: string }>(`SELECT id FROM users WHERE id=:userId`, { userId });
-    if (!target.length) return rep.code(404).send({ error: "USER_NOT_FOUND" });
-
     await q(
-      `INSERT INTO platform_staff_assignments (user_id, level_key, title, permissions_json, notes, assigned_by)
-       VALUES (:userId, :levelKey, :title, :permissionsJson, :notes, :actorId)
-       ON DUPLICATE KEY UPDATE
-         level_key=VALUES(level_key),
-         title=VALUES(title),
-         permissions_json=VALUES(permissions_json),
-         notes=VALUES(notes),
-         assigned_by=VALUES(assigned_by)`,
+      `UPDATE panel_admin_users
+       SET role='staff',
+           title=:title,
+           permissions_json=:permissionsJson,
+           notes=:notes,
+           assigned_by=:actorId
+       WHERE id=:userId`,
       {
         userId,
-        levelKey: body.levelKey,
         title: body.title,
         permissionsJson: serializePlatformPermissions(body.permissions),
         notes: body.notes || null,
@@ -1054,25 +1457,46 @@ export async function adminRoutes(app: FastifyInstance, broadcastToUser?: Broadc
 
     return {
       ok: true,
-      assignment: await getPlatformStaffAssignment(userId)
+      assignment: await getPanelStaffAssignment(userId)
     };
   });
 
-  app.delete("/v1/admin/staff/:userId", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
-    const actorId = req.user.sub as string;
-    const access = await getPlatformAccess(actorId);
-    if (!access.isPlatformOwner && !access.isPlatformAdmin && !requestHasPanelPassword(req)) {
-      return rep.code(403).send({ error: "FORBIDDEN" });
+  app.delete("/v1/admin/staff/:userId", { preHandler: [app.authenticatePanelAdmin] } as any, async (req: any, rep) => {
+    const actorId = getActorAdminId(req);
+    const access = await requirePanelAccess(req);
+    if (!access.isPlatformOwner && !access.isPlatformAdmin) {
+      return rep.code(403).send({ error: "INSUFFICIENT_ROLE" });
     }
 
     const { userId } = z.object({ userId: z.string().min(3) }).parse(req.params);
-    await q(`DELETE FROM platform_staff_assignments WHERE user_id=:userId`, { userId });
+    const target = await q<{ id: string; role: string }>(
+      `SELECT id,role
+       FROM panel_admin_users
+       WHERE id=:userId
+         AND disabled_at IS NULL
+       LIMIT 1`,
+      { userId },
+    );
+    if (!target.length) return rep.code(404).send({ error: "ADMIN_ACCOUNT_NOT_FOUND" });
+    if (target[0].role === "owner" || target[0].role === "admin") {
+      return rep.code(400).send({ error: "ROLE_ALREADY_HAS_FULL_ACCESS" });
+    }
+
+    await q(
+      `UPDATE panel_admin_users
+       SET permissions_json='[]',
+           title='Staff',
+           notes=NULL,
+           assigned_by=:actorId
+       WHERE id=:userId`,
+      { userId, actorId },
+    );
     return { ok: true, removedUserId: userId };
   });
 
   app.get("/v1/me/admin-status", { preHandler: [app.authenticate] } as any, async (req: any) => {
     const userId = req.user.sub as string;
-    const access = await getPlatformAccess(userId);
+    const access = await getLegacyPlatformAccess(userId);
     return {
       platformRole: access.platformRole,
       isPlatformAdmin: access.isPlatformAdmin,

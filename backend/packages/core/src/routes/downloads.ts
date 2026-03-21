@@ -13,6 +13,7 @@ const DOWNLOAD_FILE_MAP: Record<string, string> = {
   "opencom.apk": "OpenCom.apk",
   "opencom.exe": "OpenCom.exe",
   "opencom.deb": "OpenCom.deb",
+  "opencom.rpm": "OpenCom.rpm",
   "opencom.snap": "OpenCom.snap",
   "opencom.tar.gz": "OpenCom.tar.gz",
   "desktop-release-manifest.json": "desktop-release-manifest.json",
@@ -23,6 +24,7 @@ const DOWNLOAD_FILE_MAP: Record<string, string> = {
 const DESKTOP_RELEASE_ARTIFACTS = [
   { platform: "win32", kind: "nsis", fileName: "OpenCom.exe" },
   { platform: "linux", kind: "deb", fileName: "OpenCom.deb" },
+  { platform: "linux", kind: "rpm", fileName: "OpenCom.rpm" },
   { platform: "linux", kind: "snap", fileName: "OpenCom.snap" },
   { platform: "linux", kind: "tarball", fileName: "OpenCom.tar.gz" },
 ] as const;
@@ -33,6 +35,7 @@ const MIME_BY_EXT: Record<string, string> = {
   ".exe": "application/octet-stream",
   ".gz": "application/gzip",
   ".json": "application/json; charset=utf-8",
+  ".rpm": "application/x-rpm",
   ".sha256": "text/plain; charset=utf-8",
   ".snap": "application/octet-stream",
 };
@@ -154,6 +157,7 @@ function pickPreferredDesktopArtifact(platform = "", artifacts: Array<{
   if (normalizedPlatform === "linux") {
     return (
       artifacts.find((artifact) => artifact.platform === "linux" && artifact.kind === "deb") ||
+      artifacts.find((artifact) => artifact.platform === "linux" && artifact.kind === "rpm") ||
       artifacts.find((artifact) => artifact.platform === "linux" && artifact.kind === "snap") ||
       artifacts.find((artifact) => artifact.platform === "linux" && artifact.kind === "tarball") ||
       null

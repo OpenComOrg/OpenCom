@@ -9,6 +9,7 @@ const BUILD_TARGETS = {
 const FALLBACK_PATHS = [
   "downloads/OpenCom.exe",
   "downloads/OpenCom.deb",
+  "downloads/OpenCom.rpm",
   "downloads/OpenCom.tar.gz"
 ];
 
@@ -48,6 +49,7 @@ export async function getLatestOfficialBuild({ platform = process.platform, base
     ok: false,
     platform,
     checked: candidates,
-    message: "No official build found at /downloads/OpenCom.exe, /downloads/OpenCom.deb, or /downloads/OpenCom.tar.gz"
+    message:
+      "No official build found at /downloads/OpenCom.exe, /downloads/OpenCom.deb, /downloads/OpenCom.rpm, or /downloads/OpenCom.tar.gz"
   };
 }

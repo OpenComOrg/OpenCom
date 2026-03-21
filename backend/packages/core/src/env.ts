@@ -38,6 +38,8 @@ const Env = z.object({
   CORE_MEMBERSHIP_PUBLIC_JWK: z.string().min(1),
   CORE_ISSUER: z.string().min(1),
   ADMIN_PANEL_PASSWORD: z.string().min(8),
+  ADMIN_2FA_ENCRYPTION_KEY: z.preprocess(emptyToUndefined, z.string().min(16).optional()),
+  ADMIN_2FA_ISSUER: z.string().default("OpenCom Admin"),
   REDIS_URL: z.string().url(),
   CORE_NODE_SYNC_SECRET: z.preprocess(emptyToUndefined, z.string().min(16).optional()),
 

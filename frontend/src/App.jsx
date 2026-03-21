@@ -80,6 +80,7 @@ import {
   shouldSkipLandingPage,
   parseBoostGiftCodeFromInput,
   parseInviteCodeFromInput,
+  resolveStaticPageHref,
   writeAppRoute,
 } from "./lib/routing";
 import {
@@ -178,7 +179,9 @@ import {
   toTimestampMs,
   useThemeCss,
 } from "./lib/appCore";
-import { AdminApp } from "./admin/AdminApp.jsx";
+
+const PANEL_APP_URL =
+  import.meta.env.VITE_PANEL_APP_URL || "http://localhost:5175";
 
 const BUILTIN_REACTION_ENTRY_BY_TOKEN = BUILTIN_EMOTE_ENTRIES.reduce(
   (map, entry) => {
@@ -12220,7 +12223,10 @@ export function App() {
   }
 
   if (routePath === APP_ROUTE_PANEL) {
-    return <AdminApp />;
+    if (typeof window !== "undefined") {
+      window.location.replace(PANEL_APP_URL);
+    }
+    return null;
   }
 
   if (routePath === APP_ROUTE_BLOGS) {

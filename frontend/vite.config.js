@@ -4,7 +4,6 @@ import { fileURLToPath } from "node:url";
 
 const htmlEntries = [
   "index.html",
-  "admin.html",
   "server-admin.html",
   "theme-catalog.html",
   "theme-creator.html"

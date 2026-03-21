@@ -7,6 +7,7 @@ config({ path: path.resolve(__dirname, "../../../.env") });
 
 import { buildHttp } from "./http.js";
 import { authRoutes } from "./routes/auth.js";
+import { panelAuthRoutes } from "./routes/panelAuth.js";
 import { deviceRoutes } from "./routes/devices.js";
 import { dmRoutes } from "./routes/dms.js";
 import { socialRoutes } from "./routes/social.js";
@@ -63,6 +64,7 @@ await redis.start();
 const gw = attachCoreGateway(app, redis);
 
 await authRoutes(app);
+await panelAuthRoutes(app);
 await deviceRoutes(app);
 await serverRoutes(app);
 await jwksRoutes(app);

@@ -15,6 +15,7 @@
     "migrate:core": "npm -w @ods/core run migrate",
     "migrate:node": "npm -w @ods/server-node run migrate",
     "dev:voice-debug": "DEBUG_HTTP=1 DEBUG_VOICE=1 LOG_LEVEL=debug npm -w @ods/server-node run dev",
-    "email:test": "npm -w @ods/core run email:test"
+    "email:test": "npm -w @ods/core run email:test",
+    "admin:create": "npm -w @ods/core run admin:create"
   }
 }

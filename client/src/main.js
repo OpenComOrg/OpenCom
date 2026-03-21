@@ -161,7 +161,7 @@ function resolveUpdateCheckUrl() {
 }
 
 function isInstallableArtifact(fileName = "") {
-  return /\.(exe|deb)$/i.test(String(fileName || "").trim());
+  return /\.(exe|deb|rpm)$/i.test(String(fileName || "").trim());
 }
 
 function appendVersionToFileName(fileName = "", version = "") {

@@ -6,7 +6,7 @@ TARGET="${1:-all}"
 
 print_usage() {
   cat <<USAGE
-Usage: ./scripts/dev/start.sh [core|node|frontend|admin|backend|all]
+Usage: ./scripts/dev/start.sh [core|node|frontend|panel|admin|backend|all]
 
 Starts one or more OpenCom services for local development.
 USAGE
@@ -31,12 +31,14 @@ load_backend_env() {
 CORE_PID=""
 NODE_PID=""
 FE_PID=""
+PANEL_PID=""
 
 cleanup() {
   local pids=()
   [[ -n "$CORE_PID" ]] && pids+=("$CORE_PID")
   [[ -n "$NODE_PID" ]] && pids+=("$NODE_PID")
   [[ -n "$FE_PID" ]] && pids+=("$FE_PID")
+  [[ -n "$PANEL_PID" ]] && pids+=("$PANEL_PID")
   if ((${#pids[@]})); then
     kill "${pids[@]}" 2>/dev/null || true
   fi
@@ -84,8 +86,14 @@ start_node() {
 start_frontend() {
   echo "[start] Frontend"
   echo "[info] App: http://localhost:5173 (via reverse proxy)"
-  echo "[info] Admin dashboard: http://localhost:5173/admin.html (via reverse proxy)"
   pushd "$ROOT_DIR/frontend" >/dev/null
+  npm run dev -- --host 127.0.0.1
+}
+
+start_panel() {
+  echo "[start] Admin Panel"
+  echo "[info] Panel: http://localhost:5175"
+  pushd "$ROOT_DIR/panel" >/dev/null
   npm run dev -- --host 127.0.0.1
 }
 
@@ -100,8 +108,11 @@ case "$TARGET" in
   node)
     start_node
     ;;
-  frontend|admin)
+  frontend)
     start_frontend
+    ;;
+  panel|admin)
+    start_panel
     ;;
   backend)
     echo "[start] Launching backend services in parallel"
@@ -115,9 +126,9 @@ case "$TARGET" in
     wait
     ;;
   all)
-    echo "[start] Launching core + node + frontend in parallel"
+    echo "[start] Launching core + node + frontend + panel in parallel"
     echo "[info] App: http://localhost:5173 (via reverse proxy)"
-    echo "[info] Admin dashboard: http://localhost:5173/admin.html (via reverse proxy)"
+    echo "[info] Panel: http://localhost:5175"
     pushd "$ROOT_DIR/backend" >/dev/null
     npm run dev:core &
     CORE_PID=$!
@@ -126,6 +137,11 @@ case "$TARGET" in
     pushd "$ROOT_DIR/frontend" >/dev/null
     npm run dev -- --host 127.0.0.1 &
     FE_PID=$!
+    popd >/dev/null
+
+    pushd "$ROOT_DIR/panel" >/dev/null
+    npm run dev -- --host 127.0.0.1 &
+    PANEL_PID=$!
     popd >/dev/null
 
     trap cleanup EXIT INT TERM

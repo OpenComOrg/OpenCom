@@ -65,6 +65,7 @@
     "linux": {
       "target": [
         "deb",
+        "rpm",
         "tar.gz",
         "snap"
       ],

@@ -20,6 +20,7 @@ const TARGETS = {
     npmScript: "build:linux",
     artifacts: [
       { from: "OpenCom.deb", to: "OpenCom.deb", optional: true },
+      { from: "OpenCom.rpm", to: "OpenCom.rpm", optional: true },
       { from: "OpenCom.snap", to: "OpenCom.snap", optional: true },
       { from: "OpenCom.tar.gz", to: "OpenCom.tar.gz" }
     ]

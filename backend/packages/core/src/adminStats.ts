@@ -309,6 +309,11 @@ async function collectDatabaseStats() {
     draftBlogs,
     boostGrantsActive,
     activeInvites,
+    boostBadgeMembers,
+    boostStripeMembers,
+    badgeDefinitions,
+    supportTicketsTotal,
+    supportTicketsOpen,
   ] = await Promise.all([
     countRows(`SELECT COUNT(*) AS count FROM users`, {}, { fallbackOnMissingTable: true }),
     countRows(`SELECT COUNT(*) AS count FROM account_bans`, {}, { fallbackOnMissingTable: true }),
@@ -350,6 +355,26 @@ async function collectDatabaseStats() {
        FROM invites
        WHERE expires_at IS NULL OR expires_at > NOW()`,
     ),
+    countIfTableExists(
+      "user_badges",
+      `SELECT COUNT(*) AS count
+       FROM user_badges
+       WHERE badge='boost'`,
+    ),
+    countIfTableExists(
+      "user_subscriptions",
+      `SELECT COUNT(DISTINCT user_id) AS count
+       FROM user_subscriptions
+       WHERE status IN ('active','trialing','past_due')`,
+    ),
+    countIfTableExists("badge_definitions"),
+    countIfTableExists("support_tickets"),
+    countIfTableExists(
+      "support_tickets",
+      `SELECT COUNT(*) AS count
+       FROM support_tickets
+       WHERE status IN ('open','waiting_on_staff','waiting_on_user')`,
+    ),
   ]);
 
   return {
@@ -369,6 +394,11 @@ async function collectDatabaseStats() {
     draftBlogs,
     boostGrantsActive,
     activeInvites,
+    boostBadgeMembers,
+    boostStripeMembers,
+    badgeDefinitions,
+    supportTicketsTotal,
+    supportTicketsOpen,
   };
 }
 

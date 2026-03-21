@@ -3,7 +3,7 @@ import { z } from "zod";
 import { ulidLike } from "@ods/shared/ids.js";
 import { q } from "../db.js";
 import { parseBody } from "../validation.js";
-import { requirePanelAccess, requirePanelPermission } from "../platformStaff.js";
+import { requirePanelAccess, requirePanelPermission } from "../panelAccess.js";
 
 const BLOG_STATUS = z.enum(["draft", "published"]);
 
@@ -133,7 +133,7 @@ export async function blogRoutes(app: FastifyInstance) {
 
   app.get(
     "/v1/admin/blogs",
-    { preHandler: [app.authenticate] } as any,
+    { preHandler: [app.authenticatePanelAdmin] } as any,
     async (req: any, rep) => {
       try {
         await requirePanelAccess(req);
@@ -160,9 +160,9 @@ export async function blogRoutes(app: FastifyInstance) {
 
   app.post(
     "/v1/admin/blogs",
-    { preHandler: [app.authenticate] } as any,
+    { preHandler: [app.authenticatePanelAdmin] } as any,
     async (req: any, rep) => {
-      const actorId = req.user.sub as string;
+      const actorId = String(req.panelAdmin?.id || req.user?.sub || "").trim();
       try {
         await requirePanelPermission(req, "manage_blogs");
       } catch {
@@ -215,9 +215,9 @@ export async function blogRoutes(app: FastifyInstance) {
 
   app.put(
     "/v1/admin/blogs/:blogId",
-    { preHandler: [app.authenticate] } as any,
+    { preHandler: [app.authenticatePanelAdmin] } as any,
     async (req: any, rep) => {
-      const actorId = req.user.sub as string;
+      const actorId = String(req.panelAdmin?.id || req.user?.sub || "").trim();
       try {
         await requirePanelPermission(req, "manage_blogs");
       } catch {
@@ -289,7 +289,7 @@ export async function blogRoutes(app: FastifyInstance) {
 
   app.delete(
     "/v1/admin/blogs/:blogId",
-    { preHandler: [app.authenticate] } as any,
+    { preHandler: [app.authenticatePanelAdmin] } as any,
     async (req: any, rep) => {
       try {
         await requirePanelPermission(req, "manage_blogs");

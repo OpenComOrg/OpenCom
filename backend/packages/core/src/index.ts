@@ -29,6 +29,7 @@ import { presenceUpsert } from "./presence.js";
 import { CallRoutes } from "./routes/PrivateCalls.js";
 import { PresenceUpdate } from "@ods/shared/events.js";
 import { pool } from "./db.js";
+import { resolveSmtpConfig } from "./smtp.js";
 
 const app = buildHttp();
 let redis: Awaited<ReturnType<typeof makeRedis>> | null = null;
@@ -82,6 +83,23 @@ async function start() {
     bucket: env.CORE_S3_BUCKET ?? null,
     region: env.S3_REGION ?? null,
   });
+  try {
+    const smtp = resolveSmtpConfig();
+    console.info("[core:smtp] configuration", {
+      envFile: coreEnvFilePath,
+      host: smtp.host,
+      port: smtp.port,
+      secure: smtp.secure,
+      from: smtp.from,
+      debugLogging: ["1", "true", "yes", "on"].includes(String(process.env.SMTP_DEBUG_LOGGING || "").trim().toLowerCase()),
+      debugVerifyBeforeSend: ["1", "true", "yes", "on"].includes(String(process.env.SMTP_DEBUG_VERIFY_BEFORE_SEND || "").trim().toLowerCase())
+    });
+  } catch (error) {
+    console.warn("[core:smtp] not configured", {
+      envFile: coreEnvFilePath,
+      error: String((error as Error)?.message || error)
+    });
+  }
 
   const missingPrivateCallConfig = [
     ["OFFICIAL_NODE_BASE_URL", env.OFFICIAL_NODE_BASE_URL],

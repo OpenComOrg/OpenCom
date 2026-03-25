@@ -54,6 +54,20 @@ function parseBool(value: string | undefined): boolean | null {
   return null;
 }
 
+function isTrue(value: string | undefined): boolean {
+  return parseBool(value) === true;
+}
+
+function logSmtp(event: string, details?: Record<string, unknown>) {
+  const payload = details ? { event, ...details } : { event };
+  console.info("[smtp]", payload);
+}
+
+function logSmtpError(event: string, details?: Record<string, unknown>) {
+  const payload = details ? { event, ...details } : { event };
+  console.error("[smtp]", payload);
+}
+
 function normalizeEnvelope(value: any): { from: string | null; to: string[] } {
   const to = Array.isArray(value?.to)
     ? value.to.map((entry: unknown) => String(entry || "").trim()).filter(Boolean)
@@ -88,6 +102,29 @@ function buildMailOptions(cfg: SmtpConfig, input: SendSmtpEmailInput) {
     headers: {
       "X-Mailer": "OpenCom SMTP"
     }
+  };
+}
+
+function buildSmtpLogContext(cfg: SmtpConfig, input: SendSmtpEmailInput) {
+  return {
+    host: cfg.host,
+    port: cfg.port,
+    secure: cfg.secure,
+    from: input.from || cfg.from,
+    to: input.to,
+    replyTo: input.replyTo || null,
+    subject: input.subject,
+    hasHtml: Boolean(input.html && input.html.trim())
+  };
+}
+
+function extractErrorDetails(error: unknown) {
+  return {
+    code: String((error as any)?.code || ""),
+    responseCode: Number((error as any)?.responseCode || 0) || null,
+    response: String((error as any)?.response || ""),
+    command: String((error as any)?.command || ""),
+    message: String((error as any)?.message || error || "")
   };
 }
 
@@ -184,9 +221,31 @@ export async function previewSmtpEmail(
 export async function sendSmtpEmail(input: SendSmtpEmailInput): Promise<SendSmtpEmailResult> {
   const cfg = resolveSmtpConfig();
   const transporter = getTransporter(cfg);
+  const logContext = buildSmtpLogContext(cfg, input);
+  const debugLogging = isTrue(process.env.SMTP_DEBUG_LOGGING);
+  const debugVerify = isTrue(process.env.SMTP_DEBUG_VERIFY_BEFORE_SEND);
   try {
+    if (debugLogging) {
+      logSmtp("send:start", logContext);
+    }
+    if (debugVerify) {
+      if (debugLogging) {
+        logSmtp("verify:start", logContext);
+      }
+      await transporter.verify();
+      logSmtp("verify:success", logContext);
+    }
+    if (debugLogging) {
+      const preview = await previewSmtpEmail(input);
+      logSmtp("preview", {
+        ...logContext,
+        envelope: preview.envelope,
+        messageId: preview.messageId,
+        raw: preview.raw
+      });
+    }
     const info = await transporter.sendMail(buildMailOptions(cfg, input));
-    return {
+    const result = {
       accepted: Array.isArray(info.accepted) ? info.accepted.map((entry) => String(entry)) : [],
       rejected: Array.isArray(info.rejected) ? info.rejected.map((entry) => String(entry)) : [],
       pending: Array.isArray((info as any).pending) ? (info as any).pending.map((entry: unknown) => String(entry)) : [],
@@ -194,7 +253,23 @@ export async function sendSmtpEmail(input: SendSmtpEmailInput): Promise<SendSmtp
       messageId: String(info.messageId || ""),
       envelope: normalizeEnvelope(info.envelope)
     };
+    if (debugLogging) {
+      logSmtp("send:success", {
+        ...logContext,
+        accepted: result.accepted,
+        rejected: result.rejected,
+        pending: result.pending || [],
+        envelope: result.envelope,
+        messageId: result.messageId,
+        response: result.response
+      });
+    }
+    return result;
   } catch (error) {
+    logSmtpError("send:failure", {
+      ...logContext,
+      ...extractErrorDetails(error)
+    });
     throw mapSmtpError(error);
   }
 }

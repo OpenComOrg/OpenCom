@@ -24,7 +24,7 @@ function loadCoreEnv() {
 
   for (const candidate of candidates) {
     if (!fs.existsSync(candidate)) continue;
-    config({ path: candidate });
+    config({ path: candidate, override: true });
     return candidate;
   }
 

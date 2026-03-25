@@ -16,13 +16,18 @@ const emptyToUndefined = (value: unknown) => {
 
 function loadCoreEnv() {
   const candidates = [
-    // Match the SMTP test script and prefer the backend root env file first.
+    // Prefer the backend root .env when the process is launched from backend/.
+    path.resolve(process.cwd(), ".env"),
+    // Source-tree layout: packages/core/src -> backend/.env
     path.resolve(__dirname, "../../../.env"),
+    // Built layout: packages/core/dist/core/src -> backend/.env
+    path.resolve(__dirname, "../../../../../.env"),
+    // Package-local fallbacks.
     path.resolve(__dirname, "../.env"),
     path.resolve(__dirname, "../../.env"),
   ];
 
-  for (const candidate of candidates) {
+  for (const candidate of new Set(candidates)) {
     if (!fs.existsSync(candidate)) continue;
     config({ path: candidate, override: true });
     return candidate;

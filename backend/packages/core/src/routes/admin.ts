@@ -197,6 +197,19 @@ async function persistClientReleaseRecord(input: {
     fileSize,
     checksum,
   } = input;
+  let uploadedByUserId: string | null = null;
+
+  if (actorId) {
+    try {
+      const rows = await q<{ id: string }>(
+        `SELECT id FROM users WHERE id = :actorId LIMIT 1`,
+        { actorId },
+      );
+      uploadedByUserId = rows[0]?.id ? String(rows[0].id) : null;
+    } catch {
+      uploadedByUserId = null;
+    }
+  }
 
   if (isS3StorageEnabled()) {
     try {
@@ -239,7 +252,7 @@ async function persistClientReleaseRecord(input: {
       fileSize,
       checksum,
       releaseNotes: releaseNotes ?? null,
-      uploadedBy: actorId || null,
+      uploadedBy: uploadedByUserId,
     },
   );
 

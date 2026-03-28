@@ -2,11 +2,12 @@ import { useCallback, useEffect, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  Linking,
   Pressable,
   RefreshControl,
   ScrollView,
+  Share,
   StyleSheet,
-  Switch,
   Text,
   TextInput,
   View,
@@ -20,15 +21,25 @@ import {
   isFilePickerCancellation,
 } from "../attachments";
 import type { UserStatus } from "../types";
-import { colors, radii, spacing, typography } from "../theme";
+import type { BoostGift, BoostGiftPreview, BoostStatus } from "../types";
+import { colors, radii, spacing, themePresets, typography, useTheme } from "../theme";
+import { buildBoostGiftUrl, parseBoostGiftCodeFromInput } from "../urls";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type SettingsScreenProps = {
   onLogout: () => void;
+  initialTab?: string;
+  initialGiftCode?: string;
 };
 
-type TabId = "profile" | "status" | "account" | "sessions";
+type TabId =
+  | "profile"
+  | "status"
+  | "billing"
+  | "appearance"
+  | "account"
+  | "sessions";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -190,6 +201,8 @@ function TabBar({
   const tabs: { id: TabId; label: string }[] = [
     { id: "profile", label: "Profile" },
     { id: "status", label: "Status" },
+    { id: "billing", label: "Boost" },
+    { id: "appearance", label: "Theme" },
     { id: "account", label: "Account" },
     { id: "sessions", label: "Sessions" },
   ];
@@ -598,6 +611,412 @@ function StatusTab() {
   );
 }
 
+// ─── Billing tab ──────────────────────────────────────────────────────────────
+
+function BillingTab({
+  initialGiftCode = "",
+}: {
+  initialGiftCode?: string;
+}) {
+  const { api } = useAuth();
+  const [boostStatus, setBoostStatus] = useState<BoostStatus | null>(null);
+  const [boostGiftSent, setBoostGiftSent] = useState<BoostGift[]>([]);
+  const [boostGiftCode, setBoostGiftCode] = useState(initialGiftCode);
+  const [boostGiftPreview, setBoostGiftPreview] =
+    useState<BoostGiftPreview | null>(null);
+  const [status, setStatus] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [giftLoading, setGiftLoading] = useState(false);
+  const [checkoutBusy, setCheckoutBusy] = useState(false);
+  const [giftCheckoutBusy, setGiftCheckoutBusy] = useState(false);
+  const [redeeming, setRedeeming] = useState(false);
+
+  useEffect(() => {
+    if (initialGiftCode) {
+      setBoostGiftCode(initialGiftCode);
+    }
+  }, [initialGiftCode]);
+
+  const loadBoostData = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [boost, gifts] = await Promise.all([
+        api.getBoostStatus().catch(() => null),
+        api.getBoostGifts().catch(() => ({ gifts: [] })),
+      ]);
+      setBoostStatus(boost);
+      setBoostGiftSent(Array.isArray(gifts.gifts) ? gifts.gifts : []);
+      setStatus("");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Failed to load billing.");
+    } finally {
+      setLoading(false);
+    }
+  }, [api]);
+
+  useEffect(() => {
+    loadBoostData().catch(() => {});
+  }, [loadBoostData]);
+
+  const openExternalUrl = useCallback(async (url: string, fallbackMessage: string) => {
+    const nextUrl = String(url || "").trim();
+    if (!nextUrl) {
+      setStatus(fallbackMessage);
+      return;
+    }
+    try {
+      await Linking.openURL(nextUrl);
+    } catch {
+      setStatus("Could not open the billing page.");
+    }
+  }, []);
+
+  const handleStartCheckout = useCallback(async () => {
+    setCheckoutBusy(true);
+    try {
+      const data = await api.startBoostCheckout();
+      await openExternalUrl(
+        data.url || data.checkoutUrl || "",
+        "Checkout URL missing.",
+      );
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not start checkout.");
+    } finally {
+      setCheckoutBusy(false);
+    }
+  }, [api, openExternalUrl]);
+
+  const handleOpenPortal = useCallback(async () => {
+    try {
+      const data = await api.openBoostPortal();
+      await openExternalUrl(
+        data.url || data.portalUrl || "",
+        "Billing portal URL missing.",
+      );
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not open billing portal.");
+    }
+  }, [api, openExternalUrl]);
+
+  const handleGiftCheckout = useCallback(async () => {
+    setGiftCheckoutBusy(true);
+    try {
+      const data = await api.startBoostGiftCheckout();
+      await openExternalUrl(
+        data.checkoutUrl || data.url || "",
+        "Gift checkout URL missing.",
+      );
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not start gift checkout.");
+    } finally {
+      setGiftCheckoutBusy(false);
+    }
+  }, [api, openExternalUrl]);
+
+  const handlePreviewGift = useCallback(async () => {
+    const code = parseBoostGiftCodeFromInput(boostGiftCode);
+    if (!code) {
+      setStatus("Enter a valid boost gift code or gift URL.");
+      return;
+    }
+    setGiftLoading(true);
+    try {
+      const preview = await api.previewBoostGift(code);
+      setBoostGiftCode(code);
+      setBoostGiftPreview(preview);
+      setStatus(
+        `Gift from ${preview.from?.username || "someone"} is ready to redeem.`,
+      );
+    } catch (error) {
+      setBoostGiftPreview(null);
+      setStatus(error instanceof Error ? error.message : "Could not load boost gift.");
+    } finally {
+      setGiftLoading(false);
+    }
+  }, [api, boostGiftCode]);
+
+  const handleRedeemGift = useCallback(async () => {
+    const code = parseBoostGiftCodeFromInput(boostGiftCode);
+    if (!code) {
+      setStatus("Enter a valid boost gift code.");
+      return;
+    }
+    setRedeeming(true);
+    try {
+      const data = await api.redeemBoostGift(code);
+      setBoostGiftPreview(null);
+      await loadBoostData();
+      setStatus(`Boost gift redeemed (${data.grantDays || 30} days).`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not redeem gift.");
+    } finally {
+      setRedeeming(false);
+    }
+  }, [api, boostGiftCode, loadBoostData]);
+
+  const handleShareGift = useCallback(async (gift: BoostGift) => {
+    const link = gift.joinUrl || buildBoostGiftUrl(gift.code);
+    try {
+      await Share.share({
+        title: "OpenCom Boost Gift",
+        message: link,
+      });
+    } catch {
+      setStatus("Could not share gift link.");
+    }
+  }, []);
+
+  return (
+    <ScrollView contentContainerStyle={styles.tabContent}>
+      <Section title="OpenCom Boost">
+        <View style={styles.billingHero}>
+          <Text style={styles.billingEyebrow}>
+            {boostStatus?.active ? "BOOST ACTIVE" : "BOOST INACTIVE"}
+          </Text>
+          <Text style={styles.billingTitle}>Support OpenCom on mobile</Text>
+          <Text style={styles.billingHint}>
+            Unlock custom invite codes, permanent invite links, bigger uploads,
+            and the same Stripe checkout flow used on web.
+          </Text>
+        </View>
+
+        <View style={styles.perkList}>
+          <Text style={styles.perkItem}>Custom invite code slugs</Text>
+          <Text style={styles.perkItem}>Permanent invite links</Text>
+          <Text style={styles.perkItem}>100MB upload limit</Text>
+          <Text style={styles.perkItem}>Unlimited servers</Text>
+        </View>
+
+        {loading ? (
+          <ActivityIndicator size="small" color={colors.brand} />
+        ) : boostStatus ? (
+          <Text style={styles.billingMeta}>
+            Status: {boostStatus.active ? "Active" : "Inactive"}
+            {boostStatus.currentPeriodEnd
+              ? ` · Renews ${new Date(boostStatus.currentPeriodEnd).toLocaleDateString()}`
+              : ""}
+            {!boostStatus.currentPeriodEnd &&
+            boostStatus.trialActive &&
+            boostStatus.trialEndsAt
+              ? ` · Trial ends ${new Date(boostStatus.trialEndsAt).toLocaleDateString()}`
+              : ""}
+          </Text>
+        ) : null}
+
+        {boostStatus && !boostStatus.stripeConfigured ? (
+          <Text style={styles.billingMeta}>
+            Stripe is not configured on the API yet.
+          </Text>
+        ) : null}
+
+        <Pressable
+          style={[styles.saveBtn, checkoutBusy && styles.saveBtnDisabled]}
+          onPress={handleStartCheckout}
+          disabled={checkoutBusy}
+        >
+          {checkoutBusy ? (
+            <ActivityIndicator size="small" color="#fff" />
+          ) : (
+            <Text style={styles.saveBtnText}>Get Boost</Text>
+          )}
+        </Pressable>
+
+        <Pressable style={styles.secondaryBtn} onPress={handleOpenPortal}>
+          <Text style={styles.secondaryBtnText}>Manage Subscription</Text>
+        </Pressable>
+
+        <Pressable style={styles.secondaryBtn} onPress={() => loadBoostData()}>
+          <Text style={styles.secondaryBtnText}>Refresh Billing</Text>
+        </Pressable>
+      </Section>
+
+      <Section title="Gift Boost">
+        <Text style={styles.billingHint}>
+          Buy a one-month Boost gift or redeem a gift code someone sent you.
+        </Text>
+
+        <Pressable
+          style={[styles.saveBtn, giftCheckoutBusy && styles.saveBtnDisabled]}
+          onPress={handleGiftCheckout}
+          disabled={giftCheckoutBusy}
+        >
+          {giftCheckoutBusy ? (
+            <ActivityIndicator size="small" color="#fff" />
+          ) : (
+            <Text style={styles.saveBtnText}>Buy Gift</Text>
+          )}
+        </Pressable>
+
+        <View style={styles.inputGroup}>
+          <Text style={styles.inputLabel}>Gift Code or Link</Text>
+          <TextInput
+            value={boostGiftCode}
+            onChangeText={setBoostGiftCode}
+            style={styles.textInput}
+            placeholder="Paste boost gift link or code"
+            placeholderTextColor={colors.textDim}
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+        </View>
+
+        <Pressable
+          style={[styles.secondaryBtn, giftLoading && styles.saveBtnDisabled]}
+          onPress={handlePreviewGift}
+          disabled={giftLoading}
+        >
+          {giftLoading ? (
+            <ActivityIndicator size="small" color={colors.text} />
+          ) : (
+            <Text style={styles.secondaryBtnText}>Preview Gift</Text>
+          )}
+        </Pressable>
+
+        {boostGiftPreview ? (
+          <View style={styles.giftPreviewCard}>
+            <Text style={styles.giftPreviewTitle}>
+              Gift from {boostGiftPreview.from?.username || "someone"}
+            </Text>
+            <Text style={styles.billingMeta}>
+              {boostGiftPreview.grantDays || 30} day(s)
+              {boostGiftPreview.expiresAt
+                ? ` · Expires ${new Date(boostGiftPreview.expiresAt).toLocaleDateString()}`
+                : ""}
+            </Text>
+            <Pressable
+              style={[styles.saveBtn, redeeming && styles.saveBtnDisabled]}
+              onPress={handleRedeemGift}
+              disabled={redeeming}
+            >
+              {redeeming ? (
+                <ActivityIndicator size="small" color="#fff" />
+              ) : (
+                <Text style={styles.saveBtnText}>Redeem Gift</Text>
+              )}
+            </Pressable>
+          </View>
+        ) : null}
+
+        {boostGiftSent.length ? (
+          <View style={styles.sentGiftList}>
+            <Text style={styles.inputLabel}>Recent Gifts</Text>
+            {boostGiftSent.slice(0, 5).map((gift) => (
+              <View key={gift.id} style={styles.sentGiftRow}>
+                <View style={styles.sentGiftInfo}>
+                  <Text style={styles.sentGiftStatus}>
+                    {gift.status.toUpperCase()}
+                  </Text>
+                  <Text style={styles.sentGiftLink} numberOfLines={2}>
+                    {gift.joinUrl || buildBoostGiftUrl(gift.code)}
+                  </Text>
+                </View>
+                <Pressable
+                  style={styles.revokeBtn}
+                  onPress={() => handleShareGift(gift)}
+                >
+                  <Text style={styles.revokeBtnText}>Share</Text>
+                </Pressable>
+              </View>
+            ))}
+          </View>
+        ) : null}
+      </Section>
+
+      {!!status && (
+        <Text
+          style={[
+            styles.formStatus,
+            status.toLowerCase().includes("redeemed") && styles.formStatusSuccess,
+          ]}
+        >
+          {status}
+        </Text>
+      )}
+    </ScrollView>
+  );
+}
+
+// ─── Appearance tab ───────────────────────────────────────────────────────────
+
+function AppearanceTab() {
+  const { theme, themeId, setThemeId } = useTheme();
+  const [status, setStatus] = useState("");
+
+  const handleSelectTheme = useCallback(
+    async (nextThemeId: string) => {
+      await setThemeId(nextThemeId);
+      setStatus("Theme updated.");
+    },
+    [setThemeId],
+  );
+
+  return (
+    <ScrollView contentContainerStyle={styles.tabContent}>
+      <Section title="Mobile Theme">
+        <Text style={styles.billingHint}>
+          Theme presets are translated from the OpenCom theme direction for a
+          cleaner mobile shell.
+        </Text>
+
+        {themePresets.map((preset) => {
+          const active = preset.id === themeId;
+          return (
+            <Pressable
+              key={preset.id}
+              style={[
+                styles.themeCard,
+                active && styles.themeCardActive,
+                {
+                  borderColor: active ? preset.colors.brand : colors.border,
+                },
+              ]}
+              onPress={() => handleSelectTheme(preset.id)}
+            >
+              <View
+                style={[
+                  styles.themeSwatch,
+                  {
+                    backgroundColor: preset.colors.sidebar,
+                  },
+                ]}
+              >
+                <View
+                  style={[
+                    styles.themeSwatchAccent,
+                    { backgroundColor: preset.colors.brand },
+                  ]}
+                />
+              </View>
+              <View style={styles.themeCopy}>
+                <Text style={styles.themeName}>
+                  {preset.name}
+                  {active ? " · Active" : ""}
+                </Text>
+                <Text style={styles.themeDescription}>{preset.description}</Text>
+              </View>
+            </Pressable>
+          );
+        })}
+
+        <View
+          style={[
+            styles.giftPreviewCard,
+            { backgroundColor: theme.colors.sidebarStrong },
+          ]}
+        >
+          <Text style={styles.giftPreviewTitle}>Live Preview</Text>
+          <Text style={styles.billingMeta}>
+            {theme.name} keeps the current mobile layout but updates the app
+            shell, cards, accents, and navigation mood.
+          </Text>
+        </View>
+      </Section>
+
+      {!!status && <Text style={[styles.formStatus, styles.formStatusSuccess]}>{status}</Text>}
+    </ScrollView>
+  );
+}
+
 // ─── Account tab ──────────────────────────────────────────────────────────────
 
 function AccountTab({ onLogout }: { onLogout: () => void }) {
@@ -927,11 +1346,35 @@ function SessionsTab() {
 
 // ─── Main screen ─────────────────────────────────────────────────────────────
 
-export function SettingsScreen({ onLogout }: SettingsScreenProps) {
+function normalizeInitialTab(value: string | undefined): TabId {
+  if (
+    value === "profile" ||
+    value === "status" ||
+    value === "billing" ||
+    value === "appearance" ||
+    value === "account" ||
+    value === "sessions"
+  ) {
+    return value;
+  }
+  return "profile";
+}
+
+export function SettingsScreen({
+  onLogout,
+  initialTab,
+  initialGiftCode,
+}: SettingsScreenProps) {
   const { me, myProfile, selfStatus } = useAuth();
-  const [activeTab, setActiveTab] = useState<TabId>("profile");
+  const [activeTab, setActiveTab] = useState<TabId>(
+    normalizeInitialTab(initialTab),
+  );
 
   const statusOpt = STATUS_OPTIONS.find((o) => o.value === selfStatus);
+
+  useEffect(() => {
+    setActiveTab(normalizeInitialTab(initialTab));
+  }, [initialTab]);
 
   return (
     <ScreenBackground>
@@ -959,6 +1402,10 @@ export function SettingsScreen({ onLogout }: SettingsScreenProps) {
 
         {activeTab === "profile" && <ProfileTab />}
         {activeTab === "status" && <StatusTab />}
+        {activeTab === "billing" && (
+          <BillingTab initialGiftCode={initialGiftCode} />
+        )}
+        {activeTab === "appearance" && <AppearanceTab />}
         {activeTab === "account" && <AccountTab onLogout={onLogout} />}
         {activeTab === "sessions" && <SessionsTab />}
       </View>
@@ -1121,6 +1568,121 @@ const styles = StyleSheet.create({
     color: colors.text,
     fontWeight: "700",
     fontSize: 14,
+  },
+
+  // Billing / appearance
+  billingHero: {
+    paddingHorizontal: spacing.md,
+    paddingTop: spacing.md,
+    gap: spacing.xs,
+  },
+  billingEyebrow: {
+    ...typography.eyebrow,
+    color: colors.brand,
+  },
+  billingTitle: {
+    ...typography.title,
+    color: colors.text,
+  },
+  billingHint: {
+    ...typography.body,
+    color: colors.textDim,
+    lineHeight: 21,
+    paddingHorizontal: spacing.md,
+    paddingBottom: spacing.sm,
+  },
+  billingMeta: {
+    ...typography.caption,
+    color: colors.textDim,
+    paddingHorizontal: spacing.md,
+    paddingBottom: spacing.sm,
+  },
+  perkList: {
+    paddingHorizontal: spacing.md,
+    paddingBottom: spacing.md,
+    gap: spacing.xs,
+  },
+  perkItem: {
+    ...typography.body,
+    color: colors.text,
+  },
+  giftPreviewCard: {
+    margin: spacing.md,
+    marginTop: spacing.sm,
+    backgroundColor: colors.elev,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radii.lg,
+    padding: spacing.md,
+    gap: spacing.sm,
+  },
+  giftPreviewTitle: {
+    ...typography.heading,
+    color: colors.text,
+  },
+  sentGiftList: {
+    paddingHorizontal: spacing.md,
+    paddingBottom: spacing.md,
+    gap: spacing.sm,
+  },
+  sentGiftRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radii.md,
+    padding: spacing.md,
+  },
+  sentGiftInfo: {
+    flex: 1,
+    gap: 4,
+  },
+  sentGiftStatus: {
+    ...typography.label,
+    color: colors.brand,
+  },
+  sentGiftLink: {
+    ...typography.caption,
+    color: colors.textDim,
+  },
+  themeCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.md,
+    marginHorizontal: spacing.md,
+    marginBottom: spacing.sm,
+    borderRadius: radii.lg,
+    borderWidth: 1,
+    backgroundColor: colors.sidebar,
+    padding: spacing.md,
+  },
+  themeCardActive: {
+    backgroundColor: colors.active,
+  },
+  themeSwatch: {
+    width: 52,
+    height: 52,
+    borderRadius: radii.lg,
+    justifyContent: "flex-end",
+    padding: 8,
+  },
+  themeSwatchAccent: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+  },
+  themeCopy: {
+    flex: 1,
+    gap: 4,
+  },
+  themeName: {
+    ...typography.heading,
+    color: colors.text,
+  },
+  themeDescription: {
+    ...typography.caption,
+    color: colors.textDim,
   },
 
   // Feedback

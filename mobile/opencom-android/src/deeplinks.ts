@@ -1,6 +1,7 @@
 import type { DeepLinkTarget } from "./types";
 
 const INVITE_CODE_RE = /^[a-zA-Z0-9_-]{3,32}$/;
+const BOOST_GIFT_CODE_RE = /^[a-zA-Z0-9_-]{8,96}$/;
 
 export function parseDeepLink(inputUrl: string): DeepLinkTarget | null {
   const raw = String(inputUrl || "").trim();
@@ -20,6 +21,10 @@ export function parseDeepLink(inputUrl: string): DeepLinkTarget | null {
 
   if (parts[0] === "join" && parts[1] && INVITE_CODE_RE.test(parts[1])) {
     return { kind: "join", code: parts[1] };
+  }
+
+  if (parts[0] === "gift" && parts[1] && BOOST_GIFT_CODE_RE.test(parts[1])) {
+    return { kind: "gift", code: parts[1] };
   }
 
   if (parts[0] === "friends") return { kind: "friends" };

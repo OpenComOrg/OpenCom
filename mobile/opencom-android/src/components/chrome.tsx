@@ -10,7 +10,7 @@ import {
   type ViewStyle,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { colors, radii, shadows, spacing, typography } from "../theme";
+import { colors, radii, shadows, spacing, typography, useTheme } from "../theme";
 
 type ScreenBackgroundProps = {
   children: ReactNode;
@@ -76,12 +76,35 @@ export function ScreenBackground({
   children,
   style,
 }: ScreenBackgroundProps) {
+  const { theme } = useTheme();
+  const colors = theme.colors;
   return (
-    <View style={[styles.screen, style]}>
-      <View pointerEvents="none" style={styles.backdrop}>
-        <View style={[styles.orb, styles.orbOne]} />
-        <View style={[styles.orb, styles.orbTwo]} />
-        <View style={[styles.orb, styles.orbThree]} />
+    <View style={[styles.screen, { backgroundColor: colors.background }, style]}>
+      <View
+        pointerEvents="none"
+        style={[styles.backdrop, { backgroundColor: colors.backgroundDeep }]}
+      >
+        <View
+          style={[
+            styles.orb,
+            styles.orbOne,
+            { backgroundColor: colors.brandGlow },
+          ]}
+        />
+        <View
+          style={[
+            styles.orb,
+            styles.orbTwo,
+            { backgroundColor: colors.brandMuted },
+          ]}
+        />
+        <View
+          style={[
+            styles.orb,
+            styles.orbThree,
+            { backgroundColor: colors.hover },
+          ]}
+        />
       </View>
       {children}
     </View>
@@ -93,8 +116,20 @@ export function SurfaceCard({
   style,
   padded = true,
 }: SurfaceCardProps) {
+  const { theme } = useTheme();
+  const colors = theme.colors;
   return (
-    <View style={[styles.card, padded && styles.cardPadded, style]}>
+    <View
+      style={[
+        styles.card,
+        {
+          backgroundColor: colors.panel,
+          borderColor: colors.border,
+        },
+        padded && styles.cardPadded,
+        style,
+      ]}
+    >
       {children}
     </View>
   );
@@ -109,6 +144,8 @@ export function TopBar({
   compact = false,
 }: TopBarProps) {
   const insets = useSafeAreaInsets();
+  const { theme } = useTheme();
+  const colors = theme.colors;
   return (
     <View
       style={[
@@ -121,11 +158,17 @@ export function TopBar({
           <Pressable
             style={({ pressed }) => [
               styles.topBarButton,
+              {
+                backgroundColor: colors.brandMuted,
+                borderColor: colors.border,
+              },
               pressed && styles.topBarButtonPressed,
             ]}
             onPress={onBack}
           >
-            <Text style={styles.topBarButtonText}>←</Text>
+            <Text style={[styles.topBarButtonText, { color: colors.text }]}>
+              ←
+            </Text>
           </Pressable>
         ) : null}
         {leading ? <View style={styles.topBarLeading}>{leading}</View> : null}
@@ -134,7 +177,10 @@ export function TopBar({
             {title}
           </Text>
           {subtitle ? (
-            <Text style={styles.topBarSubtitle} numberOfLines={1}>
+            <Text
+              style={[styles.topBarSubtitle, { color: colors.textDim }]}
+              numberOfLines={1}
+            >
               {subtitle}
             </Text>
           ) : null}
@@ -150,12 +196,18 @@ export function SectionLabel({
   actionLabel,
   onActionPress,
 }: SectionLabelProps) {
+  const { theme } = useTheme();
+  const colors = theme.colors;
   return (
     <View style={styles.sectionLabelRow}>
-      <Text style={styles.sectionLabel}>{title.toUpperCase()}</Text>
+      <Text style={[styles.sectionLabel, { color: colors.textDim }]}>
+        {title}
+      </Text>
       {actionLabel && onActionPress ? (
         <Pressable onPress={onActionPress}>
-          <Text style={styles.sectionAction}>{actionLabel}</Text>
+          <Text style={[styles.sectionAction, { color: colors.brand }]}>
+            {actionLabel}
+          </Text>
         </Pressable>
       ) : null}
     </View>
@@ -168,8 +220,19 @@ export function SegmentedControl({
   options,
   style,
 }: SegmentedControlProps) {
+  const { theme } = useTheme();
+  const colors = theme.colors;
   return (
-    <View style={[styles.segmented, style]}>
+    <View
+      style={[
+        styles.segmented,
+        {
+          backgroundColor: colors.sidebarStrong,
+          borderColor: colors.border,
+        },
+        style,
+      ]}
+    >
       {options.map((option) => {
         const active = option.value === value;
         return (
@@ -177,12 +240,19 @@ export function SegmentedControl({
             key={option.value}
             style={({ pressed }) => [
               styles.segment,
-              active && styles.segmentActive,
+              active && {
+                backgroundColor: colors.active,
+              },
               pressed && styles.segmentPressed,
             ]}
             onPress={() => onChange(option.value)}
           >
-            <Text style={[styles.segmentText, active && styles.segmentTextActive]}>
+            <Text
+              style={[
+                styles.segmentText,
+                { color: active ? colors.text : colors.textDim },
+              ]}
+            >
               {option.label}
             </Text>
           </Pressable>
@@ -200,21 +270,31 @@ export function EmptyState({
   actionLabel,
   onActionPress,
 }: EmptyStateProps) {
+  const { theme } = useTheme();
+  const colors = theme.colors;
   return (
     <SurfaceCard style={styles.emptyCard}>
-      {eyebrow ? <Text style={styles.emptyEyebrow}>{eyebrow}</Text> : null}
+      {eyebrow ? (
+        <Text style={[styles.emptyEyebrow, { color: colors.brand }]}>{eyebrow}</Text>
+      ) : null}
       {icon ? <Text style={styles.emptyIcon}>{icon}</Text> : null}
-      <Text style={styles.emptyTitle}>{title}</Text>
-      {hint ? <Text style={styles.emptyHint}>{hint}</Text> : null}
+      <Text style={[styles.emptyTitle, { color: colors.text }]}>{title}</Text>
+      {hint ? <Text style={[styles.emptyHint, { color: colors.textDim }]}>{hint}</Text> : null}
       {actionLabel && onActionPress ? (
         <Pressable
           style={({ pressed }) => [
             styles.inlineAction,
+            {
+              backgroundColor: colors.brandMuted,
+              borderColor: colors.border,
+            },
             pressed && styles.inlineActionPressed,
           ]}
           onPress={onActionPress}
         >
-          <Text style={styles.inlineActionText}>{actionLabel}</Text>
+          <Text style={[styles.inlineActionText, { color: colors.text }]}>
+            {actionLabel}
+          </Text>
         </Pressable>
       ) : null}
     </SurfaceCard>
@@ -226,25 +306,34 @@ export function StatusBanner({
   onDismiss,
   tone = "neutral",
 }: StatusBannerProps) {
+  const { theme } = useTheme();
+  const colors = theme.colors;
   const textStyle: StyleProp<TextStyle> =
     tone === "success"
-      ? styles.statusSuccess
+      ? [styles.statusSuccess, { color: colors.success }]
       : tone === "danger"
-        ? styles.statusDanger
+        ? [styles.statusDanger, { color: colors.danger }]
         : null;
 
   return (
     <View
       style={[
         styles.statusBanner,
+        {
+          backgroundColor: colors.sidebar,
+          borderColor: colors.border,
+        },
         tone === "success"
-          ? styles.statusBannerSuccess
+          ? { backgroundColor: colors.brandMuted }
           : tone === "danger"
-            ? styles.statusBannerDanger
+            ? { backgroundColor: "rgba(239,95,118,0.12)" }
             : null,
       ]}
     >
-      <Text style={[styles.statusText, textStyle]} numberOfLines={2}>
+      <Text
+        style={[styles.statusText, { color: colors.text }, textStyle]}
+        numberOfLines={2}
+      >
         {text}
       </Text>
       {onDismiss ? (
@@ -255,7 +344,9 @@ export function StatusBanner({
           ]}
           onPress={onDismiss}
         >
-          <Text style={styles.statusDismissText}>✕</Text>
+          <Text style={[styles.statusDismissText, { color: colors.textDim }]}>
+            ✕
+          </Text>
         </Pressable>
       ) : null}
     </View>
@@ -264,6 +355,8 @@ export function StatusBanner({
 
 export function AppTabBar({ state, descriptors, navigation }: BottomTabBarProps) {
   const insets = useSafeAreaInsets();
+  const { theme } = useTheme();
+  const colors = theme.colors;
 
   return (
     <View
@@ -272,7 +365,15 @@ export function AppTabBar({ state, descriptors, navigation }: BottomTabBarProps)
         { paddingBottom: Math.max(insets.bottom, spacing.sm) },
       ]}
     >
-      <View style={styles.tabBarPanel}>
+      <View
+        style={[
+          styles.tabBarPanel,
+          {
+            backgroundColor: colors.panel,
+            borderColor: colors.border,
+          },
+        ]}
+      >
         {state.routes.map((route, index) => {
           const focused = state.index === index;
           const descriptor = descriptors[route.key];
@@ -312,14 +413,27 @@ export function AppTabBar({ state, descriptors, navigation }: BottomTabBarProps)
               onLongPress={onLongPress}
               style={({ pressed }) => [
                 styles.tabItem,
-                focused && styles.tabItemActive,
+                focused && [styles.tabItemActive, { backgroundColor: colors.active }],
                 pressed && styles.tabItemPressed,
               ]}
             >
-              <View style={[styles.tabIcon, focused && styles.tabIconActive]}>
-                <Text style={styles.tabIconText}>{meta.icon}</Text>
+              <View
+                style={[
+                  styles.tabIcon,
+                  focused && [styles.tabIconActive, { backgroundColor: colors.brandMuted }],
+                ]}
+              >
+                <Text style={[styles.tabIconText, { color: colors.text }]}>
+                  {meta.icon}
+                </Text>
               </View>
-              <Text style={[styles.tabLabel, focused && styles.tabLabelActive]}>
+              <Text
+                style={[
+                  styles.tabLabel,
+                  { color: focused ? colors.text : colors.textDim },
+                  focused && styles.tabLabelActive,
+                ]}
+              >
                 {meta.label}
               </Text>
             </Pressable>

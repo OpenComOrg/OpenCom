@@ -2,6 +2,8 @@ import { resolveCoreApiUrl } from "./config";
 import type { CoreServer } from "./types";
 
 const CORE_API = resolveCoreApiUrl().replace(/\/$/, "");
+const DEFAULT_WEB_APP_ORIGIN = "https://opencom.online";
+const BOOST_GIFT_CODE_RE = /^[a-zA-Z0-9_-]{8,96}$/;
 
 function toNormalizedBoolean(value: string | undefined): boolean {
   const normalized = String(value || "")
@@ -186,6 +188,39 @@ export function resolveCoreAttachmentUrl(
   url: string | null | undefined,
 ): string | null {
   return resolveUrlAgainstBase(url, CORE_API);
+}
+
+export function resolveWebAppOrigin(): string {
+  const explicit = normalizeHttpBaseUrl(
+    process.env.EXPO_PUBLIC_OPENCOM_WEB_APP_URL || "",
+  );
+  return explicit || DEFAULT_WEB_APP_ORIGIN;
+}
+
+export function buildBoostGiftUrl(code: string): string {
+  const normalizedCode = String(code || "").trim();
+  return `${resolveWebAppOrigin()}/gift/${encodeURIComponent(normalizedCode)}`;
+}
+
+export function parseBoostGiftCodeFromInput(value = ""): string {
+  const trimmed = String(value || "").trim();
+  if (!trimmed) return "";
+  if (BOOST_GIFT_CODE_RE.test(trimmed)) return trimmed;
+
+  const directPathMatch = trimmed.match(/^\/gift\/([a-zA-Z0-9_-]{8,96})\/?$/);
+  if (directPathMatch?.[1]) return directPathMatch[1];
+
+  try {
+    const parsed = new URL(trimmed);
+    const pathMatch = (parsed.pathname || "").match(
+      /^\/gift\/([a-zA-Z0-9_-]{8,96})\/?$/,
+    );
+    if (pathMatch?.[1]) return pathMatch[1];
+  } catch {
+    return "";
+  }
+
+  return "";
 }
 
 export function resolveServerAttachmentUrl(

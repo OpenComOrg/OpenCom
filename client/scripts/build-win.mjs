@@ -55,7 +55,12 @@ async function resolveContainerEngine() {
 }
 
 async function runLocalBuild() {
-  await run(electronBuilderCmd, winBuildArgs);
+  if (isWindows) {
+    await run(electronBuilderCmd, winBuildArgs);
+    return;
+  }
+
+  await run("node", [path.join(clientDir, "node_modules", "electron-builder", "cli.js"), ...winBuildArgs]);
 }
 
 function resolveContainerImage() {
@@ -67,6 +72,7 @@ async function runContainerBuild(engine) {
   const image = resolveContainerImage();
   const electronCacheDir = process.env.ELECTRON_CACHE || path.join(clientDir, ".cache", "electron");
   const builderCacheDir = process.env.ELECTRON_BUILDER_CACHE || path.join(clientDir, ".cache", "electron-builder");
+  const mountSuffix = engine === "podman" ? ":Z" : "";
 
   await fs.mkdir(electronCacheDir, { recursive: true });
   await fs.mkdir(builderCacheDir, { recursive: true });
@@ -78,11 +84,11 @@ async function runContainerBuild(engine) {
     "-w",
     "/project",
     "-v",
-    `${clientDir}:/project`,
+    `${clientDir}:/project${mountSuffix}`,
     "-v",
-    `${electronCacheDir}:/home/builder/.cache/electron`,
+    `${electronCacheDir}:/home/builder/.cache/electron${mountSuffix}`,
     "-v",
-    `${builderCacheDir}:/home/builder/.cache/electron-builder`,
+    `${builderCacheDir}:/home/builder/.cache/electron-builder${mountSuffix}`,
     "-e",
     "ELECTRON_CACHE=/home/builder/.cache/electron",
     "-e",
@@ -90,7 +96,7 @@ async function runContainerBuild(engine) {
     image,
     "/bin/bash",
     "-lc",
-    "./node_modules/.bin/electron-builder --win nsis"
+    "node ./node_modules/electron-builder/cli.js --win nsis"
   ];
 
   await run(engine, args);

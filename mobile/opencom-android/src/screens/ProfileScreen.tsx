@@ -20,7 +20,7 @@ import { resolveCoreImageUrl } from "../urls";
 
 type ProfileScreenProps = {
   onLogout: () => void;
-  onOpenSettings: () => void;
+  onOpenSettings: (tab?: string) => void;
 };
 
 const STATUS_LABELS: Record<string, string> = {
@@ -117,7 +117,7 @@ export function ProfileScreen({
                 styles.heroAction,
                 pressed && styles.heroActionPressed,
               ]}
-              onPress={onOpenSettings}
+              onPress={() => onOpenSettings("profile")}
             >
               <Text style={styles.heroActionText}>Edit Profile</Text>
             </Pressable>
@@ -157,19 +157,31 @@ export function ProfileScreen({
           <ActionRow
             icon="⚙️"
             label="Settings and Profile"
-            onPress={onOpenSettings}
+            onPress={() => onOpenSettings("profile")}
+            showDivider
+          />
+          <ActionRow
+            icon="⚡"
+            label="Boost and Billing"
+            onPress={() => onOpenSettings("billing")}
+            showDivider
+          />
+          <ActionRow
+            icon="🎨"
+            label="Theme and Appearance"
+            onPress={() => onOpenSettings("appearance")}
             showDivider
           />
           <ActionRow
             icon="🔒"
             label="Account and Security"
-            onPress={onOpenSettings}
+            onPress={() => onOpenSettings("account")}
             showDivider
           />
           <ActionRow
             icon="📱"
             label="Sessions and Devices"
-            onPress={onOpenSettings}
+            onPress={() => onOpenSettings("sessions")}
           />
         </SurfaceCard>
 

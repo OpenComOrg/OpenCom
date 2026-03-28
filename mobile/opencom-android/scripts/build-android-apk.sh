@@ -73,6 +73,7 @@ pick_android_sdk() {
   [[ -n "${ANDROID_HOME:-}" ]] && candidates+=("$ANDROID_HOME")
   [[ -n "${ANDROID_SDK_ROOT:-}" ]] && candidates+=("$ANDROID_SDK_ROOT")
   candidates+=(
+    "$HOME/Android"
     "$HOME/Android/Sdk"
     "$HOME/Android/sdk"
     "/opt/android-sdk"
@@ -113,7 +114,21 @@ fi
 
 export ANDROID_HOME="$SDK_PATH"
 export ANDROID_SDK_ROOT="$SDK_PATH"
-export PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/tools/bin:$PATH"
+CMDLINE_TOOLS_BIN=""
+if [[ -d "$ANDROID_HOME/cmdline-tools/latest/bin" ]]; then
+  CMDLINE_TOOLS_BIN="$ANDROID_HOME/cmdline-tools/latest/bin"
+elif [[ -d "$ANDROID_HOME/cmdline-tools/bin" ]]; then
+  CMDLINE_TOOLS_BIN="$ANDROID_HOME/cmdline-tools/bin"
+elif [[ -d "$ANDROID_HOME/cmdline-tools" ]]; then
+  while IFS= read -r tool_dir; do
+    if [[ -d "$tool_dir/bin" ]]; then
+      CMDLINE_TOOLS_BIN="$tool_dir/bin"
+      break
+    fi
+  done < <(find "$ANDROID_HOME/cmdline-tools" -mindepth 1 -maxdepth 1 -type d | sort)
+fi
+
+export PATH="$ANDROID_HOME/platform-tools:${CMDLINE_TOOLS_BIN:+$CMDLINE_TOOLS_BIN:}$ANDROID_HOME/tools/bin:$PATH"
 
 if [[ -z "${JAVA_HOME:-}" ]]; then
   if command -v archlinux-java >/dev/null 2>&1; then
@@ -125,7 +140,7 @@ if [[ -z "${JAVA_HOME:-}" ]]; then
   fi
 
   if [[ -z "${JAVA_HOME:-}" ]] && command -v java >/dev/null 2>&1; then
-    JAVA_BIN="$(readlink -f "$(command -v java)" || true)"
+    JAVA_BIN="$(readlink -f "$(command -v javac 2>/dev/null || command -v java)" || true)"
     if [[ -n "$JAVA_BIN" ]]; then
       export JAVA_HOME="$(cd "$(dirname "$JAVA_BIN")/.." && pwd)"
     fi
@@ -189,7 +204,7 @@ fi
 
 if [[ "$RUN_PREBUILD" -eq 1 ]]; then
   echo "==> Running Expo prebuild"
-  CI=1 npx expo prebuild --platform android
+  NODE_ENV=production CI=1 npx expo prebuild --platform android
 fi
 
 if [[ ! -x "$ANDROID_DIR/gradlew" ]]; then
@@ -199,10 +214,10 @@ fi
 echo "==> Building $VARIANT APK"
 pushd "$ANDROID_DIR" >/dev/null
 if [[ "$VARIANT" == "debug" ]]; then
-  ./gradlew --no-daemon assembleDebug
+  NODE_ENV=production ./gradlew --no-daemon assembleDebug
   APK_SOURCE="$ANDROID_DIR/app/build/outputs/apk/debug/app-debug.apk"
 else
-  ./gradlew --no-daemon assembleRelease
+  NODE_ENV=production ./gradlew --no-daemon assembleRelease
   APK_SOURCE="$ANDROID_DIR/app/build/outputs/apk/release/app-release.apk"
 fi
 popd >/dev/null

@@ -16,7 +16,7 @@ import {
   StatusBanner,
   SurfaceCard,
 } from "../components/chrome";
-import { colors, radii, spacing, typography } from "../theme";
+import { colors, radii, spacing, typography, useTheme } from "../theme";
 
 type AuthMode = "login" | "register";
 
@@ -36,6 +36,8 @@ export function AuthScreen({
   onForgotPassword,
   status,
 }: AuthScreenProps) {
+  const { theme } = useTheme();
+  const palette = theme.colors;
   const [mode, setMode] = useState<AuthMode>("login");
   const [email, setEmail] = useState("");
   const [username, setUsername] = useState("");
@@ -107,7 +109,7 @@ export function AuthScreen({
                 onChangeText={setEmail}
                 style={styles.input}
                 placeholder="you@example.com"
-                placeholderTextColor={colors.textDim}
+                placeholderTextColor={palette.textDim}
                 autoCapitalize="none"
                 keyboardType="email-address"
                 editable={!working}
@@ -122,7 +124,7 @@ export function AuthScreen({
                   onChangeText={setUsername}
                   style={styles.input}
                   placeholder="Choose a username"
-                  placeholderTextColor={colors.textDim}
+                  placeholderTextColor={palette.textDim}
                   autoCapitalize="none"
                   editable={!working}
                 />
@@ -138,7 +140,7 @@ export function AuthScreen({
                 placeholder={
                   mode === "login" ? "Enter your password" : "Create a password"
                 }
-                placeholderTextColor={colors.textDim}
+                placeholderTextColor={palette.textDim}
                 secureTextEntry
                 autoCapitalize="none"
                 editable={!working}

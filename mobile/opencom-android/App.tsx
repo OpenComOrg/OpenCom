@@ -53,7 +53,7 @@ import type {
   Friend,
   Guild,
 } from "./src/types";
-import { colors } from "./src/theme";
+import { ThemeProvider, colors, useTheme } from "./src/theme";
 
 // ─── Navigator instances ──────────────────────────────────────────────────────
 
@@ -151,8 +151,8 @@ function TabProfile({ navigation }: { navigation: any }) {
     await setTokens(null);
   }, [setTokens]);
 
-  const onOpenSettings = useCallback(() => {
-    navigation.navigate("Settings");
+  const onOpenSettings = useCallback((tab?: string) => {
+    navigation.navigate("Settings", tab ? { tab } : undefined);
   }, [navigation]);
 
   return <ProfileScreen onLogout={onLogout} onOpenSettings={onOpenSettings} />;
@@ -424,14 +424,27 @@ function MembersScreenWrapper({
   );
 }
 
-function SettingsScreenWrapper({ navigation }: { navigation: any }) {
+function SettingsScreenWrapper({
+  route,
+  navigation,
+}: {
+  route: any;
+  navigation: any;
+}) {
   const { setTokens } = useAuth();
+  const params = route?.params || {};
 
   const onLogout = useCallback(async () => {
     await setTokens(null);
   }, [setTokens]);
 
-  return <SettingsScreen onLogout={onLogout} />;
+  return (
+    <SettingsScreen
+      onLogout={onLogout}
+      initialTab={params.tab}
+      initialGiftCode={params.giftCode}
+    />
+  );
 }
 
 function VoiceRoomScreenWrapper({
@@ -488,11 +501,12 @@ function VoiceRoomScreenWrapper({
 // ─── Main stack navigator ─────────────────────────────────────────────────────
 
 function MainNavigator() {
+  const { theme } = useTheme();
   return (
     <MainStack.Navigator
       screenOptions={{
         headerShown: false,
-        contentStyle: { backgroundColor: colors.background },
+        contentStyle: { backgroundColor: theme.colors.background },
       }}
     >
       <MainStack.Screen name="Tabs" component={MainTabs} />
@@ -538,6 +552,8 @@ function MainNavigator() {
 // ─── Gateway-wired app content ────────────────────────────────────────────────
 
 function AppContent() {
+  const { theme } = useTheme();
+  const colors = theme.colors;
   const {
     tokens,
     setTokens,
@@ -971,6 +987,15 @@ function AppContent() {
         return;
       }
 
+      if (target.kind === "gift") {
+        navigationRef.current.navigate("Settings", {
+          tab: "billing",
+          giftCode: target.code,
+        });
+        pendingDeepLinkRef.current = null;
+        return;
+      }
+
       if (target.kind === "friends") {
         if (openFriendsScreen()) {
           pendingDeepLinkRef.current = null;
@@ -1343,9 +1368,11 @@ const styles = StyleSheet.create({
 export default function App() {
   return (
     <SafeAreaProvider>
-      <AuthProvider>
-        <AppContent />
-      </AuthProvider>
+      <ThemeProvider>
+        <AuthProvider>
+          <AppContent />
+        </AuthProvider>
+      </ThemeProvider>
     </SafeAreaProvider>
   );
 }

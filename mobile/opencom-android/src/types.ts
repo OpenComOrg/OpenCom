@@ -124,10 +124,40 @@ export type DmMessageApi = {
 export type DeepLinkTarget =
   | { kind: "login" }
   | { kind: "join"; code: string }
+  | { kind: "gift"; code: string }
   | { kind: "friends" }
   | { kind: "dm"; threadId: string }
   | { kind: "server"; serverId: string }
   | { kind: "channel"; serverId: string; guildId: string; channelId: string };
+
+export type BoostStatus = {
+  active: boolean;
+  stripeConfigured?: boolean;
+  currentPeriodEnd?: string | null;
+  trialActive?: boolean;
+  trialEndsAt?: string | null;
+};
+
+export type BoostGift = {
+  id: string;
+  code: string;
+  status: string;
+  joinUrl?: string | null;
+  createdAt?: string | null;
+  redeemedAt?: string | null;
+  expiresAt?: string | null;
+};
+
+export type BoostGiftPreview = {
+  code?: string;
+  giftId?: string;
+  grantDays?: number;
+  expiresAt?: string | null;
+  from?: {
+    id?: string;
+    username?: string;
+  } | null;
+};
 
 // Social (friends, DMs)
 export type Friend = {

@@ -1,5 +1,9 @@
+import { Platform } from "react-native";
 import type {
   AuthTokens,
+  BoostGift,
+  BoostGiftPreview,
+  BoostStatus,
   ChannelMessagesResponse,
   CoreServer,
   CoreServersResponse,
@@ -699,8 +703,67 @@ export function createApiClient(input: {
     registerPushToken(token: string) {
       return coreRequest<{ ok: boolean }>("/v1/push/register", {
         method: "POST",
-        body: { token, platform: "android" },
+        body: {
+          token,
+          platform: Platform.OS,
+        },
       });
+    },
+
+    // ─── Billing / Boost ─────────────────────────────────────────────────────
+
+    getBoostStatus() {
+      return coreRequest<BoostStatus>("/v1/billing/boost");
+    },
+
+    startBoostCheckout() {
+      return coreRequest<{ url?: string; checkoutUrl?: string }>(
+        "/v1/billing/boost/checkout",
+        {
+          method: "POST",
+          body: {},
+        },
+      );
+    },
+
+    openBoostPortal() {
+      return coreRequest<{ url?: string; portalUrl?: string }>(
+        "/v1/billing/boost/portal",
+        {
+          method: "POST",
+          body: {},
+        },
+      );
+    },
+
+    getBoostGifts() {
+      return coreRequest<{ gifts: BoostGift[] }>("/v1/billing/boost/gifts");
+    },
+
+    startBoostGiftCheckout() {
+      return coreRequest<{ checkoutUrl?: string; url?: string }>(
+        "/v1/billing/boost/gifts/checkout",
+        {
+          method: "POST",
+          body: {},
+        },
+      );
+    },
+
+    previewBoostGift(code: string) {
+      return coreRequest<BoostGiftPreview>(
+        `/v1/billing/boost/gifts/${encodeURIComponent(code)}`,
+      );
+    },
+
+    redeemBoostGift(code: string) {
+      return coreRequest<{ ok?: boolean; grantDays?: number }>(
+        `/v1/billing/boost/gifts/${encodeURIComponent(code)}/redeem`,
+        {
+          method: "POST",
+          body: {},
+        },
+      );
     },
 
     // ─── Social: friends ──────────────────────────────────────────────────────

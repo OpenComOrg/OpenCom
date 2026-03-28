@@ -4,6 +4,7 @@ import type { AuthTokens } from "./types";
 const ACCESS_TOKEN_KEY = "opencom_mobile_access_token";
 const REFRESH_TOKEN_KEY = "opencom_mobile_refresh_token";
 const PUSH_TOKEN_KEY = "opencom_mobile_push_token";
+const THEME_ID_KEY = "opencom_mobile_theme_id";
 
 export async function loadTokens(): Promise<AuthTokens | null> {
   const [accessToken, refreshToken] = await Promise.all([
@@ -31,4 +32,12 @@ export async function loadPushToken(): Promise<string> {
 
 export async function savePushToken(token: string): Promise<void> {
   await AsyncStorage.setItem(PUSH_TOKEN_KEY, token);
+}
+
+export async function loadThemeId(): Promise<string> {
+  return (await AsyncStorage.getItem(THEME_ID_KEY)) || "";
+}
+
+export async function saveThemeId(themeId: string): Promise<void> {
+  await AsyncStorage.setItem(THEME_ID_KEY, String(themeId || "").trim());
 }

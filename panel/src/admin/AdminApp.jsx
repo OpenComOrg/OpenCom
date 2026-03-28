@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { BlogMarkdown } from "../lib/blogMarkdown";
+import { uploadFileInChunks } from "../lib/chunkedUploads.js";
 import { AdminOverviewDashboard } from "./AdminOverviewDashboard.jsx";
 
 const CORE_API = import.meta.env.VITE_CORE_API_URL || "https://api.opencom.online";
@@ -1039,17 +1040,38 @@ export function AdminApp() {
 
     setClientUploadBusy(true);
     try {
-      const formData = new FormData();
-      formData.set("version", clientUploadDraft.version.trim());
-      formData.set("channel", clientUploadDraft.channel);
-      if (clientUploadDraft.releaseNotes.trim()) {
-        formData.set("releaseNotes", clientUploadDraft.releaseNotes.trim());
-      }
-      formData.set("file", clientUploadDraft.file);
-
-      const data = await api("/v1/admin/client/update", token, panelPassword, {
-        method: "POST",
-        body: formData,
+      const uploadLabel = clientUploadDraft.file.name || "client build";
+      showStatus(`Starting upload for ${uploadLabel}...`, "info");
+      const data = await uploadFileInChunks({
+        file: clientUploadDraft.file,
+        initUrl: `${CORE_API}/v1/admin/client/uploads/init`,
+        buildChunkUrl: (uploadId, offset) =>
+          `${CORE_API}/v1/admin/client/uploads/${encodeURIComponent(uploadId)}/chunks?offset=${encodeURIComponent(offset)}`,
+        completeUrl: (uploadId) =>
+          `${CORE_API}/v1/admin/client/uploads/${encodeURIComponent(uploadId)}/complete`,
+        abortUrl: (uploadId) =>
+          `${CORE_API}/v1/admin/client/uploads/${encodeURIComponent(uploadId)}`,
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+        initBody: {
+          version: clientUploadDraft.version.trim(),
+          channel: clientUploadDraft.channel,
+          ...(clientUploadDraft.releaseNotes.trim()
+            ? { releaseNotes: clientUploadDraft.releaseNotes.trim() }
+            : {}),
+        },
+        onProgress: ({ uploadedBytes, totalBytes, complete }) => {
+          const percent = totalBytes > 0
+            ? Math.min(100, Math.round((uploadedBytes / totalBytes) * 100))
+            : 100;
+          showStatus(
+            complete
+              ? `Finishing upload for ${uploadLabel}...`
+              : `Uploading ${uploadLabel}... ${percent}%`,
+            "info",
+          );
+        },
       });
 
       const uploadedChannel = clientUploadDraft.channel;

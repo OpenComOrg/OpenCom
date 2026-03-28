@@ -34,6 +34,14 @@ import {
 import { getAdminStatsSnapshot } from "../adminStats.js";
 import { deleteProfileImage, saveProfileImageFromBuffer } from "../storage.js";
 import { isS3StorageEnabled, uploadFileToObjectStorage } from "../objectStorage.js";
+import {
+  appendUploadChunk,
+  createUploadSession,
+  DEFAULT_UPLOAD_CHUNK_BYTES,
+  destroyUploadSession,
+  finalizeUploadSession,
+  getUploadSession,
+} from "../uploadSessions.js";
 import { sendAccountBanEmail } from "../mail.js";
 import { spawn } from "node:child_process";
 import path from "node:path";
@@ -140,6 +148,113 @@ async function saveClientFile(
     if ((error as Error)?.message === "TOO_LARGE") throw error;
     return null;
   }
+}
+
+function buildClientStorageTarget(
+  platform: ClientPlatform,
+  version: string,
+  mimeType: string,
+) {
+  const ext = CLIENT_MIME_TO_EXT[mimeType] ?? "bin";
+  const filename = `${platform}_${version}_${crypto.randomBytes(6).toString("hex")}.${ext}`;
+  return {
+    filePath: `clients/${platform}/${filename}`,
+  };
+}
+
+async function hashFileSha256(filePath: string) {
+  return await new Promise<string>((resolve, reject) => {
+    const hash = crypto.createHash("sha256");
+    const stream = fs.createReadStream(filePath);
+    stream.on("data", (chunk) => hash.update(chunk));
+    stream.on("error", reject);
+    stream.on("end", () => resolve(hash.digest("hex")));
+  });
+}
+
+async function persistClientReleaseRecord(input: {
+  actorId: string;
+  platform: ClientPlatform;
+  version: string;
+  channel: "stable" | "beta" | "nightly";
+  releaseNotes?: string;
+  originalFilename: string;
+  savedPath: string;
+  mime: string;
+  fileSize: number;
+  checksum: string;
+}) {
+  const {
+    actorId,
+    platform,
+    version,
+    channel,
+    releaseNotes,
+    originalFilename,
+    savedPath,
+    mime,
+    fileSize,
+    checksum,
+  } = input;
+
+  if (isS3StorageEnabled()) {
+    try {
+      await uploadFileToObjectStorage(
+        "clients",
+        savedPath,
+        path.join(env.PROFILE_IMAGE_STORAGE_DIR, savedPath),
+        mime,
+      );
+    } catch {
+      deleteProfileImage(env.PROFILE_IMAGE_STORAGE_DIR, savedPath);
+      throw new Error("OBJECT_STORAGE_FAILED");
+    }
+  }
+
+  await q(
+    `UPDATE client SET is_active = FALSE WHERE type = :platform AND channel = :channel AND is_active = TRUE`,
+    { platform, channel },
+  );
+
+  const clientId = ulidLike();
+  await q(
+    `INSERT INTO client (
+      id, type, version, channel,
+      file_path, file_name, mime_type, file_size,
+      checksum_sha256, is_active, release_notes, uploaded_by
+     ) VALUES (
+       :id, :type, :version, :channel,
+       :filePath, :fileName, :mimeType, :fileSize,
+       :checksum, TRUE, :releaseNotes, :uploadedBy
+     )`,
+    {
+      id: clientId,
+      type: platform,
+      version,
+      channel,
+      filePath: savedPath,
+      fileName: originalFilename,
+      mimeType: mime,
+      fileSize,
+      checksum,
+      releaseNotes: releaseNotes ?? null,
+      uploadedBy: actorId || null,
+    },
+  );
+
+  return {
+    id: clientId,
+    type: platform,
+    version,
+    channel,
+    filePath: savedPath,
+    fileName: originalFilename,
+    mimeType: mime,
+    fileSize,
+    checksum,
+    downloadUrl: `${env.PROFILE_IMAGE_BASE_URL}/${savedPath}`,
+    releaseNotes: releaseNotes ?? null,
+  };
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -931,6 +1046,217 @@ export async function adminRoutes(app: FastifyInstance, broadcastToUser?: Broadc
     return { imageUrl: `${env.PROFILE_IMAGE_BASE_URL}/${saved}` };
   });
 
+  app.post("/v1/admin/client/uploads/init", { preHandler: [app.authenticatePanelAdmin] } as any, async (req: any, rep) => {
+    try {
+      await requirePanelOperationsAccess(req);
+    } catch {
+      return rep.code(403).send({ error: "FORBIDDEN" });
+    }
+
+    const actorId = getActorAdminId(req);
+    const body = z.object({
+      ...CLIENT_UPLOAD_FIELDS.shape,
+      fileName: z.string().trim().min(1).max(255),
+      contentType: z.string().trim().max(255).optional(),
+      sizeBytes: z.coerce.number().int().min(0),
+    }).safeParse(req.body || {});
+    if (!body.success) {
+      return rep.code(400).send({
+        error: "INVALID_FIELDS",
+        details: body.error.flatten().fieldErrors,
+      });
+    }
+
+    const { version, channel, releaseNotes, fileName, contentType, sizeBytes } = body.data;
+    if (sizeBytes > env.CLIENT_UPLOAD_MAX_BYTES) {
+      return rep.code(413).send({ error: "TOO_LARGE", maxBytes: env.CLIENT_UPLOAD_MAX_BYTES });
+    }
+
+    const originalFilename = path.basename(fileName) || "client-build";
+    const mime = resolveClientMime(contentType, originalFilename);
+    if (!mime) {
+      return rep.code(400).send({ error: "UNSUPPORTED_FILE_TYPE", hint: "Supported: .exe .apk .deb .rpm .snap .tar.gz" });
+    }
+
+    const platform = resolveClientPlatform(originalFilename);
+    if (!platform) {
+      return rep.code(400).send({ error: "UNRECOGNISED_PLATFORM", hint: "Cannot determine target platform from file extension." });
+    }
+
+    const storageTarget = buildClientStorageTarget(
+      platform,
+      version,
+      mime,
+    );
+    const session = createUploadSession({
+      rootDir: env.PROFILE_IMAGE_STORAGE_DIR,
+      attachmentId: ulidLike(),
+      fileName: originalFilename,
+      contentType: mime,
+      expectedSizeBytes: sizeBytes,
+      maxBytes: env.CLIENT_UPLOAD_MAX_BYTES,
+      finalObjectKey: storageTarget.filePath,
+      chunkSizeBytes: DEFAULT_UPLOAD_CHUNK_BYTES,
+      context: {
+        actorId,
+        channel,
+        platform,
+        version,
+        releaseNotes: releaseNotes ?? "",
+      },
+    });
+
+    return rep.send({
+      uploadId: session.uploadId,
+      fileName: originalFilename,
+      contentType: mime,
+      sizeBytes,
+      uploadedBytes: 0,
+      chunkSizeBytes: session.chunkSizeBytes,
+      maxBytes: env.CLIENT_UPLOAD_MAX_BYTES,
+      channel,
+      platform,
+      version,
+      expiresAt: session.expiresAt,
+    });
+  });
+
+  app.put("/v1/admin/client/uploads/:uploadId/chunks", { preHandler: [app.authenticatePanelAdmin] } as any, async (req: any, rep) => {
+    try {
+      await requirePanelOperationsAccess(req);
+    } catch {
+      return rep.code(403).send({ error: "FORBIDDEN" });
+    }
+
+    const actorId = getActorAdminId(req);
+    const { uploadId } = z.object({
+      uploadId: z.string().min(8),
+    }).parse(req.params);
+    const { offset } = z.object({
+      offset: z.coerce.number().int().min(0),
+    }).parse(req.query || {});
+
+    const session = getUploadSession(env.PROFILE_IMAGE_STORAGE_DIR, uploadId);
+    if (!session) return rep.code(404).send({ error: "UPLOAD_NOT_FOUND" });
+    if (String(session.context.actorId || "") !== actorId) {
+      return rep.code(403).send({ error: "BAD_UPLOADER" });
+    }
+
+    const stream = (req.body || req.raw) as NodeJS.ReadableStream | undefined;
+    if (!stream || typeof (stream as { pipe?: unknown }).pipe !== "function") {
+      return rep.code(400).send({ error: "CHUNK_REQUIRED" });
+    }
+
+    try {
+      const result = await appendUploadChunk(
+        env.PROFILE_IMAGE_STORAGE_DIR,
+        uploadId,
+        stream,
+        offset,
+      );
+      if (result.error === "NOT_FOUND") return rep.code(404).send({ error: "UPLOAD_NOT_FOUND" });
+      if (result.error === "OFFSET_MISMATCH") {
+        return rep.code(409).send({
+          error: "OFFSET_MISMATCH",
+          uploadedBytes: result.uploadedBytes,
+          expectedSizeBytes: result.expectedSizeBytes,
+        });
+      }
+
+      return rep.send({
+        ok: true,
+        uploadedBytes: result.uploadedBytes,
+        expectedSizeBytes: result.expectedSizeBytes,
+        complete: result.complete,
+      });
+    } catch (error: any) {
+      destroyUploadSession(env.PROFILE_IMAGE_STORAGE_DIR, uploadId);
+      if (String(error?.message || "") === "CHUNK_TOO_LARGE") {
+        return rep.code(413).send({ error: "CHUNK_TOO_LARGE", chunkSizeBytes: session.chunkSizeBytes });
+      }
+      if (String(error?.message || "") === "TOO_LARGE") {
+        return rep.code(413).send({ error: "TOO_LARGE", maxBytes: session.maxBytes });
+      }
+      return rep.code(500).send({ error: "UPLOAD_FAILED" });
+    }
+  });
+
+  app.post("/v1/admin/client/uploads/:uploadId/complete", { preHandler: [app.authenticatePanelAdmin] } as any, async (req: any, rep) => {
+    try {
+      await requirePanelOperationsAccess(req);
+    } catch {
+      return rep.code(403).send({ error: "FORBIDDEN" });
+    }
+
+    const actorId = getActorAdminId(req);
+    const { uploadId } = z.object({
+      uploadId: z.string().min(8),
+    }).parse(req.params);
+
+    const session = getUploadSession(env.PROFILE_IMAGE_STORAGE_DIR, uploadId);
+    if (!session) return rep.code(404).send({ error: "UPLOAD_NOT_FOUND" });
+    if (String(session.context.actorId || "") !== actorId) {
+      return rep.code(403).send({ error: "BAD_UPLOADER" });
+    }
+
+    let finalized = null as ReturnType<typeof finalizeUploadSession> | null;
+    try {
+      finalized = finalizeUploadSession(env.PROFILE_IMAGE_STORAGE_DIR, uploadId);
+    } catch (error: any) {
+      if (String(error?.message || "") === "INCOMPLETE_UPLOAD") {
+        return rep.code(400).send({ error: "INCOMPLETE_UPLOAD", uploadedBytes: session.uploadedBytes });
+      }
+      return rep.code(500).send({ error: "UPLOAD_FAILED" });
+    }
+    if (!finalized) return rep.code(404).send({ error: "UPLOAD_NOT_FOUND" });
+
+    try {
+      const checksum = await hashFileSha256(
+        path.join(env.PROFILE_IMAGE_STORAGE_DIR, finalized.finalObjectKey),
+      );
+      const client = await persistClientReleaseRecord({
+        actorId,
+        platform: String(session.context.platform || "") as ClientPlatform,
+        version: String(session.context.version || ""),
+        channel: String(session.context.channel || "stable") as "stable" | "beta" | "nightly",
+        releaseNotes: String(session.context.releaseNotes || "").trim() || undefined,
+        originalFilename: finalized.fileName,
+        savedPath: finalized.finalObjectKey,
+        mime: finalized.contentType,
+        fileSize: finalized.uploadedBytes,
+        checksum,
+      });
+      return rep.code(201).send({ ok: true, client });
+    } catch (error: any) {
+      if (String(error?.message || "") === "OBJECT_STORAGE_FAILED") {
+        return rep.code(500).send({ error: "OBJECT_STORAGE_FAILED" });
+      }
+      return rep.code(500).send({ error: "UPLOAD_FAILED" });
+    }
+  });
+
+  app.delete("/v1/admin/client/uploads/:uploadId", { preHandler: [app.authenticatePanelAdmin] } as any, async (req: any, rep) => {
+    try {
+      await requirePanelOperationsAccess(req);
+    } catch {
+      return rep.code(403).send({ error: "FORBIDDEN" });
+    }
+
+    const actorId = getActorAdminId(req);
+    const { uploadId } = z.object({
+      uploadId: z.string().min(8),
+    }).parse(req.params);
+
+    const session = getUploadSession(env.PROFILE_IMAGE_STORAGE_DIR, uploadId);
+    if (!session) return rep.send({ ok: true });
+    if (String(session.context.actorId || "") !== actorId) {
+      return rep.code(403).send({ error: "BAD_UPLOADER" });
+    }
+
+    destroyUploadSession(env.PROFILE_IMAGE_STORAGE_DIR, uploadId);
+    return rep.send({ ok: true });
+  });
+
   app.post("/v1/admin/client/update", { preHandler: [app.authenticatePanelAdmin] } as any, async (req: any, rep) => {
     try {
       await requirePanelOperationsAccess(req)
@@ -982,62 +1308,26 @@ export async function adminRoutes(app: FastifyInstance, broadcastToUser?: Broadc
 
     const { filePath: savedPath, fileSize, checksum } = saved;
 
-    if (isS3StorageEnabled()) {
-      try {
-        await uploadFileToObjectStorage("clients", savedPath, path.join(env.PROFILE_IMAGE_STORAGE_DIR, savedPath), mime);
-      } catch {
-        deleteProfileImage(env.PROFILE_IMAGE_STORAGE_DIR, savedPath);
+    try {
+      const client = await persistClientReleaseRecord({
+        actorId,
+        platform,
+        version,
+        channel,
+        releaseNotes,
+        originalFilename,
+        savedPath,
+        mime,
+        fileSize,
+        checksum,
+      });
+      return rep.code(201).send({ ok: true, client });
+    } catch (error: any) {
+      if (String(error?.message || "") === "OBJECT_STORAGE_FAILED") {
         return rep.code(500).send({ error: "OBJECT_STORAGE_FAILED" });
       }
+      return rep.code(500).send({ error: "UPLOAD_FAILED" });
     }
-
-    await q(
-      `UPDATE client SET is_active = FALSE WHERE type = :platform AND channel = :channel AND is_active = TRUE`,
-      { platform, channel },
-    );
-
-    const clientId = ulidLike();
-    await q(
-      `INSERT INTO client (
-        id, type, version, channel,
-        file_path, file_name, mime_type, file_size,
-        checksum_sha256, is_active, release_notes, uploaded_by
-       ) VALUES (
-         :id, :type, :version, :channel,
-         :filePath, :fileName, :mimeType, :fileSize,
-         :checksum, TRUE, :releaseNotes, :uploadedBy
-       )`,
-      {
-        id: clientId,
-        type: platform,
-        version,
-        channel,
-        filePath: savedPath,
-        fileName: originalFilename,
-        mimeType: mime,
-        fileSize,
-        checksum,
-        releaseNotes: releaseNotes ?? null,
-        uploadedBy: actorId || null,
-      },
-    );
-
-    return rep.code(201).send({
-      ok: true,
-      client: {
-        id: clientId,
-        type: platform,
-        version,
-        channel,
-        filePath: savedPath,
-        fileName: originalFilename,
-        mimeType: mime,
-        fileSize,
-        checksum,
-        downloadUrl: `${env.PROFILE_IMAGE_BASE_URL}/${savedPath}`,
-        releaseNotes: releaseNotes ?? null,
-      },
-    });
   });
 
   app.put("/v1/admin/badge-definitions/:badgeId", { preHandler: [app.authenticatePanelAdmin] } as any, async (req: any, rep) => {

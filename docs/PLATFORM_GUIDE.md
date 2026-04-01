@@ -1,5 +1,7 @@
 # OpenCom Platform Guide
 
+**[NOTICE] AI WRITTEN DOCUMENTATION THIS IS GOING TO BE REWRITTEN AND IS ONLY TEMPORARY TO HAVE SOMETHING HERE MY APPOLOGIES**
+
 This guide is the canonical overview of functionality across:
 
 - Web client (`frontend`)

@@ -1,3 +1,5 @@
+**[NOTICE] AI WRITTEN DOCUMENTATION THIS IS GOING TO BE REWRITTEN AND IS ONLY TEMPORARY TO HAVE SOMETHING HERE MY APPOLOGIES**
+
 # Contributing to OpenCom
 
 This document focuses on making local development predictable and keeping the repository approachable for future contributors.

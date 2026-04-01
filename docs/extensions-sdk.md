@@ -1,5 +1,7 @@
 # OpenCom Extension SDK Guide
 
+**[NOTICE] AI WRITTEN DOCUMENTATION THIS IS GOING TO BE REWRITTEN AND IS ONLY TEMPORARY TO HAVE SOMETHING HERE MY APPOLOGIES**
+
 Use this with the static docs page at `docs/site/extensions-sdk.html`.
 
 ## Layout

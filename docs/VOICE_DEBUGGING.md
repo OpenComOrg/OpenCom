@@ -1,5 +1,7 @@
 # Voice Debugging + Logging Controls
 
+
+**[NOTICE] AI WRITTEN DOCUMENTATION THIS IS GOING TO BE REWRITTEN AND IS ONLY TEMPORARY TO HAVE SOMETHING HERE MY APPOLOGIES**
 ## Logging controls
 
 ### Backend (`backend/packages/server-node`)

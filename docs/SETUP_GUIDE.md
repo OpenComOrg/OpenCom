@@ -1,5 +1,7 @@
 # OpenCom Setup Guide
 
+**[NOTICE] AI WRITTEN DOCUMENTATION THIS IS GOING TO BE REWRITTEN AND IS ONLY TEMPORARY TO HAVE SOMETHING HERE MY APPOLOGIES**
+
 This guide covers the current local development path for OpenCom and is intended to stay aligned with the helper scripts in `scripts/dev/`.
 
 ## Components

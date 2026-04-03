@@ -2,68 +2,60 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-BACKUP_DIR="$ROOT_DIR/backups/auto"
-KEEP_COUNT=56
+ENV_FILE="$ROOT_DIR/backups/.env"
 
-print_usage() {
-  cat <<'USAGE'
-Usage: ./scripts/ops/auto-backup.sh [options]
+# Load env
+[[ -f "$ENV_FILE" ]] && source "$ENV_FILE"
 
-Creates a timestamped OpenCom backup bundle and optionally prunes old backups.
+BACKUP_DIR="${BACKUP_DIR:-$ROOT_DIR/backups/auto}"
+KEEP_COUNT="${BACKUP_KEEP:-56}"
 
-Options:
-  --backup-dir <path>  output directory (default: ./backups/auto)
-  --keep <count>       number of latest backups to keep (default: 56)
-  -h, --help           show this help
-USAGE
+require_tools() {
+  command -v aws >/dev/null || { echo "aws CLI required"; exit 1; }
+  command -v tar >/dev/null || { echo "tar required"; exit 1; }
 }
 
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --backup-dir)
-      [[ $# -ge 2 ]] || { echo "Missing value for --backup-dir"; exit 1; }
-      BACKUP_DIR="$2"
-      shift
-      ;;
-    --keep)
-      [[ $# -ge 2 ]] || { echo "Missing value for --keep"; exit 1; }
-      KEEP_COUNT="$2"
-      shift
-      ;;
-    -h|--help|help)
-      print_usage
-      exit 0
-      ;;
-    *)
-      echo "Unknown option: $1"
-      print_usage
-      exit 1
-      ;;
-  esac
-  shift
-done
-
-[[ "$KEEP_COUNT" =~ ^[0-9]+$ ]] || { echo "--keep must be a non-negative integer"; exit 1; }
+require_tools
 
 mkdir -p "$BACKUP_DIR"
 
 timestamp="$(date +%Y%m%d-%H%M%S)"
 backup_file="$BACKUP_DIR/opencom-${timestamp}.tar.gz"
 
+echo "[backup] Creating database bundle..."
 "$ROOT_DIR/scripts/ops/migrate-portability.sh" export "$backup_file"
 
-if [[ "$KEEP_COUNT" -gt 0 ]]; then
-  shopt -s nullglob
-  backups=( "$BACKUP_DIR"/opencom-*.tar.gz )
-  shopt -u nullglob
+echo "[backup] Uploading to S3..."
+aws s3 cp "$backup_file" "s3://$S3_BUCKET/$S3_PREFIX/$(basename "$backup_file")"
 
-  if (( ${#backups[@]} > KEEP_COUNT )); then
-    IFS=$'\n' read -r -d '' -a sorted_backups < <(printf '%s\n' "${backups[@]}" | sort && printf '\0')
-    delete_count=$(( ${#sorted_backups[@]} - KEEP_COUNT ))
-    for ((i = 0; i < delete_count; i++)); do
-      rm -f "${sorted_backups[$i]}"
+# -----------------------
+# Local retention
+# -----------------------
+if [[ "$KEEP_COUNT" -gt 0 ]]; then
+  mapfile -t local_files < <(ls -1 "$BACKUP_DIR"/opencom-*.tar.gz 2>/dev/null | sort)
+
+  if (( ${#local_files[@]} > KEEP_COUNT )); then
+    delete_count=$(( ${#local_files[@]} - KEEP_COUNT ))
+    for ((i=0; i<delete_count; i++)); do
+      rm -f "${local_files[$i]}"
     done
   fi
 fi
 
-echo "Auto backup completed: $backup_file"
+# -----------------------
+# S3 retention
+# -----------------------
+echo "[backup] Pruning S3 backups..."
+
+mapfile -t s3_files < <(
+  aws s3 ls "s3://$S3_BUCKET/$S3_PREFIX/" | awk '{print $4}' | sort
+)
+
+if (( ${#s3_files[@]} > KEEP_COUNT )); then
+  delete_count=$(( ${#s3_files[@]} - KEEP_COUNT ))
+  for ((i=0; i<delete_count; i++)); do
+    aws s3 rm "s3://$S3_BUCKET/$S3_PREFIX/${s3_files[$i]}"
+  done
+fi
+
+echo "[backup] Completed: $backup_file"

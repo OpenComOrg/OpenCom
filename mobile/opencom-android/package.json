@@ -1,6 +1,6 @@
 {
   "name": "opencom-android",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Android mobile wrapper for OpenCom",
   "main": "node_modules/expo/AppEntry.js",
@@ -9,6 +9,7 @@
     "android": "expo run:android",
     "prebuild": "expo prebuild",
     "ios": "expo run:ios",
+    "build": "./scripts/build-android-apk.sh",
     "apk": "./scripts/build-android-apk.sh",
     "apk:relay": "./scripts/build-android-apk.sh --relay",
     "crashlog": "./scripts/capture-android-crash.sh"

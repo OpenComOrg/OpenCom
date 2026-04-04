@@ -10,6 +10,13 @@ RUN_PREBUILD=1
 START_RELAY=0
 RELAY_PORT="${RELAY_PORT:-8080}"
 RUN_SDK_SETUP=1
+REQUIRED_PLATFORM="android-36"
+REQUIRED_BUILD_TOOLS="36.0.0"
+COMPAT_BUILD_TOOLS=(
+  "35.0.0"
+  "36.0.0"
+)
+REQUIRED_NDK="27.1.12297006"
 
 usage() {
   cat <<'EOF'
@@ -100,6 +107,37 @@ ensure_cmd() {
   fi
 }
 
+sdk_is_immutable() {
+  [[ "$ANDROID_HOME" == /nix/store/* ]] || [[ ! -w "$ANDROID_HOME" ]]
+}
+
+ensure_sdk_component() {
+  local path="$1"
+  local label="$2"
+
+  if [[ ! -e "$path" ]]; then
+    echo "Missing Android SDK component: $label" >&2
+    echo "Expected path: $path" >&2
+    exit 1
+  fi
+}
+
+ensure_required_sdk_components() {
+  local build_tools_version
+
+  ensure_sdk_component "$ANDROID_HOME/platform-tools/adb" "platform-tools"
+  ensure_sdk_component "$ANDROID_HOME/platforms/$REQUIRED_PLATFORM" "platforms;$REQUIRED_PLATFORM"
+  for build_tools_version in "${COMPAT_BUILD_TOOLS[@]}"; do
+    ensure_sdk_component "$ANDROID_HOME/build-tools/$build_tools_version" "build-tools;$build_tools_version"
+  done
+
+  if [[ -d "$ANDROID_HOME/ndk/$REQUIRED_NDK" ]]; then
+    return 0
+  fi
+
+  ensure_sdk_component "$ANDROID_HOME/ndk-bundle" "ndk;$REQUIRED_NDK"
+}
+
 ensure_cmd node
 ensure_cmd npm
 
@@ -173,17 +211,22 @@ fi
 
 if [[ "$RUN_SDK_SETUP" -eq 1 ]]; then
   if command -v sdkmanager >/dev/null 2>&1; then
-    echo "==> Accepting Android SDK licenses (Java 17)"
-    yes | sdkmanager --licenses >/dev/null || true
+    if sdk_is_immutable; then
+      echo "==> Android SDK is read-only at $ANDROID_HOME"
+      echo "==> Skipping sdkmanager setup because Nix-managed SDKs are prebuilt"
+      ensure_required_sdk_components
+    else
+      echo "==> Accepting Android SDK licenses (Java 17)"
+      yes | sdkmanager --licenses >/dev/null || true
 
-    echo "==> Installing required Android SDK components"
-    sdkmanager --install \
-      "platform-tools" \
-      "platforms;android-36" \
-      "build-tools;36.0.0" \
-      "ndk;27.1.12297006"
-
-    # No need to switch Java — stay on Java 17
+      echo "==> Installing required Android SDK components"
+      sdkmanager --install \
+        "platform-tools" \
+        "platforms;$REQUIRED_PLATFORM" \
+        "build-tools;35.0.0" \
+        "build-tools;$REQUIRED_BUILD_TOOLS" \
+        "ndk;$REQUIRED_NDK"
+    fi
   else
     cat >&2 <<EOF
 sdkmanager not found on PATH.
@@ -193,6 +236,8 @@ Or run with --skip-sdk-setup if components are already installed.
 EOF
     exit 1
   fi
+else
+  ensure_required_sdk_components
 fi
 
 cd "$ROOT_DIR"
@@ -205,6 +250,22 @@ fi
 if [[ "$RUN_PREBUILD" -eq 1 ]]; then
   echo "==> Running Expo prebuild"
   NODE_ENV=production CI=1 npx expo prebuild --platform android
+fi
+
+if [[ ! -d "$ANDROID_DIR" ]]; then
+  if [[ "$RUN_PREBUILD" -eq 0 ]]; then
+    cat >&2 <<EOF
+Android project directory not found: $ANDROID_DIR
+Run without --skip-prebuild, or generate it first with:
+  npx expo prebuild --platform android
+EOF
+  else
+    cat >&2 <<EOF
+Android project directory not found after Expo prebuild: $ANDROID_DIR
+Expo prebuild did not generate the native Android project as expected.
+EOF
+  fi
+  exit 1
 fi
 
 if [[ ! -x "$ANDROID_DIR/gradlew" ]]; then

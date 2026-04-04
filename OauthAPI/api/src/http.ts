@@ -9,6 +9,7 @@ import { env } from "./env";
 // Routes
 import { HealthRoutes } from "./routes/health";
 import { StatsRoutes } from "./routes/stats";
+import { OauthRoutes } from "./routes/OauthApp";
 
 export function buildHttp() {
   const app = Fastify({
@@ -32,6 +33,7 @@ export function buildHttp() {
   // Register Routes
   app.register(HealthRoutes);
   app.register(StatsRoutes);
+  app.register(OauthRoutes);
 
   return app;
 }

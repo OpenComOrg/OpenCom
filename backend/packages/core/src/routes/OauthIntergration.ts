@@ -126,4 +126,41 @@ export async function OauthIntergrationRoutes(app: FastifyInstance) {
         message: "OAuth secret generated successfully"
       });
     });
+  app.get("/v1/oauth/login/user", async (req: any, rep) => {
+    const { token } = req.query;
+    if (!token) return rep.code(400).send({ success: false, message: "Missing token" });
+
+    // Look up the OAuth link
+    const links = await q(
+      `SELECT * FROM oauth_links WHERE token = :token LIMIT 1`,
+      { token }
+    );
+
+    if (!links.length) return rep.code(404).send({ success: false, message: "Invalid token" });
+
+    const link = links[0];
+
+    // Find the user session for this secret
+    const sessions = await q(
+      `SELECT os.user_id, u.username, u.email
+       FROM oauth_sessions os
+       JOIN users u ON u.id = os.user_id
+       WHERE os.secret_code = :secret`,
+      { secret: link.secret_code }
+    );
+
+    if (!sessions.length) {
+      return rep.send({ success: false, requires_login: true, message: "User not logged in" });
+    }
+
+    const user = sessions[0];
+
+    // Return session + meta
+    return rep.send({
+      success: true,
+      user: { id: user.user_id, username: user.username, email: user.email },
+      app_id: link.app_id,
+      scopes: JSON.parse(link.scopes)
+    });
+  });
 }

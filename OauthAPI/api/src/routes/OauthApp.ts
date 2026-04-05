@@ -172,4 +172,50 @@ export function OauthRoutes(app: FastifyInstance) {
 
     return { success: true, message: `App ${app_id} deleted successfully` };
   });
+  // Route to generate a new OAuth link
+  app.post("/v1/oauth/generate-link", async (req: any, rep) => {
+    const { secret, app_id } = req.body;
+
+    // Check the secret exists and app is allowed
+    const allowed = await q(
+      `SELECT osa.app_id
+        FROM oauth_sessions os
+        JOIN oauth_session_apps osa ON os.session_id = osa.session_id
+        WHERE os.secret_code = :secret AND osa.app_id = :app_id`,
+      { secret, app_id },
+    );
+
+    if (!allowed.length) {
+      return rep
+        .code(403)
+        .send({ success: false, message: "App not allowed for this secret" });
+    }
+
+    // Get the allowed scopes from your database
+    const scopes = await q(
+      `SELECT scope_name FROM oauth_scopes WHERE app_id = :app_id`,
+      { app_id },
+    );
+
+    const scopeList = scopes.map((s) => s.scope_name);
+
+    const oauthLinkToken = generateClientSecret();
+
+    await q(
+      `INSERT INTO oauth_links (token, app_id, secret_code, scopes, created_at)
+      VALUES (:token, :app_id, :secret, :scopes, NOW())`,
+      {
+        token: oauthLinkToken,
+        app_id,
+        secret,
+        scopes: JSON.stringify(scopeList),
+      },
+    );
+
+    return rep.send({
+      success: true,
+      oauth_link: `https://api.opencom.online/v1/oauth/login/user?token=${oauthLinkToken}`,
+      scopes: scopeList,
+    });
+  });
 }

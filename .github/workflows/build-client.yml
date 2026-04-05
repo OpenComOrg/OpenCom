@@ -28,15 +28,18 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          submodules: recursive # ensures any submodules are fetched
 
-      # ✅ Use modern Node (fixes EBADENGINE warnings too)
+      # ✅ Use Node.js 22 explicitly
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
+          cache: "npm"
+          cache-dependency-path: client/package-lock.json # point to correct lockfile
 
-      # ✅ Install frontend deps FIRST (fixes "vite not found")
+      # ✅ Install frontend deps FIRST
       - name: Install frontend dependencies
         working-directory: frontend
         run: npm ci
@@ -51,14 +54,14 @@ jobs:
         working-directory: client
         run: npm run check:minimatch
 
-      # ✅ Linux-only deps (prevents future build failures)
+      # ✅ Linux build deps
       - name: Install Linux build dependencies
         if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt-get update
-          sudo apt-get install -y rpm
+          sudo apt-get install -y rpm tar gzip
 
-      # ✅ Build everything
+      # ✅ Build and stage desktop client artifacts
       - name: Build and stage desktop client artifacts
         working-directory: client
         run: ${{ matrix.build_script }}

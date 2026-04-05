@@ -157,3 +157,4 @@ backend/packages/core/data
 client/opencom-bin
 client/src/web/downloads/OpenCom.rpm
 frontend/OpenCom.rpm
+.aider*

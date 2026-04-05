@@ -23,33 +23,67 @@ function isAtLeast(version, min) {
 const __filename = fileURLToPath(import.meta.url);
 const clientDir = path.resolve(path.dirname(__filename), "..");
 
-const lockfile = JSON.parse(fs.readFileSync(path.join(clientDir, "package-lock.json"), "utf8"));
-const vendorPackage = JSON.parse(fs.readFileSync(path.join(clientDir, "vendor", "minimatch", "package.json"), "utf8"));
+const lockfile = JSON.parse(
+  fs.readFileSync(path.join(clientDir, "package-lock.json"), "utf8"),
+);
 
-const failures = [];
-const vendoredNodeModulesDir = path.join(clientDir, "vendor", "minimatch", "node_modules");
-const requiredVendoredDeps = ["brace-expansion", "balanced-match"];
+const vendorPkgPath = path.join(
+  clientDir,
+  "vendor",
+  "minimatch",
+  "package.json",
+);
 
-if (!isAtLeast(vendorPackage.version || "0.0.0", MIN_VERSION)) {
-  failures.push(`vendor/minimatch version is ${vendorPackage.version || "unknown"}`);
+if (!fs.existsSync(vendorPkgPath)) {
+  console.error("Minimatch dependency check failed:");
+  console.error("- vendor/minimatch/package.json is missing");
+  process.exit(1);
 }
 
+const vendorPackage = JSON.parse(fs.readFileSync(vendorPkgPath, "utf8"));
+
+const failures = [];
+const vendoredNodeModulesDir = path.join(
+  clientDir,
+  "vendor",
+  "minimatch",
+  "node_modules",
+);
+
+const requiredVendoredDeps = ["brace-expansion", "balanced-match"];
+
+// ✅ strict but clear
+if (!vendorPackage.version) {
+  failures.push("vendor/minimatch is missing a version field");
+} else if (!isAtLeast(vendorPackage.version, MIN_VERSION)) {
+  failures.push(`vendor/minimatch version is ${vendorPackage.version}`);
+}
+
+// ✅ check vendored deps exist
 for (const dep of requiredVendoredDeps) {
   const depPackage = path.join(vendoredNodeModulesDir, dep, "package.json");
   if (!fs.existsSync(depPackage)) {
-    failures.push(`missing vendored dependency: vendor/minimatch/node_modules/${dep}`);
+    failures.push(
+      `missing vendored dependency: vendor/minimatch/node_modules/${dep}`,
+    );
   }
 }
 
+// ✅ ensure lockfile respects override
 for (const [pkgPath, entry] of Object.entries(lockfile.packages || {})) {
-  if (!pkgPath.endsWith("/node_modules/minimatch") && pkgPath !== "node_modules/minimatch") {
+  if (
+    !pkgPath.endsWith("/node_modules/minimatch") &&
+    pkgPath !== "node_modules/minimatch"
+  ) {
     continue;
   }
 
   if (entry.link === true) {
     const resolved = String(entry.resolved || "");
-    if (!resolved.endsWith("/vendor/minimatch") && !resolved.includes("vendor/minimatch")) {
-      failures.push(`${pkgPath} links to unexpected target: ${resolved || "(missing resolved)"}`);
+    if (!resolved.includes("vendor/minimatch")) {
+      failures.push(
+        `${pkgPath} links to unexpected target: ${resolved || "(missing resolved)"}`,
+      );
     }
     continue;
   }
@@ -68,4 +102,6 @@ if (failures.length > 0) {
   process.exit(1);
 }
 
-console.log("All minimatch dependencies are locked to the local safe override (>= 10.2.1)");
+console.log(
+  "All minimatch dependencies are locked to the local safe override (>= 10.2.1)",
+);

@@ -9,25 +9,19 @@
   },
   "main": "src/main.js",
   "type": "module",
-  "packageManager": "traversal@1.0.0",
   "scripts": {
-    "postinstall": "npm run prepare:vendored-minimatch",
-    "prepare:vendored-minimatch": "node scripts/ensure-vendored-minimatch-deps.mjs",
+    "postinstall": "node scripts/ensure-vendored-minimatch-deps.mjs",
     "sync:web": "node scripts/sync-frontend.mjs",
-    "start": "npm run sync:web && npm run prepare:vendored-minimatch && electron .",
-    "start:remote": "npm run prepare:vendored-minimatch && electron .",
-    "build": "npm run sync:web && npm run prepare:vendored-minimatch && electron-builder",
-    "build:win": "npm run sync:web && npm run prepare:vendored-minimatch && node scripts/build-win.mjs",
-    "build:win:local": "npm run sync:web && npm run prepare:vendored-minimatch && OPENCOM_WIN_BUILD_MODE=local node scripts/build-win.mjs",
-    "build:win:container": "npm run sync:web && npm run prepare:vendored-minimatch && OPENCOM_WIN_BUILD_MODE=container node scripts/build-win.mjs",
-    "build:linux": "npm run sync:web && npm run prepare:vendored-minimatch && node scripts/build-linux.mjs",
+    "start": "npm run sync:web && electron .",
+    "start:remote": "electron .",
+    "build": "npm run sync:web && electron-builder",
+    "build:win": "npm run sync:web && node scripts/build-win.mjs",
+    "build:linux": "npm run sync:web && node scripts/build-linux.mjs",
     "build:aur": "node scripts/build-aur.mjs",
     "stage:aur": "node scripts/stage-aur.mjs",
     "build:stage:linux": "node scripts/build-and-stage.mjs linux",
     "build:stage:win": "node scripts/build-and-stage.mjs win",
-    "build:stage:all": "OPENCOM_REQUIRE_RPM=1 npm run build:stage:linux && npm run build:aur -- --skip-build && npm run build:stage:win",
     "check:minimatch": "node scripts/check-minimatch.mjs",
-    "check:mismatch": "npm run check:minimatch",
     "audit:runtime": "npm audit --omit=dev",
     "audit:all": "npm audit"
   },
@@ -35,7 +29,7 @@
     "electron-log": "^5.2.4"
   },
   "devDependencies": {
-    "electron": "^40.4.1",
+    "electron": "40.4.1",
     "electron-builder": "26.8.1"
   },
   "overrides": {
@@ -65,9 +59,7 @@
     "linux": {
       "target": [
         "deb",
-        "rpm",
-        "tar.gz",
-        "snap"
+        "tar.gz"
       ],
       "category": "Network",
       "icon": "src/web/logo.png",

@@ -1,5 +1,5 @@
 import { FastifyInstance, FastifyRequest } from "fastify";
-import type { ResultSetHeader } from "mysql2/promise";
+import type { ResultSetHeader, RowDataPacket } from "mysql2/promise";
 import { z } from "zod";
 import { ulidLike } from "@ods/shared/ids.js";
 import { pool, q } from "../db.js";
@@ -41,6 +41,13 @@ const ResetPassword = z.object({
 
 const ACCESS_TOKEN_TTL = "12h";
 const REFRESH_TOKEN_TTL_MS = 365 * 24 * 60 * 60 * 1000; // 1 year
+
+type RefreshTokenRow = RowDataPacket & {
+  id: string;
+  user_id: string;
+  revoked_at: string | null;
+  expires_at: string;
+};
 
 function randomToken(): string {
   return crypto.randomBytes(32).toString("hex");
@@ -427,7 +434,7 @@ export async function authRoutes(app: FastifyInstance) {
     try {
       await connection.beginTransaction();
 
-      const [rows] = await connection.query<{ id: string; user_id: string; revoked_at: string | null; expires_at: string }[]>(
+      const [rows] = await connection.query<RefreshTokenRow[]>(
         `SELECT id,user_id,revoked_at,expires_at
          FROM refresh_tokens
          WHERE token_hash=:tokenHash

@@ -1,5 +1,5 @@
 import { FastifyInstance } from "fastify";
-import type { ResultSetHeader } from "mysql2/promise";
+import type { ResultSetHeader, RowDataPacket } from "mysql2/promise";
 import { z } from "zod";
 import crypto from "node:crypto";
 import { ulidLike } from "@ods/shared/ids.js";
@@ -76,6 +76,16 @@ type PanelLoginChallengeRow = {
   admin_id: string;
   expires_at: string;
   consumed_at: string | null;
+};
+
+type PanelRefreshTokenRow = RowDataPacket & {
+  id: string;
+  admin_id: string;
+  revoked_at: string | null;
+  expires_at: string;
+  disabled_at: string | null;
+  two_factor_enabled: number;
+  totp_secret_encrypted: string | null;
 };
 
 function randomToken() {
@@ -516,15 +526,7 @@ export async function panelAuthRoutes(app: FastifyInstance) {
     try {
       await connection.beginTransaction();
 
-      const [rows] = await connection.query<{
-        id: string;
-        admin_id: string;
-        revoked_at: string | null;
-        expires_at: string;
-        disabled_at: string | null;
-        two_factor_enabled: number;
-        totp_secret_encrypted: string | null;
-      }[]>(
+      const [rows] = await connection.query<PanelRefreshTokenRow[]>(
         `SELECT rt.id,rt.admin_id,rt.revoked_at,rt.expires_at,
                 pa.disabled_at,pa.two_factor_enabled,pa.totp_secret_encrypted
            FROM panel_admin_refresh_tokens rt

@@ -150,7 +150,7 @@ async function main() {
   console.log(`Using migration collation ${migrationCollation}`);
 
   for (const file of files) {
-    const id = file.replace(".sql", "");
+    const id = `oauth_api:${file.replace(".sql", "")}`;
     const already = await q<{ id: string }>(
       `SELECT id FROM schema_migrations WHERE id=:id`,
       { id },

@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc -p tsconfig.json",
-    "start": "node dist/index.js",
+    "start": "node dist/src/index.js",
     "migrate": "tsx src/migrate.ts",
     "email:test": "tsx src/scripts/testEmail.ts",
     "admin:create": "tsx src/scripts/createPanelAdmin.ts"

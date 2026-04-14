@@ -188,16 +188,18 @@ function serializeClientRow(row: ClientRow, origin = "") {
 // ─── Routes ───────────────────────────────────────────────────────────────────
 export async function downloadRoutes(app: FastifyInstance) {
   async function proxyIfConfigured(req: any, rep: any) {
-    if (!env.DOWNLOADS_SERVICE_URL) return false;
-    if (!env.DOWNLOADS_INTERNAL_TOKEN) {
+    const serviceBaseUrl = env.GO_INTERNAL_SERVICE_URL || env.DOWNLOADS_SERVICE_URL;
+    const serviceToken = env.GO_INTERNAL_SERVICE_TOKEN || env.DOWNLOADS_INTERNAL_TOKEN;
+    if (!serviceBaseUrl) return false;
+    if (!serviceToken) {
       rep.code(503).send({ error: "DOWNLOADS_SERVICE_UNAVAILABLE" });
       return true;
     }
     try {
-      const target = new URL(`${env.DOWNLOADS_SERVICE_URL.replace(/\/$/, "")}${req.raw.url || req.url || ""}`);
+      const target = new URL(`${serviceBaseUrl.replace(/\/$/, "")}${req.raw.url || req.url || ""}`);
       const response = await fetch(target.toString(), {
         headers: {
-          "x-core-internal-secret": env.DOWNLOADS_INTERNAL_TOKEN,
+          "x-core-internal-secret": serviceToken,
           "x-opencom-public-origin": getRequestOrigin(req),
         },
       });

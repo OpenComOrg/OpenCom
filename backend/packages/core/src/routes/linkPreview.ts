@@ -155,16 +155,19 @@ export async function linkPreviewRoutes(app: FastifyInstance) {
     const { url } = z.object({ url: z.string().min(8).max(2048) }).parse(req.query || {});
     if (!URL_RE.test(url)) return rep.code(400).send({ error: "INVALID_URL" });
 
-    if (env.LINK_PREVIEW_SERVICE_URL) {
-      if (!env.LINK_PREVIEW_INTERNAL_TOKEN) {
+    const serviceBaseUrl = env.GO_INTERNAL_SERVICE_URL || env.LINK_PREVIEW_SERVICE_URL;
+    const serviceToken = env.GO_INTERNAL_SERVICE_TOKEN || env.LINK_PREVIEW_INTERNAL_TOKEN;
+
+    if (serviceBaseUrl) {
+      if (!serviceToken) {
         return rep.code(503).send({ error: "LINK_PREVIEW_SERVICE_UNAVAILABLE" });
       }
       try {
-        const target = new URL(`${env.LINK_PREVIEW_SERVICE_URL.replace(/\/$/, "")}/v1/link-preview`);
+        const target = new URL(`${serviceBaseUrl.replace(/\/$/, "")}/v1/link-preview`);
         target.searchParams.set("url", url);
         const response = await fetch(target.toString(), {
           headers: {
-            "x-core-internal-secret": env.LINK_PREVIEW_INTERNAL_TOKEN,
+            "x-core-internal-secret": serviceToken,
           },
         });
         const body = await response.json().catch(() => ({ error: "FETCH_FAILED" }));

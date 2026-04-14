@@ -64,15 +64,18 @@ function serializeTheme(row: ThemeRow, includeCss = false) {
 }
 
 export async function themeRoutes(app: FastifyInstance) {
+  const serviceBaseUrl = env.GO_INTERNAL_SERVICE_URL || env.THEMES_SERVICE_URL;
+  const serviceToken = env.GO_INTERNAL_SERVICE_TOKEN || env.THEMES_INTERNAL_TOKEN;
+
   app.get("/v1/themes", async (req: any) => {
-    if (env.THEMES_SERVICE_URL) {
-      const target = new URL(`${env.THEMES_SERVICE_URL.replace(/\/$/, "")}/v1/themes`);
+    if (serviceBaseUrl) {
+      const target = new URL(`${serviceBaseUrl.replace(/\/$/, "")}/v1/themes`);
       for (const [key, value] of Object.entries(req.query || {})) {
         if (value == null) continue;
         target.searchParams.set(key, String(value));
       }
       const response = await fetch(target.toString(), {
-        headers: { "x-core-internal-secret": env.THEMES_INTERNAL_TOKEN || "" }
+        headers: { "x-core-internal-secret": serviceToken || "" }
       });
       return response.json();
     }
@@ -101,10 +104,10 @@ export async function themeRoutes(app: FastifyInstance) {
   });
 
   app.get("/v1/themes/:id", async (req: any, rep) => {
-    if (env.THEMES_SERVICE_URL) {
+    if (serviceBaseUrl) {
       try {
-        const response = await fetch(`${env.THEMES_SERVICE_URL.replace(/\/$/, "")}/v1/themes/${encodeURIComponent(String(req.params?.id || ""))}`, {
-          headers: { "x-core-internal-secret": env.THEMES_INTERNAL_TOKEN || "" }
+        const response = await fetch(`${serviceBaseUrl.replace(/\/$/, "")}/v1/themes/${encodeURIComponent(String(req.params?.id || ""))}`, {
+          headers: { "x-core-internal-secret": serviceToken || "" }
         });
         return rep.code(response.status).send(await response.json());
       } catch {
@@ -126,11 +129,11 @@ export async function themeRoutes(app: FastifyInstance) {
   });
 
   app.get("/v1/me/themes", { preHandler: [app.authenticate] } as any, async (req: any) => {
-    if (env.THEMES_SERVICE_URL) {
+    if (serviceBaseUrl) {
       try {
-        const response = await fetch(`${env.THEMES_SERVICE_URL.replace(/\/$/, "")}/v1/me/themes`, {
+        const response = await fetch(`${serviceBaseUrl.replace(/\/$/, "")}/v1/me/themes`, {
           headers: {
-            "x-core-internal-secret": env.THEMES_INTERNAL_TOKEN || "",
+            "x-core-internal-secret": serviceToken || "",
             "x-auth-user-id": req.user.sub as string,
           }
         });
@@ -152,13 +155,13 @@ export async function themeRoutes(app: FastifyInstance) {
   });
 
   app.post("/v1/themes", { preHandler: [app.authenticate] } as any, async (req: any) => {
-    if (env.THEMES_SERVICE_URL) {
+    if (serviceBaseUrl) {
       try {
-        const response = await fetch(`${env.THEMES_SERVICE_URL.replace(/\/$/, "")}/v1/themes`, {
+        const response = await fetch(`${serviceBaseUrl.replace(/\/$/, "")}/v1/themes`, {
           method: "POST",
           headers: {
             "content-type": "application/json",
-            "x-core-internal-secret": env.THEMES_INTERNAL_TOKEN || "",
+            "x-core-internal-secret": serviceToken || "",
             "x-auth-user-id": req.user.sub as string,
           },
           body: JSON.stringify(req.body || {}),
@@ -190,13 +193,13 @@ export async function themeRoutes(app: FastifyInstance) {
   });
 
   app.patch("/v1/themes/:id", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
-    if (env.THEMES_SERVICE_URL) {
+    if (serviceBaseUrl) {
       try {
-        const response = await fetch(`${env.THEMES_SERVICE_URL.replace(/\/$/, "")}/v1/themes/${encodeURIComponent(String(req.params?.id || ""))}`, {
+        const response = await fetch(`${serviceBaseUrl.replace(/\/$/, "")}/v1/themes/${encodeURIComponent(String(req.params?.id || ""))}`, {
           method: "PATCH",
           headers: {
             "content-type": "application/json",
-            "x-core-internal-secret": env.THEMES_INTERNAL_TOKEN || "",
+            "x-core-internal-secret": serviceToken || "",
             "x-auth-user-id": req.user.sub as string,
           },
           body: JSON.stringify(req.body || {}),
@@ -247,11 +250,11 @@ export async function themeRoutes(app: FastifyInstance) {
   });
 
   app.post("/v1/themes/:id/install", async (req: any, rep) => {
-    if (env.THEMES_SERVICE_URL) {
+    if (serviceBaseUrl) {
       try {
-        const response = await fetch(`${env.THEMES_SERVICE_URL.replace(/\/$/, "")}/v1/themes/${encodeURIComponent(String(req.params?.id || ""))}/install`, {
+        const response = await fetch(`${serviceBaseUrl.replace(/\/$/, "")}/v1/themes/${encodeURIComponent(String(req.params?.id || ""))}/install`, {
           method: "POST",
-          headers: { "x-core-internal-secret": env.THEMES_INTERNAL_TOKEN || "" }
+          headers: { "x-core-internal-secret": serviceToken || "" }
         });
         return rep.code(response.status).send(await response.json());
       } catch {

@@ -187,19 +187,24 @@ const Env = z.object({
   AUTH_PASSWORD_RESET_TOKEN_TTL_MINUTES: z.coerce.number().int().min(5).max(1440).default(60),
   APP_BASE_URL: z.string().url().default("http://localhost:5173"),
   SUPPORT_BASE_URL: z.string().url().default("https://support.opencom.online"),
+  GO_INTERNAL_SERVICE_URL: z.preprocess(emptyToUndefined, z.string().url().optional()),
+  GO_INTERNAL_SERVICE_TOKEN: z.preprocess(
+    (value) => value ?? process.env.CORE_NODE_SYNC_SECRET,
+    z.preprocess(emptyToUndefined, z.string().min(16).optional())
+  ),
   LINK_PREVIEW_SERVICE_URL: z.preprocess(emptyToUndefined, z.string().url().optional()),
   LINK_PREVIEW_INTERNAL_TOKEN: z.preprocess(
-    (value) => value ?? process.env.CORE_NODE_SYNC_SECRET,
+    (value) => value ?? process.env.GO_INTERNAL_SERVICE_TOKEN ?? process.env.CORE_NODE_SYNC_SECRET,
     z.preprocess(emptyToUndefined, z.string().min(16).optional())
   ),
   DOWNLOADS_SERVICE_URL: z.preprocess(emptyToUndefined, z.string().url().optional()),
   DOWNLOADS_INTERNAL_TOKEN: z.preprocess(
-    (value) => value ?? process.env.CORE_NODE_SYNC_SECRET,
+    (value) => value ?? process.env.GO_INTERNAL_SERVICE_TOKEN ?? process.env.CORE_NODE_SYNC_SECRET,
     z.preprocess(emptyToUndefined, z.string().min(16).optional())
   ),
   THEMES_SERVICE_URL: z.preprocess(emptyToUndefined, z.string().url().optional()),
   THEMES_INTERNAL_TOKEN: z.preprocess(
-    (value) => value ?? process.env.CORE_NODE_SYNC_SECRET,
+    (value) => value ?? process.env.GO_INTERNAL_SERVICE_TOKEN ?? process.env.CORE_NODE_SYNC_SECRET,
     z.preprocess(emptyToUndefined, z.string().min(16).optional())
   ),
   SMTP_HOST: z.preprocess(emptyToUndefined, z.string().min(1).optional()),

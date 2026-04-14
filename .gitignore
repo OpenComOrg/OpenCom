@@ -162,3 +162,4 @@ frontend/OpenCom.rpm
 backend/core.env
 backend/media.env
 backend/node.env
+go-cdn/.gopath

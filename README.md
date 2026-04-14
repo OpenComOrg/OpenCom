@@ -1,8 +1,12 @@
-**NOTICE: I used AI to help fix some of my documentation and it decided to rewrite files I told it not to, And I have recently reset my pc and missed this , I must appologise for the slop documentation it has pushed will try not to do in future :pray**
-
 # OpenCom
 
 An open source communication platform
+
+## Go Backend Rewrite:
+
+**INFO: THIS IS NOT FINAL AND WILL BE CHANGED**
+
+I intend to rewrite the Backend API and seperate services using Go , this is because I am looking into improving the platform's codebase as a whole
 
 ## Info:
 

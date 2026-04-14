@@ -34,6 +34,7 @@ func New(cfg config.Config) (*gin.Engine, error) {
 		protected.Use(middleware.RequireBearerToken(cfg.UploadAuthToken))
 		{
 			protected.POST("/upload", uploadHandler.Post)
+			protected.DELETE("/files/:bucket/*path", filesHandler.Delete)
 		}
 	}
 

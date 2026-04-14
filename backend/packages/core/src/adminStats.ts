@@ -658,6 +658,7 @@ function classifyDatabaseProvider(host: string) {
 
 function classifyStorageProvider() {
   if (env.STORAGE_PROVIDER === "gcs") return "Google Cloud Storage";
+  if (env.STORAGE_PROVIDER === "cdn") return "OpenCom CDN";
   if (env.STORAGE_PROVIDER !== "s3") return "Local filesystem";
   if (String(env.S3_ENDPOINT || "").toLowerCase().includes("amazonaws.com")) {
     return "Amazon S3";

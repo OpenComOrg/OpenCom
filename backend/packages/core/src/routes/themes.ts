@@ -2,6 +2,7 @@ import { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { ulidLike } from "@ods/shared/ids.js";
 import { q } from "../db.js";
+import { env } from "../env.js";
 import { parseBody } from "../validation.js";
 
 const THEME_VISIBILITY = z.enum(["private", "public"]);
@@ -64,6 +65,17 @@ function serializeTheme(row: ThemeRow, includeCss = false) {
 
 export async function themeRoutes(app: FastifyInstance) {
   app.get("/v1/themes", async (req: any) => {
+    if (env.THEMES_SERVICE_URL) {
+      const target = new URL(`${env.THEMES_SERVICE_URL.replace(/\/$/, "")}/v1/themes`);
+      for (const [key, value] of Object.entries(req.query || {})) {
+        if (value == null) continue;
+        target.searchParams.set(key, String(value));
+      }
+      const response = await fetch(target.toString(), {
+        headers: { "x-core-internal-secret": env.THEMES_INTERNAL_TOKEN || "" }
+      });
+      return response.json();
+    }
     const query = z.object({
       q: z.string().max(80).optional(),
       sort: z.enum(["new", "popular"]).optional(),
@@ -89,6 +101,16 @@ export async function themeRoutes(app: FastifyInstance) {
   });
 
   app.get("/v1/themes/:id", async (req: any, rep) => {
+    if (env.THEMES_SERVICE_URL) {
+      try {
+        const response = await fetch(`${env.THEMES_SERVICE_URL.replace(/\/$/, "")}/v1/themes/${encodeURIComponent(String(req.params?.id || ""))}`, {
+          headers: { "x-core-internal-secret": env.THEMES_INTERNAL_TOKEN || "" }
+        });
+        return rep.code(response.status).send(await response.json());
+      } catch {
+        return rep.code(502).send({ error: "THEMES_PROXY_FAILED" });
+      }
+    }
     const { id } = z.object({ id: z.string().min(3) }).parse(req.params);
     const rows = await q<ThemeRow>(
       `SELECT t.id,t.author_user_id,t.name,t.description,t.css_text,t.tags,t.visibility,t.install_count,t.created_at,t.updated_at,u.username AS author_username
@@ -104,6 +126,19 @@ export async function themeRoutes(app: FastifyInstance) {
   });
 
   app.get("/v1/me/themes", { preHandler: [app.authenticate] } as any, async (req: any) => {
+    if (env.THEMES_SERVICE_URL) {
+      try {
+        const response = await fetch(`${env.THEMES_SERVICE_URL.replace(/\/$/, "")}/v1/me/themes`, {
+          headers: {
+            "x-core-internal-secret": env.THEMES_INTERNAL_TOKEN || "",
+            "x-auth-user-id": req.user.sub as string,
+          }
+        });
+        return { themes: (await response.json()).themes || [] };
+      } catch {
+        return { themes: [] };
+      }
+    }
     const userId = req.user.sub as string;
     const rows = await q<ThemeRow>(
       `SELECT id,author_user_id,name,description,css_text,tags,visibility,install_count,created_at,updated_at
@@ -117,6 +152,22 @@ export async function themeRoutes(app: FastifyInstance) {
   });
 
   app.post("/v1/themes", { preHandler: [app.authenticate] } as any, async (req: any) => {
+    if (env.THEMES_SERVICE_URL) {
+      try {
+        const response = await fetch(`${env.THEMES_SERVICE_URL.replace(/\/$/, "")}/v1/themes`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-core-internal-secret": env.THEMES_INTERNAL_TOKEN || "",
+            "x-auth-user-id": req.user.sub as string,
+          },
+          body: JSON.stringify(req.body || {}),
+        });
+        return response.json();
+      } catch {
+        return { error: "THEMES_PROXY_FAILED" };
+      }
+    }
     const userId = req.user.sub as string;
     const body = parseBody(ThemeInput, req.body);
     const id = ulidLike();
@@ -139,6 +190,22 @@ export async function themeRoutes(app: FastifyInstance) {
   });
 
   app.patch("/v1/themes/:id", { preHandler: [app.authenticate] } as any, async (req: any, rep) => {
+    if (env.THEMES_SERVICE_URL) {
+      try {
+        const response = await fetch(`${env.THEMES_SERVICE_URL.replace(/\/$/, "")}/v1/themes/${encodeURIComponent(String(req.params?.id || ""))}`, {
+          method: "PATCH",
+          headers: {
+            "content-type": "application/json",
+            "x-core-internal-secret": env.THEMES_INTERNAL_TOKEN || "",
+            "x-auth-user-id": req.user.sub as string,
+          },
+          body: JSON.stringify(req.body || {}),
+        });
+        return rep.code(response.status).send(await response.json());
+      } catch {
+        return rep.code(502).send({ error: "THEMES_PROXY_FAILED" });
+      }
+    }
     const userId = req.user.sub as string;
     const { id } = z.object({ id: z.string().min(3) }).parse(req.params);
     const body = parseBody(ThemeInput.partial().refine((item) => Object.keys(item).length > 0, "NO_CHANGES"), req.body);
@@ -180,6 +247,17 @@ export async function themeRoutes(app: FastifyInstance) {
   });
 
   app.post("/v1/themes/:id/install", async (req: any, rep) => {
+    if (env.THEMES_SERVICE_URL) {
+      try {
+        const response = await fetch(`${env.THEMES_SERVICE_URL.replace(/\/$/, "")}/v1/themes/${encodeURIComponent(String(req.params?.id || ""))}/install`, {
+          method: "POST",
+          headers: { "x-core-internal-secret": env.THEMES_INTERNAL_TOKEN || "" }
+        });
+        return rep.code(response.status).send(await response.json());
+      } catch {
+        return rep.code(502).send({ error: "THEMES_PROXY_FAILED" });
+      }
+    }
     const { id } = z.object({ id: z.string().min(3) }).parse(req.params);
     const rows = await q<ThemeRow>(`SELECT id,visibility FROM user_themes WHERE id=:id LIMIT 1`, { id });
     if (!rows.length) return rep.code(404).send({ error: "THEME_NOT_FOUND" });

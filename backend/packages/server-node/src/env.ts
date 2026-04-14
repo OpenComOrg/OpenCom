@@ -71,7 +71,7 @@ const Env = z.object({
   ATTACHMENT_BOOST_MAX_BYTES: z.coerce.number().default(104857600),
   ATTACHMENT_TTL_DAYS: z.coerce.number().default(365),
   ATTACHMENT_STORAGE_DIR: z.string().default("./data/attachments"),
-  STORAGE_PROVIDER: z.enum(["local", "s3", "gcs"]).default("local"),
+  STORAGE_PROVIDER: z.enum(["local", "s3", "gcs", "cdn"]).default("local"),
   NODE_STORAGE_BUCKET: z.preprocess(
     (value) =>
       value ??
@@ -97,6 +97,8 @@ const Env = z.object({
   S3_SECRET_ACCESS_KEY: z.preprocess(emptyToUndefined, z.string().min(1).optional()),
   S3_FORCE_PATH_STYLE: boolFlag.default(false),
   S3_KEY_PREFIX: z.preprocess(emptyToUndefined, z.string().optional()),
+  CDN_BASE_URL: z.string().url().default("https://cdn.opencom.online"),
+  CDN_SHARED_TOKEN: z.preprocess(emptyToUndefined, z.string().min(1).optional()),
   PUBLIC_BASE_URL: z.string().url(),
   NODE_SERVER_ID: z.string().min(1),
   MEDIA_SERVER_URL: z.preprocess(emptyToUndefined, z.string().url().optional()),
@@ -149,6 +151,15 @@ if (env.STORAGE_PROVIDER === "s3") {
 
 if (env.STORAGE_PROVIDER === "gcs" && !env.NODE_STORAGE_BUCKET) {
   throw new Error("NODE_STORAGE_BUCKET (or NODE_GCS_BUCKET) is required when STORAGE_PROVIDER=gcs");
+}
+
+if (env.STORAGE_PROVIDER === "cdn") {
+  if (!(env.NODE_STORAGE_BUCKET || env.NODE_S3_BUCKET)) {
+    throw new Error("NODE_STORAGE_BUCKET/NODE_S3_BUCKET (or S3_BUCKET) is required when STORAGE_PROVIDER=cdn");
+  }
+  if (!env.CDN_SHARED_TOKEN) {
+    throw new Error("CDN_SHARED_TOKEN is required when STORAGE_PROVIDER=cdn");
+  }
 }
 
 if (env.MEDIASOUP_RTC_MIN_PORT > env.MEDIASOUP_RTC_MAX_PORT) {

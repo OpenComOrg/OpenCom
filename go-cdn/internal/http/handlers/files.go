@@ -58,3 +58,25 @@ func (h FilesHandler) Get(c *gin.Context) {
 		c.Error(copyErr)
 	}
 }
+
+func (h FilesHandler) Delete(c *gin.Context) {
+	bucket := strings.TrimSpace(c.Param("bucket"))
+	objectPath := strings.TrimPrefix(c.Param("path"), "/")
+
+	if err := validateBucketAccess(h.config, bucket); err != nil {
+		respondError(c, err)
+		return
+	}
+
+	if objectPath == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "file path is required"})
+		return
+	}
+
+	if err := h.store.Delete(c.Request.Context(), bucket, objectPath); err != nil {
+		respondError(c, err)
+		return
+	}
+
+	c.Status(http.StatusNoContent)
+}

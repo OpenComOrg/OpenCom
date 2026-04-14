@@ -1,6 +1,3 @@
-// Note I debugged this using claude so please beware it looks quite AI , I must appologise I am too lazy to remove the fuckasss shit it adds 
-
-
 import { FastifyInstance } from "fastify";
 import { z } from "zod";
 import fs from "node:fs";
@@ -190,9 +187,36 @@ function serializeClientRow(row: ClientRow, origin = "") {
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
 export async function downloadRoutes(app: FastifyInstance) {
+  async function proxyIfConfigured(req: any, rep: any) {
+    if (!env.DOWNLOADS_SERVICE_URL) return false;
+    if (!env.DOWNLOADS_INTERNAL_TOKEN) {
+      rep.code(503).send({ error: "DOWNLOADS_SERVICE_UNAVAILABLE" });
+      return true;
+    }
+    try {
+      const target = new URL(`${env.DOWNLOADS_SERVICE_URL.replace(/\/$/, "")}${req.raw.url || req.url || ""}`);
+      const response = await fetch(target.toString(), {
+        headers: {
+          "x-core-internal-secret": env.DOWNLOADS_INTERNAL_TOKEN,
+          "x-opencom-public-origin": getRequestOrigin(req),
+        },
+      });
+      rep.code(response.status);
+      for (const [key, value] of response.headers.entries()) {
+        if (key.toLowerCase() === "transfer-encoding") continue;
+        rep.header(key, value);
+      }
+      if (response.body) return rep.send(response.body);
+      return rep.send(await response.arrayBuffer());
+    } catch {
+      rep.code(502).send({ error: "DOWNLOADS_PROXY_FAILED" });
+      return true;
+    }
+  }
 
   // ── Legacy file-based latest check (reads from disk / package.json) ──────────
-  app.get("/downloads/desktop/latest", async (req: any) => {
+  app.get("/downloads/desktop/latest", async (req: any, rep) => {
+    if (await proxyIfConfigured(req, rep)) return;
     const query   = desktopLatestQuerySchema.parse(req.query || {});
     const baseDir = resolveDownloadsBaseDir();
     const origin  = getRequestOrigin(req);
@@ -228,6 +252,7 @@ export async function downloadRoutes(app: FastifyInstance) {
   // Returns the active build for the given platform+channel and whether an
   // update is available relative to the caller's currentVersion.
   app.get("/v1/client/latest", async (req: any, rep) => {
+    if (await proxyIfConfigured(req, rep)) return;
     const queryParsed = clientVersionCheckSchema.safeParse(req.query || {});
     if (!queryParsed.success) {
       return rep.code(400).send({
@@ -277,6 +302,7 @@ export async function downloadRoutes(app: FastifyInstance) {
   // ── DB-backed: list all active builds across every platform ─────────────────
   // GET /v1/client/builds?channel=stable
   app.get("/v1/client/builds", async (req: any, rep) => {
+    if (await proxyIfConfigured(req, rep)) return;
     const { channel } = z
       .object({ channel: z.enum(["stable", "beta", "nightly"]).default("stable") })
       .parse(req.query || {});
@@ -309,6 +335,7 @@ export async function downloadRoutes(app: FastifyInstance) {
   });
 
   app.get("/v1/client/builds/:clientId/download", async (req: any, rep) => {
+    if (await proxyIfConfigured(req, rep)) return;
     const { clientId } = z
       .object({ clientId: z.string().min(1).max(64) })
       .parse(req.params);
@@ -360,6 +387,7 @@ export async function downloadRoutes(app: FastifyInstance) {
 
   // ── Static file download (unchanged) ────────────────────────────────────────
   app.get("/downloads/:filename", async (req: any, rep) => {
+    if (await proxyIfConfigured(req, rep)) return;
     const { filename } = z.object({ filename: z.string().min(1).max(120) }).parse(req.params);
     const mappedName   = resolveDownloadFilename(filename);
     if (!mappedName) return rep.code(404).send({ error: "NOT_FOUND" });

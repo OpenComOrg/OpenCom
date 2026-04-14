@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import { Readable } from "node:stream";
 import { Storage } from "@google-cloud/storage";
 import {
@@ -10,11 +11,14 @@ import {
 import { env } from "./env.js";
 
 const objectKeyPrefix = normalizePrefix(env.S3_KEY_PREFIX || "");
+const cdnBaseUrl = normalizeBaseUrl(env.CDN_BASE_URL);
 let s3Client: S3Client | null | undefined;
 let gcsClient: Storage | null | undefined;
 
 export function isObjectStorageEnabled() {
-  return env.STORAGE_PROVIDER === "s3" || env.STORAGE_PROVIDER === "gcs";
+  return env.STORAGE_PROVIDER === "s3"
+    || env.STORAGE_PROVIDER === "gcs"
+    || env.STORAGE_PROVIDER === "cdn";
 }
 
 // Kept for compatibility with existing call sites.
@@ -53,7 +57,13 @@ export async function uploadFileToObjectStorage(
   console.info("[core:storage] put_object:start", meta);
 
   try {
-    if (env.STORAGE_PROVIDER === "gcs") {
+    if (env.STORAGE_PROVIDER === "cdn") {
+      if (!bucket) return;
+      const blob = await fs.openAsBlob(absoluteFilePath, {
+        type: contentType || "application/octet-stream",
+      });
+      await uploadToCdn(bucket, key, blob, path.basename(objectKey) || "upload");
+    } else if (env.STORAGE_PROVIDER === "gcs") {
       const gcsBucket = getGcsBucket();
       if (!gcsBucket) return;
       await gcsBucket.upload(absoluteFilePath, {
@@ -99,7 +109,11 @@ export async function uploadBufferToObjectStorage(
 
   console.info("[core:storage] put_object:start", meta);
   try {
-    if (env.STORAGE_PROVIDER === "gcs") {
+    if (env.STORAGE_PROVIDER === "cdn") {
+      if (!bucket) return;
+      const blob = new Blob([body], { type: contentType || "application/octet-stream" });
+      await uploadToCdn(bucket, key, blob, path.basename(objectKey) || "upload");
+    } else if (env.STORAGE_PROVIDER === "gcs") {
       const gcsBucket = getGcsBucket();
       if (!gcsBucket) return;
       await gcsBucket.file(key).save(body, {
@@ -131,6 +145,12 @@ export async function getObjectStreamFromStorage(
 ): Promise<Readable | null> {
   const key = resolveObjectKey(namespace, objectKey);
 
+  if (env.STORAGE_PROVIDER === "cdn") {
+    const bucket = resolveBucketName();
+    if (!bucket) return null;
+    return getObjectStreamFromCdn(bucket, key);
+  }
+
   if (env.STORAGE_PROVIDER === "gcs") {
     const gcsBucket = getGcsBucket();
     if (!gcsBucket) return null;
@@ -159,6 +179,13 @@ export async function getObjectStreamFromStorage(
 
 export async function deleteObjectFromStorage(namespace: string, objectKey: string) {
   const key = resolveObjectKey(namespace, objectKey);
+
+  if (env.STORAGE_PROVIDER === "cdn") {
+    const bucket = resolveBucketName();
+    if (!bucket) return;
+    await deleteObjectFromCdn(bucket, key);
+    return;
+  }
 
   if (env.STORAGE_PROVIDER === "gcs") {
     const gcsBucket = getGcsBucket();
@@ -194,6 +221,10 @@ function resolveObjectKey(namespace: string, objectKey: string) {
 
 function normalizePrefix(value: string) {
   return String(value || "").trim().replace(/^\/+/, "").replace(/\/+$/, "");
+}
+
+function normalizeBaseUrl(value: string) {
+  return String(value || "").trim().replace(/\/+$/, "");
 }
 
 function resolveBucketName() {
@@ -232,6 +263,60 @@ function getGcsBucket() {
   const bucket = resolveBucketName();
   if (!client || !bucket) return null;
   return client.bucket(bucket);
+}
+
+async function uploadToCdn(bucket: string, objectKey: string, body: Blob, filename: string) {
+  const form = new FormData();
+  form.append("bucket", bucket);
+  form.append("path", objectKey);
+  form.append("file", body, filename);
+
+  const response = await fetch(`${cdnBaseUrl}/v1/upload`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${env.CDN_SHARED_TOKEN}`,
+    },
+    body: form,
+  });
+
+  if (!response.ok) {
+    throw new Error(`CDN_UPLOAD_FAILED:${response.status}`);
+  }
+}
+
+async function getObjectStreamFromCdn(bucket: string, objectKey: string): Promise<Readable | null> {
+  const response = await fetch(buildCdnFileUrl(bucket, objectKey));
+  if (response.status === 404) return null;
+  if (!response.ok) {
+    throw new Error(`CDN_READ_FAILED:${response.status}`);
+  }
+  if (!response.body) return null;
+  return Readable.fromWeb(response.body as ReadableStream);
+}
+
+async function deleteObjectFromCdn(bucket: string, objectKey: string) {
+  const response = await fetch(buildCdnFileUrl(bucket, objectKey), {
+    method: "DELETE",
+    headers: {
+      Authorization: `Bearer ${env.CDN_SHARED_TOKEN}`,
+    },
+  });
+  if (response.status === 404) return;
+  if (!response.ok) {
+    throw new Error(`CDN_DELETE_FAILED:${response.status}`);
+  }
+}
+
+function buildCdnFileUrl(bucket: string, objectKey: string) {
+  return `${cdnBaseUrl}/v1/files/${encodeURIComponent(bucket)}/${encodeObjectPath(objectKey)}`;
+}
+
+function encodeObjectPath(value: string) {
+  return String(value || "")
+    .split("/")
+    .filter(Boolean)
+    .map((part) => encodeURIComponent(part))
+    .join("/");
 }
 
 function toReadable(value: unknown): Readable | null {

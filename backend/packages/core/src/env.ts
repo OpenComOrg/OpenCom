@@ -121,7 +121,7 @@ const Env = z.object({
   CLIENT_UPLOAD_MAX_BYTES: z.coerce.number().int().min(1024).default(500 * 1024 * 1024),
   ATTACHMENT_TTL_DAYS: z.coerce.number().int().min(1).default(365),
   ATTACHMENT_STORAGE_DIR: z.string().default("./data/attachments"),
-  STORAGE_PROVIDER: z.enum(["local", "s3", "gcs"]).default("local"),
+  STORAGE_PROVIDER: z.enum(["local", "s3", "gcs", "cdn"]).default("local"),
   CORE_STORAGE_BUCKET: z.preprocess(
     (value) =>
       value ??
@@ -147,6 +147,8 @@ const Env = z.object({
   S3_SECRET_ACCESS_KEY: z.preprocess(emptyToUndefined, z.string().min(1).optional()),
   S3_FORCE_PATH_STYLE: boolFlag.default(false),
   S3_KEY_PREFIX: z.preprocess(emptyToUndefined, z.string().optional()),
+  CDN_BASE_URL: z.string().url().default("https://cdn.opencom.online"),
+  CDN_SHARED_TOKEN: z.preprocess(emptyToUndefined, z.string().min(1).optional()),
 
   // Official server node (one server per user hosted by the platform)
   OFFICIAL_NODE_BASE_URL: z.preprocess(emptyToUndefined, z.string().url().optional()),
@@ -185,6 +187,21 @@ const Env = z.object({
   AUTH_PASSWORD_RESET_TOKEN_TTL_MINUTES: z.coerce.number().int().min(5).max(1440).default(60),
   APP_BASE_URL: z.string().url().default("http://localhost:5173"),
   SUPPORT_BASE_URL: z.string().url().default("https://support.opencom.online"),
+  LINK_PREVIEW_SERVICE_URL: z.preprocess(emptyToUndefined, z.string().url().optional()),
+  LINK_PREVIEW_INTERNAL_TOKEN: z.preprocess(
+    (value) => value ?? process.env.CORE_NODE_SYNC_SECRET,
+    z.preprocess(emptyToUndefined, z.string().min(16).optional())
+  ),
+  DOWNLOADS_SERVICE_URL: z.preprocess(emptyToUndefined, z.string().url().optional()),
+  DOWNLOADS_INTERNAL_TOKEN: z.preprocess(
+    (value) => value ?? process.env.CORE_NODE_SYNC_SECRET,
+    z.preprocess(emptyToUndefined, z.string().min(16).optional())
+  ),
+  THEMES_SERVICE_URL: z.preprocess(emptyToUndefined, z.string().url().optional()),
+  THEMES_INTERNAL_TOKEN: z.preprocess(
+    (value) => value ?? process.env.CORE_NODE_SYNC_SECRET,
+    z.preprocess(emptyToUndefined, z.string().min(16).optional())
+  ),
   SMTP_HOST: z.preprocess(emptyToUndefined, z.string().min(1).optional()),
   SMTP_PORT: z.coerce.number().int().min(1).max(65535).default(587),
   SMTP_SECURE: boolFlag.default(false),
@@ -209,6 +226,15 @@ if (env.STORAGE_PROVIDER === "s3") {
 
 if (env.STORAGE_PROVIDER === "gcs" && !env.CORE_STORAGE_BUCKET) {
   throw new Error("CORE_STORAGE_BUCKET (or CORE_GCS_BUCKET) is required when STORAGE_PROVIDER=gcs");
+}
+
+if (env.STORAGE_PROVIDER === "cdn") {
+  if (!(env.CORE_STORAGE_BUCKET || env.CORE_S3_BUCKET)) {
+    throw new Error("CORE_STORAGE_BUCKET/CORE_S3_BUCKET (or S3_BUCKET) is required when STORAGE_PROVIDER=cdn");
+  }
+  if (!env.CDN_SHARED_TOKEN) {
+    throw new Error("CDN_SHARED_TOKEN is required when STORAGE_PROVIDER=cdn");
+  }
 }
 
 if (!env.REDIS_DISABLED && !env.REDIS_URL) {

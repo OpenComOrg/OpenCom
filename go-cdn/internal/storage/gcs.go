@@ -88,6 +88,21 @@ func (g *GCSClient) Upload(ctx context.Context, input UploadInput) error {
 	return nil
 }
 
+func (g *GCSClient) Delete(ctx context.Context, bucket, objectPath string) error {
+	if strings.TrimSpace(bucket) == "" {
+		return ErrInvalidBucket
+	}
+	if strings.TrimSpace(objectPath) == "" {
+		return ErrInvalidPath
+	}
+
+	if err := g.client.Bucket(bucket).Object(objectPath).Delete(ctx); err != nil {
+		return normalizeError(err)
+	}
+
+	return nil
+}
+
 func normalizeError(err error) error {
 	if errors.Is(err, cloudstorage.ErrObjectNotExist) {
 		return ErrObjectNotFound

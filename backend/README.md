@@ -9,6 +9,18 @@ The backend workspace contains the shared services that power the OpenCom platfo
 - `packages/server-node`: guild, channel, message, attachment, moderation, and voice APIs
 - `packages/media`: media-related backend services
 
+## Go Sidecars
+
+The repo also contains dedicated Go services for narrower backend responsibilities:
+
+- `../go-cdn`
+- `../go-media`
+- `../go-linkpreview`
+
+Migration tracking:
+
+- `../docs/GO_BACKEND_EXTRACTION_PLAN.md`
+
 ## Requirements
 
 - Node.js 22+
